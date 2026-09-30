@@ -359,3 +359,29 @@ def test_describer_does_not_guess_box_or_cylinder_from_a_silhouette():
     disc = np.full((60, 60, 3), 128, np.uint8)
     cv2.circle(disc, (30, 30), 20, (220, 40, 160), -1)
     assert d.describe(disc)["attributes"]["shape"] == "ball"
+
+
+def test_any_tracking_loss_gates_relocalisation_by_dead_reckoning_including_heading(model):
+    """Regression (map-arena-20260930-083710, t=258 s): after an ordinary tracking loss
+    relocalisation accepted a pose 19 cm / 10 deg off, and the rest of the map was
+    built in that rotated frame."""
+    from amr_rl.perception.vslam import LOST, PlanarVSLAM
+
+    slam = PlanarVSLAM(model)
+    slam.pose = np.array([0.0, 0.0, 0.0])
+    for k in range(20):  # tracked 2 s of a slow left turn while driving
+        slam.pose = np.array([0.02 * k, 0.0, 0.01 * k])
+        slam._motion_consistent(slam.pose, (0.2, 0.1), 0.1, 0.1 * k)
+    slam._arm_dead_reckoning(2.0, remove_landmarks=False)
+    slam.status = LOST
+    dr = slam._dr["pose"].copy()
+    gate_h = 0.12 + 0.25 * slam._dr["rot"]
+    good = dr.copy()
+    bad = dr + np.array([0.0, 0.0, gate_h + 0.05])  # right place, wrong heading
+    calls = iter([(bad, 60, np.eye(3)), (good, 60, np.eye(3)), (good, 60, np.eye(3))])
+    slam.global_localize = lambda pts, desc: next(calls)
+    r = slam._relocalize(None, None, None, 3.0)
+    assert r.status != "tracking" and r.reason == "relocalization_disagrees_with_dead_reckoning"
+    slam._relocalize(None, None, None, 3.1)
+    r = slam._relocalize(None, None, None, 3.2)
+    assert r.status == "tracking" and slam._dr is None

@@ -4,6 +4,7 @@
 """
 
 import argparse
+import math
 import sys
 from pathlib import Path
 
@@ -16,7 +17,7 @@ from amr_rl.control.supervisor import SupervisorConfig  # noqa: E402
 from amr_rl.runtime.robot import RuntimeConfig  # noqa: E402
 from amr_rl.sim import evaluator  # noqa: E402
 from amr_rl.sim.harness import Session  # noqa: E402
-from amr_rl.sim.world import WORLD_DIR  # noqa: E402
+from amr_rl.sim.world import WORLD_DIR, load_world_config  # noqa: E402
 
 
 def main():
@@ -30,8 +31,11 @@ def main():
     out.mkdir(parents=True, exist_ok=True)
     provenance(out, configs=[WORLD_DIR / f"{args.world}.yaml"], extra={"args": vars(args)})
     cfg = RuntimeConfig(supervisor=SupervisorConfig(require_heartbeat=False), policy="explore_only", seed=args.seed)
+    # Seed k turns the configured start heading by k x 72 deg (seed 0 = configured start).
+    start = list(load_world_config(args.world)["robot_start"])
+    start[2] = float(start[2] + args.seed * 2 * math.pi / 5)
     s = Session(args.world, run_dir=out / "session", memory_path=out / "throwaway-memory.sqlite", config=cfg,
-                seed=args.seed, inspection=False)
+                seed=args.seed, inspection=False, world_overrides={"robot_start": start})
     s.control_step()
     s.enable_autonomy()
     reenable = 0
@@ -51,7 +55,8 @@ def main():
     result = {"map_version": meta["map_version"], "landmarks": meta["landmarks"], "reenable_interventions": reenable,
               "trajectory": trajectory_metrics(s.truth),
               "map_score": evaluator.score_map(s.world, s.runtime.grid, s.origin), "contacts": s.contacts,
-              "sim_seconds": s.now}
+              "sim_seconds": s.now,
+              "origin_world": [float(v) for v in s.origin]}  # evaluation-only: world pose of the map frame
     dump(out / "result.json", result)
     s.save_summary()
     s.close()

@@ -13,6 +13,7 @@ route. Ground truth is used only for scoring. All attempts are retained.
 from __future__ import annotations
 
 import argparse
+import math
 import sys
 import time
 from pathlib import Path
@@ -202,11 +203,15 @@ def fault_test(session, log, seed, fault, *, blackout=None, obstacle=False, min_
 
 
 def evaluate_world(name, out_root, map_seconds, seed):
-    run_dir = out_root / name
+    """Seed 0 uses the configured start; seed k turns the start heading by k x 72 deg
+    (same position, so the start stays valid in every room)."""
+    run_dir = out_root / (name if seed == 0 else f"{name}-s{seed}")
+    cfg = load_world_config(name)
+    start = list(cfg["robot_start"])
+    start[2] = float(start[2] + seed * 2 * math.pi / 5)
     config = RuntimeConfig(supervisor=SupervisorConfig(require_heartbeat=False), policy="explore_only", seed=seed)
     session = Session(name, run_dir=run_dir, memory_path=run_dir / "throwaway-memory.sqlite", config=config,
-                      seed=seed, inspection=False)
-    cfg = load_world_config(name)
+                      seed=seed, inspection=False, world_overrides={"robot_start": start})
     log = []
     session.control_step()
     session.control_step()
@@ -254,7 +259,7 @@ def evaluate_world(name, out_root, map_seconds, seed):
     if nav.get("moved_obstacle"):
         moved = fault_test(session, log, seed + 202, "obstacle_placed_on_mapped_route", obstacle=True)
     result = {
-        "world": name, "split": cfg.get("split"), "seed": seed, "mapping": mapping, "goals": goals,
+        "world": name, "split": cfg.get("split"), "seed": seed, "start_world": start, "mapping": mapping, "goals": goals,
         "supported_goals": supported,
         "blackout_goal": fault, "moved_obstacle_goal": moved, "interventions": log,
         "supervisor_log": session.runtime.supervisor.log[-80:], "all_contacts": session.contacts,
@@ -318,24 +323,25 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--worlds", nargs="+", default=["home_a", "heldout_b", "heldout_c", "home_a_dim"])
     parser.add_argument("--map-seconds", type=float, default=240.0)
-    parser.add_argument("--seed", type=int, default=0)
+    parser.add_argument("--seeds", nargs="+", type=int, default=[0])
     parser.add_argument("--out", default=None)
     args = parser.parse_args()
     out = Path(args.out) if args.out else fresh_dir("navigation")
     out.mkdir(parents=True, exist_ok=True)
     provenance(out, configs=[WORLD_DIR / f"{w}.yaml" for w in args.worlds], extra={"args": vars(args)})
     results = []
-    for name in args.worlds:
-        print(f"== {name}", flush=True)
-        try:
-            results.append(evaluate_world(name, out, args.map_seconds, args.seed))
-        except Exception as error:  # retain failed runs in the denominator
-            import traceback
+    for seed in args.seeds:
+        for name in args.worlds:
+            print(f"== {name} seed {seed}", flush=True)
+            try:
+                results.append(evaluate_world(name, out, args.map_seconds, seed))
+            except Exception as error:  # retain failed runs in the denominator
+                import traceback
 
-            results.append({"world": name, "failed": True, "error": f"{type(error).__name__}: {error}",
-                            "traceback": traceback.format_exc()})
-            print(results[-1]["traceback"], flush=True)
-        dump(out / "partial.json", results)
+                results.append({"world": name, "seed": seed, "failed": True, "error": f"{type(error).__name__}: {error}",
+                                "traceback": traceback.format_exc()})
+                print(results[-1]["traceback"], flush=True)
+            dump(out / "partial.json", results)
     ok = [r for r in results if not r.get("failed")]
     summary = {"worlds": args.worlds, "failed_runs": [r["world"] for r in results if r.get("failed")],
                "rows": summarise(ok)}

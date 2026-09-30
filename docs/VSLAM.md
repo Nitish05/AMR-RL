@@ -52,6 +52,24 @@ similarity-alignment scale of every run (see NAVIGATION_RESULTS.md). A physical
 robot would need the height/pitch measured (±5 mm / ±0.5°) or a calibration
 target; wheel odometry fusion is a proposed extension (ledger), not used here.
 
+### Failure handling (added after the first evaluation round)
+
+* **Frozen-estimate check:** if at least 12 cm of motion was commanded in the
+  last 1.2 s but vision reports less than a quarter of it, tracking is declared
+  lost at once (the 3 s consistency window alone let a wrong lock run for about
+  0.25 m).
+* **Poisoned landmarks:** on any loss of tracking, landmarks created since the
+  start of the suspect window are removed; otherwise relocalisation tends to
+  lock back onto the wrong pose they were built from.
+* **Dead-reckoning gate:** after a loss, relocalisation must agree with the
+  commanded motion integrated from the last trusted pose (position and
+  heading; the gates widen with commanded travel and expire after 20 s).
+* Evaluated and **rejected**: dropping the "static" prediction hypothesis
+  while the robot is driven (mean ATE 9.2 cm vs 3.8 cm over four scenarios in
+  `scripts/dev/slam_bench.py`), and a score penalty for hypotheses far from the
+  commanded motion (no measurable effect); both remain as configuration
+  switches, off by default.
+
 ### Known limitations
 
 No loop closure or pose-graph optimisation: drift accumulates (≈1–2 % of path in
@@ -75,7 +93,9 @@ from dense two-view **plane-induced parallax**:
    alignment is ≥ 0.80 **and** at least 0.20 higher than at the obstacle
    alignments become floor evidence; low-NCC textured pixels are non-floor.
 4. Floor pixels' IPM points (≤ 2.6 m) add free evidence; the lowest non-floor run
-   above floor in each column marks an obstacle base; triangulated landmarks
+   above floor in each column marks an obstacle base, applied only where at least
+   two keyframe pairs agree within one cell (single-pair bases were 91 % on open
+   floor, `scripts/dev/obstacle_hits_probe.py`); triangulated landmarks
    between 4 and 45 cm high and detected fixtures add occupied evidence; the
    robot's own body footprint along its path adds free evidence; an explicit
    operator attestation may mark a 0.32 m start disc free (recorded in state).
@@ -98,6 +118,12 @@ Textureless, far, never-seen or contradictory regions stay UNKNOWN.
   1.5 s, at most 6 replans). The robot turns in place only if no cell with
   obstacle evidence lies within its turning circle (0.262 m + 2 cm); otherwise
   it reverses straight, at most 0.4 m, or reports `no_certified_room_to_turn`.
+  If an accepted goal loses its certification while driving (new evidence near
+  it), a replan moves it to the nearest certified cell within 12 cm; new goals
+  are still checked strictly.
+* Remembered entities are hard keep-out discs for planning (half their measured
+  size plus their position uncertainty; the object being approached keeps only
+  its body so standoffs stay reachable).
 * A newly placed object on well-mapped floor needs 3 obstacle observations to
   take a saturated free cell out of FREE (free evidence saturates at −4). Lower
   free saturation (−2, −3) was tried and rejected: stray obstacle hits then eroded

@@ -68,6 +68,13 @@ class VSLAMConfig:
     # Fast "frozen estimate" check: commanded travel >= freeze_min_cmd within
     # freeze_window while vision reports < freeze_ratio of it -> wrong lock.
     freeze_window: float = 1.2
+    static_hypothesis_when_moving: bool = True  # False was evaluated and rejected (docs/VSLAM.md)
+    command_consistency_score: bool = False  # evaluated: no measurable effect (docs/VSLAM.md)
+    reloc_local_first: bool = False  # evaluated: no effect (re-acquisition never succeeded first)
+    # Loss handling added in round 2 (switchable so the pre-change behaviour can be benchmarked).
+    freeze_check: bool = True
+    purge_on_loss: bool = True
+    dr_gate: bool = True
     freeze_min_cmd: float = 0.12
     freeze_ratio: float = 0.25
     # After a motion-inconsistency loss, relocalisation must agree with dead reckoning
@@ -177,7 +184,8 @@ class PlanarVSLAM:
         self._motion_prior = None
         self._motion_log = []
         self._now = 0.0
-        self._dr = None  # dead-reckoning gate after a motion-inconsistency loss
+        self._dr = None  # dead-reckoning gate after a loss of tracking
+        self.inconsistency = None
         self.frozen_events = []
         self._last_err = None
         self._last_quality = (0, 0.0)
@@ -332,6 +340,13 @@ class PlanarVSLAM:
         return pose, inl, None, err
 
     # ------------------------------------------------------------ public API
+    def _agrees_with_commands(self, pose, dt):
+        """Is a solution within a per-frame gate of the commanded-motion prediction?"""
+        cmd_pose, sig = self._motion_prior
+        d_pos = float(np.hypot(pose[0] - cmd_pose[0], pose[1] - cmd_pose[1]))
+        d_th = abs(wrap(pose[2] - cmd_pose[2]))
+        return d_pos <= 0.02 + 2.0 * sig[0] and d_th <= 0.03 + 2.0 * sig[2]
+
     def _hypotheses(self, dt, commanded):
         """Prediction hypotheses: constant velocity, static, and the robot's own
         commanded body motion (proprioceptive knowledge of its actions, not a sensor)."""
@@ -339,7 +354,11 @@ class PlanarVSLAM:
         cv = self.pose + self.velocity * dt
         cv[2] = wrap(cv[2])
         out.append(("constant_velocity", cv))
-        out.append(("static", self.pose.copy()))
+        moving = commanded is not None and (abs(commanded[0]) >= 0.05 or abs(commanded[1]) >= 0.2)
+        if not moving or self.cfg.static_hypothesis_when_moving:
+            # Optionally skip "static" while driven (suspected of aliased locks on
+            # repetitive texture); benchmarked worse overall, so off by default.
+            out.append(("static", self.pose.copy()))
         if commanded is not None and dt > 0:
             v, w = commanded
             th = self.pose[2] + 0.5 * w * dt
@@ -359,6 +378,7 @@ class PlanarVSLAM:
             th = self._dr["pose"][2] + 0.5 * w * dt
             self._dr["pose"] = self._dr["pose"] + np.array([v * dt * math.cos(th), v * dt * math.sin(th), w * dt])
             self._dr["travel"] += abs(v) * dt + 0.1 * abs(w) * dt
+            self._dr["rot"] += abs(w) * dt
         if self.status == INITIALIZING:
             return self._initialize(gray, pts, desc, timestamp)
         if self.status in (LOST, RELOCALIZING):
@@ -397,6 +417,9 @@ class PlanarVSLAM:
                     if H2 is not None and inl2.sum() >= inl.sum():
                         pose, inl, H, lm_idx, kp_idx, err = pose2, inl2, H2, lm2, kp2, err2
                 score = int(inl.sum())
+                if (self.cfg.command_consistency_score and self._motion_prior is not None
+                        and not self._agrees_with_commands(pose, dt)):
+                    score = int(0.6 * score)  # needs clearly more support than a command-consistent fit
                 if best is None or score > best[0]:
                     best = (score, (pose, inl, H, lm_idx, kp_idx, err), name)
                 if score >= 80 and float(np.mean(err[inl])) < 1.5:
@@ -420,9 +443,13 @@ class PlanarVSLAM:
             if (self.predicted_time > self.cfg.max_prediction_seconds + 1e-9
                     or (self.position_sigma or 0.0) > self.cfg.max_prediction_sigma
                     or self.failures > 2 * self.cfg.max_prediction_frames):
+                # Tracking usually degrades before it fails (a wrong lock for ~1 s):
+                # landmarks created in the window before the loss are suspect too.
+                self._arm_dead_reckoning(timestamp, remove_landmarks=True)
                 self.status = LOST
                 self.position_sigma = self.heading_sigma = None
                 self.velocity[:] = 0
+                self._motion_log.clear()
                 return TrackResult(LOST, None, None, None, 0, 0, False, timestamp, "tracking_failed")
             self.status = PREDICTED
             return TrackResult(PREDICTED, self.pose.copy(), self.position_sigma, self.heading_sigma,
@@ -465,24 +492,42 @@ class PlanarVSLAM:
         start of the consistency window. Landmarks created since then were placed from
         wrong poses (they would pull relocalisation back to the frozen pose), so they
         are removed; relocalisation is gated by dead reckoning from the window start."""
-        if not self._motion_log:
-            return
-        t0, p0 = self._motion_log[0][0], self._motion_log[0][1].copy()
-        if self.inconsistency == "frozen":
-            t0 = max(t0, t - self.cfg.freeze_window)
-            p0 = next((e[1].copy() for e in self._motion_log if e[0] >= t0), p0)
-        dr = p0.copy()
-        travel = 0.0
-        for e in self._motion_log:
-            if e[0] > t0:
+        self._arm_dead_reckoning(t, remove_landmarks=True, frozen=self.inconsistency == "frozen")
+
+    def _arm_dead_reckoning(self, t, *, remove_landmarks, frozen=False):
+        """On any loss of tracking: anchor dead reckoning at the oldest pose of the
+        consistency window (the last one not implicated in the failure) and integrate
+        the commanded motion since. Relocalisation must then agree with it in position
+        and heading (gates grow with commanded travel) for reloc_dr_gate_seconds."""
+        log = self._motion_log
+        if not log:
+            anchor_t, anchor = t, (None if self.pose is None else np.asarray(self.pose, float).copy())
+            if anchor is None:
+                return
+        else:
+            anchor_t, anchor = log[0][0], log[0][1].copy()
+            if frozen:
+                anchor_t = max(anchor_t, t - self.cfg.freeze_window)
+                anchor = next((e[1].copy() for e in log if e[0] >= anchor_t), anchor)
+        dr, travel, rot = anchor.copy(), 0.0, 0.0
+        for e in log:
+            if e[0] > anchor_t:
                 th = dr[2] + 0.5 * e[3]
                 dr = dr + np.array([e[2] * math.cos(th), e[2] * math.sin(th), e[3]])
                 travel += abs(e[2]) + 0.1 * abs(e[3])
-        poisoned = self.lm.alive & (self.lm.created >= t0)
-        self.lm.alive[poisoned] = False
-        self._dr = {"pose": dr, "travel": travel, "since": t, "frozen_pose": np.asarray(self.pose, float).copy()}
-        self.frozen_events.append({"t": t, "window_start": t0, "reason": self.inconsistency,
-                                   "landmarks_removed": int(poisoned.sum())})
+                rot += abs(e[3])
+        removed = 0
+        if remove_landmarks and self.cfg.purge_on_loss:
+            poisoned = self.lm.alive & (self.lm.created >= anchor_t)
+            self.lm.alive[poisoned] = False
+            removed = int(poisoned.sum())
+        if not self.cfg.dr_gate:
+            self.frozen_events.append({"t": t, "window_start": anchor_t, "reason": "loss", "landmarks_removed": removed})
+            return
+        self._dr = {"pose": dr, "travel": travel, "rot": rot, "since": t,
+                    "frozen_pose": None if self.pose is None else np.asarray(self.pose, float).copy()}
+        self.frozen_events.append({"t": t, "window_start": anchor_t, "reason": "frozen" if frozen else
+                                   (self.inconsistency or "tracking_failed"), "landmarks_removed": removed})
 
     def _motion_consistent(self, pose, commanded, dt, t):
         """Compare visual displacement with the robot's own commanded motion over a
@@ -496,7 +541,7 @@ class PlanarVSLAM:
         while self._motion_log and t - self._motion_log[0][0] > self.cfg.consistency_window:
             self._motion_log.pop(0)
         recent = [e for e in self._motion_log if t - e[0] <= self.cfg.freeze_window + 1e-9]
-        if len(recent) >= 5 and t - recent[0][0] >= 0.8 * self.cfg.freeze_window:
+        if self.cfg.freeze_check and len(recent) >= 5 and t - recent[0][0] >= 0.8 * self.cfg.freeze_window:
             cmd_recent = sum(abs(e[2]) for e in recent[1:])
             vis_recent = float(np.hypot(*(recent[-1][1][:2] - recent[0][1][:2])))
             if cmd_recent >= self.cfg.freeze_min_cmd and vis_recent < self.cfg.freeze_ratio * cmd_recent:
@@ -733,8 +778,35 @@ class PlanarVSLAM:
                 kf.landmark[valid] = remap[kf.landmark[valid]]
 
     # ------------------------------------------------------------ relocalization
+    def _local_reacquire(self, pts, desc):
+        """Guided matching around the dead-reckoned pose (as in tracking, with wide
+        windows): local, so far less prone to aliasing than global PnP."""
+        guess = self._dr["pose"]
+        alive = np.flatnonzero(self.lm.alive)
+        dx, dy = self.lm.pos[alive, 0] - guess[0], self.lm.pos[alive, 1] - guess[1]
+        rel = np.arctan2(dy, dx) - guess[2]
+        rel = np.arctan2(np.sin(rel), np.cos(rel))
+        self._frame_candidates = alive[(np.hypot(dx, dy) < 4.0) & (np.abs(rel) < math.radians(80))]
+        self._motion_prior = None
+        best = None
+        for radius in (self.cfg.wide_radius, 2 * self.cfg.wide_radius):
+            lm_idx, kp_idx = self._guided(guess, pts, desc, radius, count_visible=False)
+            if len(lm_idx) < self.cfg.reloc_min_inliers:
+                continue
+            pose, inl, H, err = self._pose_from_matches(guess, lm_idx, kp_idx, pts)
+            if H is None or inl.sum() < self.cfg.reloc_min_inliers:
+                continue
+            best = (pose, int(inl.sum()), H)
+            break
+        self._frame_candidates = None
+        return best
+
     def _relocalize(self, gray, pts, desc, timestamp):
-        pose = self.global_localize(pts, desc)
+        pose = None
+        if self.cfg.reloc_local_first and self._dr is not None:
+            pose = self._local_reacquire(pts, desc)
+        if pose is None:
+            pose = self.global_localize(pts, desc)
         if pose is None:
             self._reloc_candidates.clear()
             return TrackResult(self.status, None, None, None, 0, 0, False, timestamp, "relocalization_failed")
@@ -744,7 +816,9 @@ class PlanarVSLAM:
                 self._dr = None
             else:
                 gate = 0.12 + 0.3 * self._dr["travel"]
-                if np.hypot(*(estimate[:2] - self._dr["pose"][:2])) > gate:
+                gate_h = 0.12 + 0.25 * self._dr["rot"]
+                if (np.hypot(*(estimate[:2] - self._dr["pose"][:2])) > gate
+                        or abs(wrap(estimate[2] - self._dr["pose"][2])) > gate_h):
                     self._reloc_candidates.clear()
                     return TrackResult(self.status, None, None, None, inliers, inliers, False, timestamp,
                                        "relocalization_disagrees_with_dead_reckoning")

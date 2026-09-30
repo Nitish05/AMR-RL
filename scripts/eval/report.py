@@ -31,17 +31,24 @@ def table(headers, rows):
 
 
 # --------------------------------------------------------------------- navigation
+def run_label(r):
+    return r["world"] if not r.get("seed") else f'{r["world"]} s{r["seed"]}'
+
+
 def navigation(nav_dir: Path) -> str:
     results = json.loads((nav_dir / "partial.json").read_text())
+    for r in results:
+        r["world_label"] = run_label(r)
     lines = [f"Evidence: `{nav_dir.relative_to(nav_dir.parents[2])}`", ""]
-    failed = [r["world"] for r in results if r.get("failed")]
+    failed = [run_label(r) for r in results if r.get("failed")]
     ok = [r for r in results if not r.get("failed")]
-    lines.append(f"Worlds run: {len(results)}; crashed runs: {len(failed)} {failed or ''}")
+    lines.append(f"Runs: {len(results)}; crashed runs: {len(failed)} {failed or ''}")
+    lines += ["", "### Summary by room (all seeds)", "", nav_summary(ok), ""]
     lines += ["", "### Mapping by exploration (onboard RGB only)", ""]
     rows = []
     for r in ok:
         m, t = r["mapping"], r["mapping"]["trajectory"]
-        rows.append([r["world"], r["split"], m["sim_seconds"], t["true_path_length_m"], t["ate_rmse_m"],
+        rows.append([r["world_label"], r["split"], m["sim_seconds"], t["true_path_length_m"], t["ate_rmse_m"],
                      t["max_position_error_m"], (t.get("similarity") or {}).get("scale"),
                      f'{t["tracking_frames"]}/{t["frames"]}', t["lost_frames"], m["map"]["free_coverage"],
                      m["map"]["free_cells"], m["map"]["false_free_cells"], m["map"]["false_free_deep_cells"],
@@ -59,7 +66,7 @@ def navigation(nav_dir: Path) -> str:
         reach = [x for x in g if x["expect"] == "reach"]
         rej = [x for x in g if x["expect"] == "reject"]
         sup = r.get("supported_goals", [])
-        rows.append([r["world"],
+        rows.append([r["world_label"],
                      f'{sum(bool(x.get("arrived")) for x in reach)}/{len(reach)}',
                      ", ".join(sorted({x.get("reason") for x in reach if x["result"] == "rejected"})) or "—",
                      f'{sum(x["result"] == "rejected" for x in rej)}/{len(rej)}',
@@ -80,9 +87,9 @@ def navigation(nav_dir: Path) -> str:
         for key, label in (("blackout_goal", "lens blackout"), ("moved_obstacle_goal", "obstacle on route")):
             f = r.get(key)
             if f is None:
-                rows.append([r["world"], label, "not configured", "—", "—", "—", "—"])
+                rows.append([r["world_label"], label, "not configured", "—", "—", "—", "—"])
                 continue
-            rows.append([r["world"], label, f.get("result"),
+            rows.append([r["world_label"], label, f.get("result"),
                          f.get("navigation_status") or f.get("reason"),
                          ", ".join(v["reason"] for v in f.get("revocations", [])) or "—",
                          f.get("recovery") or ("resent: " + ",".join(f["resent"]) if f.get("resent") else "—"),
@@ -92,10 +99,46 @@ def navigation(nav_dir: Path) -> str:
     lines += ["", "### Interventions", ""]
     for r in ok:
         iv = [e for e in r["interventions"] if "intervention" in e]
-        lines.append(f"* {r['world']}: {len(iv)} operator enables "
+        lines.append(f"* {r['world_label']}: {len(iv)} operator enables "
                      f"({', '.join(e.get('reason', '') for e in iv)}); "
                      f"mapping revocations: {sum(1 for e in r['interventions'] if e.get('event'))}")
     return "\n".join(lines)
+
+
+def nav_summary(ok):
+    rows = []
+    worlds = sorted({r["world"] for r in ok}, key=lambda w: [x["world"] for x in ok].index(w))
+    tot = {"sup": 0, "arr": 0, "rej": 0, "imp": 0, "contacts": 0, "faults_run": 0, "faults_ok": 0, "faults": 0}
+    for w in worlds:
+        rs = [r for r in ok if r["world"] == w]
+        sup = [x for r in rs for x in r.get("supported_goals", [])]
+        imp = [x for r in rs for x in r["goals"] if x["expect"] == "reject"]
+        ates = [r["mapping"]["trajectory"]["ate_rmse_m"] for r in rs]
+        maxe = [r["mapping"]["trajectory"]["max_position_error_m"] for r in rs]
+        cov = [r["mapping"]["map"]["free_coverage"] for r in rs]
+        deep = [r["mapping"]["map"]["false_free_deep_cells"] for r in rs]
+        contacts = sum(episodes(r["all_contacts"]) for r in rs)
+        faults = [r.get(k) for r in rs for k in ("blackout_goal", "moved_obstacle_goal") if r.get(k) is not None]
+        run = [f for f in faults if f.get("result") != "skipped"]
+        good = [f for f in run if f.get("result") == "arrived" or (f.get("fault") == "obstacle_placed_on_mapped_route"
+                                                                    and not f.get("obstacle_contact"))]
+        arr = sum(bool(x.get("arrived")) for x in sup)
+        rej = sum(x["result"] == "rejected" for x in imp)
+        rows.append([w, rs[0]["split"], len(rs), f"{arr}/{len(sup)}", f"{rej}/{len(imp)}",
+                     f"{min(ates) * 100:.1f}–{max(ates) * 100:.1f}", f"{max(maxe) * 100:.1f}",
+                     f"{min(cov):.0%}–{max(cov):.0%}", f"{min(deep)}–{max(deep)}", contacts,
+                     f"{len(good)}/{len(run)} ({len(faults) - len(run)} skipped)"])
+        tot["sup"] += len(sup)
+        tot["arr"] += arr
+        tot["rej"] += rej
+        tot["imp"] += len(imp)
+        tot["contacts"] += contacts
+    header = ["room", "split", "seeds", "own-map goals arrived", "impossible goals rejected", "ATE cm (range)",
+              "worst error cm", "free coverage", "deep false-free", "contact episodes", "fault tests passed / run"]
+    out = table(header, rows)
+    out += (f"\n\n**All rooms and seeds:** own-map goals arrived {tot['arr']}/{tot['sup']}; impossible goals "
+            f"rejected {tot['rej']}/{tot['imp']}; contact episodes {tot['contacts']}.")
+    return out
 
 
 def episodes(contacts, gap=0.5):
@@ -144,71 +187,113 @@ def contact_split(contacts, interactions=(), gap=0.5):
     return f"{intended}/{len(eps) - intended}"
 
 
+EXPECTED_AFTER_RESTART = {"history_a": ("bloom", "signal"), "history_b": ("stone", "signal")}
+
+
 def learning(ldirs) -> str:
-    exps = {}
-    for ldir in ldirs:  # later directories fill experiments missing from earlier ones
-        for name, result in load_exps(ldir).items():
-            if name not in exps and all(not p.get("failed") for p in result["phases"]) and \
-                    result.get("wall_seconds") is not None:
-                exps[name] = result
-                exps[name]["_dir"] = str(ldir.relative_to(ldir.parents[2]))
-    lines = ["Evidence: " + ", ".join(f"`{d.relative_to(d.parents[2])}`" for d in ldirs), "",
-             "Experiment → directory: " + ", ".join(f"{n} → `{e['_dir']}`" for n, e in exps.items()), ""]
-    headers = ["experiment", "phase", "policy", "sim s", "attempts", "outcomes", "useful", "aversive",
+    runs = []  # (base name, seed, result, dir)
+    seen = set()
+    for ldir in ldirs:
+        for dname, result in load_exps(ldir).items():
+            base, seed = result.get("experiment", dname.split("-s")[0]), result.get("seed", 0)
+            if (base, seed) in seen or result.get("wall_seconds") is None:
+                continue
+            seen.add((base, seed))
+            runs.append((base, seed, result, str(ldir.relative_to(ldir.parents[2]))))
+    runs.sort(key=lambda r: (r[1], r[0]))
+    lines = ["Evidence: " + ", ".join(f"`{d.relative_to(d.parents[2])}`" for d in ldirs), ""]
+    seeds = sorted({r[1] for r in runs})
+    lines.append(f"Seeds: {seeds}. Seed k starts at a different pose (scripts/eval/learning.py ARENA_STARTS) and "
+                 "must relocalise against the saved map before any authority is granted.")
+    lines += ["", "### Restart persistence and opposite histories", "", restart_table(runs), ""]
+    lines += ["### Policy comparison (standard rules)", "", policy_table(runs), ""]
+    lines += ["### Consequence changes and settling", "", reversal_table(runs), ""]
+    for base, seed, result, _ in runs:
+        if base in ("inert", "noisy"):
+            lines.append(settling(f"{base} s{seed}", result["phases"][0]))
+    lines += ["", "### All phases (denominators)", ""]
+    headers = ["experiment", "seed", "phase", "policy", "sim s", "attempts", "outcomes", "useful", "aversive",
                "total valence", "valence/outcome", "ambiguous", "nav failures", "interrupted", "idle frac",
-               "contact episodes intended/unintended", "operator re-enables"]
-    rows = [phase_row(n, p) for n, e in exps.items() for p in e["phases"]]
-    lines += ["### All phases (denominators)", "", table(headers, rows), ""]
-    lines += ["`useful` = valence ≥ 0.3 (yellow panel or moved); `aversive` = red panel. "
-              "`attempts` counts engage/revisit interactions including cancelled/failed ones. Contact episodes are *intended* only when they fall inside a nudge interaction.", ""]
+               "contact episodes intended/unintended", "operator re-enables", "identity merges"]
+    rows = []
+    for base, seed, result, _ in runs:
+        for p in result["phases"]:
+            row = phase_row(base, p)
+            rows.append(row[:1] + [seed] + row[1:] + [len(p.get("identity_merges") or [])])
+    lines += [table(headers, rows), ""]
+    lines += ["`useful` = valence ≥ 0.3 (yellow panel or moved); `aversive` = red panel. `attempts` counts "
+              "engage/revisit interactions including cancelled/failed ones. Contact episodes are *intended* only "
+              "when they fall inside a nudge interaction.", ""]
     lines += ["### Outcomes by true fixture / action / observed", ""]
-    for n, e in exps.items():
-        for p in e["phases"]:
-            s = p.get("score") or {}
-            if s.get("by_fixture_action"):
-                items = ", ".join(f"{k} ×{v}" for k, v in sorted(s["by_fixture_action"].items()))
-                lines.append(f"* **{n} / {p['phase']['label']}**: {items}")
-    lines += ["", "### Restart persistence and opposite histories (first interactions after restart)", ""]
-    rows = []
-    for n in ("history_a", "history_b", "no_memory"):
-        e = exps.get(n)
-        if not e:
-            continue
-        test = e["phases"][-1]
-        first = (test.get("score") or {}).get("first_interactions")
-        rows.append([n, test["phase"]["label"], test.get("memory_sessions_before"), test.get("relocalized_at"),
-                     (test.get("authority_at_start") or {}).get("autonomy_enabled"),
-                     "; ".join(f"{f}/{a}" for f, a in (first or [])) or "—",
-                     "; ".join(decision_basis(test)[:2]) or "—"])
-    lines.append(table(["experiment", "phase", "prior sessions in memory", "relocalized at s",
-                        "autonomy at start", "first interactions (true fixture/action)",
-                        "first decisions (basis)"], rows))
-    lines += ["", "### Policy comparison under the standard rules (same map, same start)", ""]
-    rows = []
-    for n in ("learned_standard", "history_a", "baseline_random", "baseline_nearest", "baseline_fixed"):
-        e = exps.get(n)
-        if not e:
-            continue
-        p = e["phases"][0]
-        s = p.get("score") or {}
-        rows.append([n, p.get("policy"), s.get("outcomes_learned"), s.get("useful_outcomes"),
-                     s.get("aversive_outcomes"), s.get("total_valence"),
-                     (s.get("total_valence") or 0) / max(1e-9, (p.get("sim_seconds") or 1)) * 100,
-                     s.get("idle_fraction")])
-    lines.append(table(["run", "policy", "outcomes", "useful", "aversive", "total valence", "valence / 100 s",
-                        "idle frac"], rows))
-    lines += ["", "### Consequence changes (reversal) and settling", ""]
-    for n in ("reversal_early", "reversal_late"):
-        e = exps.get(n)
-        if not e:
-            continue
-        lines.append(reversal(n, e["phases"][0]))
-    for n in ("inert", "noisy"):
-        e = exps.get(n)
-        if not e:
-            continue
-        lines.append(settling(n, e["phases"][0]))
+    for base, seed, result, _ in runs:
+        for p in result["phases"]:
+            sc = p.get("score") or {}
+            if sc.get("by_fixture_action"):
+                items = ", ".join(f"{k} ×{v}" for k, v in sorted(sc["by_fixture_action"].items()))
+                lines.append(f"* **{base} s{seed} / {p['phase']['label']}**: {items}")
     return "\n".join(lines)
+
+
+def restart_table(runs):
+    rows, hits, total = [], 0, 0
+    for base, seed, result, _ in runs:
+        if base not in ("history_a", "history_b", "no_memory"):
+            continue
+        test = result["phases"][-1]
+        if test.get("failed"):
+            rows.append([base, seed, "FAILED: " + str(test["failed"])[:50], "—", "—", "—"])
+            continue
+        first = (test.get("score") or {}).get("first_interactions") or []
+        expected = EXPECTED_AFTER_RESTART.get(base)
+        verdict = "—"
+        if expected:
+            total += 1
+            ok = bool(first) and tuple(first[0]) == expected
+            hits += ok
+            verdict = "yes" if ok else "no"
+        rows.append([base, seed, test.get("relocalized_at"), (test.get("authority_at_start") or {}).get(
+            "autonomy_enabled"), "; ".join(f"{f}/{a}" for f, a in first) or "—", verdict])
+    out = table(["experiment", "seed", "relocalized at s", "autonomy at start", "first interactions after restart",
+                 "first choice = learned option"], rows)
+    return out + f"\n\n**First choice after restart matched the learned option in {hits}/{total} runs.**"
+
+
+def policy_table(runs):
+    rows = []
+    for base, seed, result, _ in runs:
+        if base not in ("history_a", "baseline_random", "baseline_nearest", "baseline_fixed"):
+            continue
+        p = result["phases"][0]
+        sc = p.get("score") or {}
+        n = sc.get("outcomes_learned") or 0
+        rows.append(["learned" if base == "history_a" else base.replace("baseline_", ""), seed, n,
+                     sc.get("useful_outcomes"), sc.get("aversive_outcomes"), sc.get("total_valence"),
+                     (sc.get("total_valence") or 0) / max(1, n), sc.get("idle_fraction")])
+    return table(["policy", "seed", "outcomes", "useful", "aversive", "total valence", "valence / outcome",
+                  "idle frac"], rows)
+
+
+def reversal_table(runs):
+    rows = []
+    for base, seed, result, _ in runs:
+        if base not in ("reversal_early", "reversal_late"):
+            continue
+        p = result["phases"][0]
+        sw = (p.get("switches") or [None])[0]
+        if not sw:
+            rows.append([base, seed, "no switch", "—", "—", "—"])
+            continue
+        after = [o for o in p.get("outcomes", []) if o["t"] >= sw["t"]]
+        before = [o for o in p.get("outcomes", []) if o["t"] < sw["t"]]
+        old = {(o["fixture"], o["action"]) for o in before if (o["valence"] or 0) >= 0.3}
+        first_new = next((o for o in after if (o["valence"] or 0) >= 0.3 and (o["fixture"], o["action"]) not in old),
+                         None)
+        rows.append([base, seed, f"{sw['t']:.0f}", sw["outcomes_before"],
+                     "never" if first_new is None else f"{first_new['t'] - sw['t']:.0f} s "
+                     f"({first_new['fixture']}/{first_new['action']})",
+                     "yes" if first_new else "no"])
+    return table(["experiment", "seed", "switch at s", "outcomes before", "first useful new option", "adapted"],
+                 rows)
 
 
 def decision_basis(phase):

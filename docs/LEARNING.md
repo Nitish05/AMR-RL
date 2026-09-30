@@ -31,6 +31,13 @@ Robot actions (physically plausible for wheels + camera + screen):
    height and the current VSLAM pose.
 2. **Identity** (`learning/identity.py`): appearance (hue, fill, metric size) +
    position in the current map version. Ambiguous → no identity, no learning.
+   Two identities that look alike (within 1.5× the appearance gate), are
+   remembered within 0.9 m of each other and have **never** been seen as two
+   separate detections in one frame are merged into the older one, with all
+   outcome history (a box seen at an angle can look 10 cm wider and was stored
+   twice). Identities seen together in one frame are recorded as distinct and
+   are never merged. Merges are recorded (`merges` table) and a receipt for a
+   merged-away identity lands on the kept one.
 3. **Decision** (`behavior/chooser.py`): value per option (below); the choice,
    its basis and the competing candidates are logged.
 4. **Interaction** (`behavior/activities.py:Engage`): approach (navigation only;
@@ -58,7 +65,7 @@ Updated only in `ExperienceMemory.record_outcome()` (step 6):
 | P(outcome \| entity, action, context) | Dirichlet posterior over 10 outcome tokens; last 12 outcomes per option; each outcome weighted 0.5^(age/900 s); evidence before a detected change weighted ×0.25; context backs off to the entity-action aggregate |
 | expected valence, uncertainty | derived from the posterior and the engineered valence table |
 | probe budget, useful/failure streaks, stability | per (entity, action); budget 3, reset by a useful outcome |
-| change hypotheses | 2 (early) or 6 (stable) consecutive useful outcomes then 3 consecutive failures → change epoch; suppressed alternatives get one probe; older evidence is discounted |
+| change hypotheses | 2 (early) or 6 (stable) consecutive useful outcomes, then a run of consecutive failures long enough to be unlikely (p < 0.05) under the success rate seen before it (at least 3, at most 8: 3 for a reliable effect, 5 for a 50 % one) → change epoch; suppressed alternatives get one probe; older evidence is discounted |
 | entity `movable` flag | set when a `moved` outcome is observed |
 
 Updated by perception (not outcome learning): entity appearance (running mean),

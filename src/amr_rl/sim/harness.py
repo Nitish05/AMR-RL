@@ -30,7 +30,7 @@ CONTROL_PERIOD = 0.1
 class Session:
     def __init__(self, world_name, *, run_dir, memory_path, config: RuntimeConfig | None = None,
                  consequences=None, seed=0, inspection=True, map_dir=None, world_overrides=None,
-                 recording_mode="telemetry"):
+                 recording_mode="telemetry", map_origin=None):
         spec = RobotSpec.load()
         wc = load_world_config(world_name)
         if world_overrides:
@@ -45,7 +45,9 @@ class Session:
             self.world.step()
         self.world.backend.reset_clock()
         self.world.time = 0.0
-        self.origin = evaluator.true_pose(self.world)  # scoring only
+        # Scoring only: the world pose of the map frame. A fresh map starts at the robot's
+        # start pose; a loaded map's frame is where that map was started (map_origin).
+        self.origin = np.asarray(map_origin, float) if map_origin is not None else evaluator.true_pose(self.world)
         self.truth = []
         self.contacts = []
         self.wall_start = time.time()

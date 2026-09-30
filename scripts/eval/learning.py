@@ -67,6 +67,23 @@ EXPERIMENTS = {
 }
 
 
+# Start poses (world frame) for seeded runs: central floor of the arena, varied headings.
+# Seed k starts at ARENA_STARTS[k % len]; every start must relocalise against the saved map.
+ARENA_STARTS = [(0.0, -0.1, 1.5708), (0.4, -0.55, 0.0), (-0.45, -0.45, 3.1416), (0.45, 0.3, -1.5708),
+                (-0.5, 0.25, 0.7854)]
+
+
+def map_origin_for(map_dir):
+    """Evaluation-only: world pose of a saved map's frame (recorded by build_map.py;
+    older maps were always started from the arena's configured start pose)."""
+    result = Path(map_dir).parent / "result.json"
+    if result.exists():
+        origin = json.loads(result.read_text()).get("origin_world")
+        if origin is not None:
+            return origin
+    return list(ARENA_STARTS[0])
+
+
 def load_consequences(name):
     return yaml.safe_load((CONSEQUENCES / f"{name}.yaml").read_text()) or {}
 
@@ -84,15 +101,17 @@ def fixture_for(session, map_xy):
     return None if best is None or best[1] > 0.5 else best[0]
 
 
-def run_phase(phase, *, map_dir, memory_path, run_dir, seed, world="arena"):
+def run_phase(phase, *, map_dir, memory_path, run_dir, seed, world="arena", start=None, map_origin=None):
     policy = phase.get("policy", "learned")
     config = RuntimeConfig(supervisor=SupervisorConfig(require_heartbeat=False), policy=policy, seed=seed,
                            initial_survey=False)
     consequences = load_consequences(phase["consequences"])
     session = Session(world, run_dir=run_dir, memory_path=memory_path, config=config, consequences=consequences,
-                      seed=seed, inspection=False, map_dir=map_dir)
+                      seed=seed, inspection=False, map_dir=map_dir, map_origin=map_origin,
+                      world_overrides={"robot_start": list(start)} if start is not None else None)
     rt = session.runtime
-    record = {"phase": phase, "policy": policy, "memory_sessions_before": rt.memory.counts()["sessions"] - 1,
+    record = {"phase": phase, "policy": policy, "seed": seed, "start_world": None if start is None else list(start),
+              "memory_sessions_before": rt.memory.counts()["sessions"] - 1,
               "authority_at_start": rt.supervisor.snapshot(), "enable_attempts": [], "switches": []}
     # Relocalize from fresh onboard images before any authority is granted.
     t_reloc = None
@@ -209,42 +228,45 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--map", required=True, help="saved arena map directory (from build_map.py)")
     parser.add_argument("--experiments", nargs="+", default=list(EXPERIMENTS))
-    parser.add_argument("--seed", type=int, default=0)
+    parser.add_argument("--seeds", nargs="+", type=int, default=[0],
+                        help="one run per seed; seed k starts at ARENA_STARTS[k %% 5] (seed 0 = configured start)")
     parser.add_argument("--out", default=None)
     args = parser.parse_args()
     out = Path(args.out) if args.out else fresh_dir("learning")
     out.mkdir(parents=True, exist_ok=True)
+    origin = map_origin_for(args.map)
     provenance(out, configs=[PROJECT_ROOT / "configs/worlds/arena.yaml", *sorted(CONSEQUENCES.glob("*.yaml"))],
-               extra={"args": vars(args), "map_meta": json.loads((Path(args.map) / "map.json").read_text())
-                      ["map_version"]})
-    for name in args.experiments:
-        exp_dir = out / name
-        exp_dir.mkdir(exist_ok=True)
-        memory = exp_dir / "memory.sqlite"
-        results = {"experiment": name, "phases": []}
-        t0 = time.time()
-        print(f"== {name}", flush=True)
-        for index, phase in enumerate(EXPERIMENTS[name]):
-            mem = memory
-            if phase.get("memory") == "fresh":
-                mem = exp_dir / f"memory-fresh-{index}.sqlite"
-            try:
-                record = run_phase(phase, map_dir=args.map, memory_path=mem, run_dir=exp_dir / f"phase{index}",
-                                   seed=args.seed + index)
-                record["score"] = score(record)
-            except Exception as error:  # retained in the denominator
-                import traceback
+               extra={"args": vars(args), "map_origin_world": origin,
+                      "map_meta": json.loads((Path(args.map) / "map.json").read_text())["map_version"]})
+    for seed in args.seeds:
+        start = ARENA_STARTS[seed % len(ARENA_STARTS)]
+        for name in args.experiments:
+            exp_dir = out / (name if args.seeds == [0] else f"{name}-s{seed}")
+            exp_dir.mkdir(exist_ok=True)
+            memory = exp_dir / "memory.sqlite"
+            results = {"experiment": name, "seed": seed, "start_world": list(start), "phases": []}
+            t0 = time.time()
+            print(f"== {name} seed {seed} start {start}", flush=True)
+            for index, phase in enumerate(EXPERIMENTS[name]):
+                mem = memory
+                if phase.get("memory") == "fresh":
+                    mem = exp_dir / f"memory-fresh-{index}.sqlite"
+                try:
+                    record = run_phase(phase, map_dir=args.map, memory_path=mem, run_dir=exp_dir / f"phase{index}",
+                                       seed=1000 * seed + index, start=start, map_origin=origin)
+                    record["score"] = score(record)
+                except Exception as error:  # retained in the denominator
+                    import traceback
 
-                record = {"phase": phase, "failed": f"{type(error).__name__}: {error}",
-                          "traceback": traceback.format_exc()}
-                print(record["traceback"], flush=True)
-            results["phases"].append(record)
+                    record = {"phase": phase, "failed": f"{type(error).__name__}: {error}",
+                              "traceback": traceback.format_exc()}
+                    print(record["traceback"], flush=True)
+                results["phases"].append(record)
+                dump(exp_dir / "result.json", results)
+            results["wall_seconds"] = time.time() - t0
             dump(exp_dir / "result.json", results)
-        results["wall_seconds"] = time.time() - t0
-        dump(exp_dir / "result.json", results)
-        for p in results["phases"]:
-            print(name, p["phase"]["label"], json.dumps(p.get("score") or p.get("failed")), flush=True)
-    # keep a copy of the map identity used
+            for p in results["phases"]:
+                print(name, seed, p["phase"]["label"], json.dumps(p.get("score") or p.get("failed")), flush=True)
     shutil.copy(Path(args.map) / "map.json", out / "map.json")
 
 
