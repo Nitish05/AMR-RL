@@ -58,12 +58,13 @@ class FixtureDescriber:
         fill = mask.sum() / float(h * w)
         rows = [mask[y].sum() for y in range(ys.min(), ys.max() + 1)]
         taper = (rows[len(rows) // 2] + 1) / (max(rows[0], rows[-1]) + 1)
+        # Only claim what a silhouette supports: a round outline (low fill, widest in
+        # the middle) is a ball. A cylinder seen side-on is a rectangle and a box seen
+        # at an angle looks rounded, so those stay an unlabelled "object".
         if fill < 0.83 and taper > 1.25:
             shape = "ball"
-        elif fill > 0.9 and abs(w / h - 1) < 0.5:
-            shape = "block"
         else:
-            shape = "cylinder" if fill < 0.93 else "block"
+            shape = "object"
         return {"label": f"{color} {shape}", "attributes": {"shape": shape, "color": color}}
 
 

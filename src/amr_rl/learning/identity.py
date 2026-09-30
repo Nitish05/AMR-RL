@@ -31,6 +31,12 @@ class IdentityConfig:
     promote_after: int = 3
     tentative_gate: float = 0.3
     max_range: float = 3.2
+    # Duplicate identities: same appearance (within merge_appearance x gate), remembered
+    # within merge_radius of each other in the current map, and never seen as two
+    # separate detections in one frame -> one object seen from a bad angle; merge.
+    merge_radius: float = 0.9
+    merge_appearance: float = 1.5
+    merge_period: float = 1.0
 
 
 @dataclass
@@ -62,6 +68,8 @@ class EntityTracker:
         self.last_seen: dict[str, float] = {}
         self.last_state: dict[str, str] = {}
         self._entities = None
+        self._last_merge_check = -1e9
+        self.merge_log: list[dict] = []
 
     def _load(self):
         if self._entities is None:
@@ -159,8 +167,42 @@ class EntityTracker:
                             "pos_sigma": 0.05 + 0.03 * det.range_m})
             self.last_seen[item.entity_id] = now
             self.last_state[item.entity_id] = det.state_token
+        identified = sorted({item.entity_id for item in results if item.entity_id is not None})
+        for i, a in enumerate(identified):
+            for b in identified[i + 1:]:
+                self.memory.note_distinct(a, b, now)
         self.visible = results
+        if now - self._last_merge_check >= self.cfg.merge_period:
+            self._last_merge_check = now
+            self._merge_duplicates(map_version, now)
         return results
+
+    def _merge_duplicates(self, map_version, now):
+        """Fold newer duplicate identities into older ones (see IdentityConfig)."""
+        ents = [e for e in self._load().values() if e.get("x") is not None and e.get("map_version") == map_version]
+        ents.sort(key=lambda e: e["created"])
+        dropped = set()
+        for i, keep in enumerate(ents):
+            if keep["entity_id"] in dropped:
+                continue
+            for other in ents[i + 1:]:
+                if other["entity_id"] in dropped:
+                    continue
+                d_app = appearance_distance(other["appearance"], keep["appearance"])
+                d_pos = math.dist((keep["x"], keep["y"]), (other["x"], other["y"]))
+                if (d_app <= self.cfg.merge_appearance * self.cfg.appearance_gate and d_pos <= self.cfg.merge_radius
+                        and not self.memory.are_distinct(keep["entity_id"], other["entity_id"])):
+                    reason = f"same appearance (d={d_app:.2f}), {d_pos:.2f} m apart, never co-visible"
+                    self.memory.merge_entities(keep["entity_id"], other["entity_id"], now=now, reason=reason)
+                    dropped.add(other["entity_id"])
+                    self.merge_log.append({"t": now, "kept": keep["entity_id"], "dropped": other["entity_id"],
+                                           "reason": reason})
+                    for table in (self.last_seen, self.last_state):
+                        if other["entity_id"] in table:
+                            table.setdefault(keep["entity_id"], table[other["entity_id"]])
+                            table.pop(other["entity_id"], None)
+        if dropped:
+            self.refresh()
 
     def _tentative(self, det, map_version, now):
         app = det.descriptor()

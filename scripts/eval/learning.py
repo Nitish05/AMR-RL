@@ -166,6 +166,7 @@ def run_phase(phase, *, map_dir, memory_path, run_dir, seed, world="arena"):
                                        "fixture": fixture_for(session, [e["x"], e["y"]] if e.get("x") is not None
                                                               else None)}
                       for e in rt.memory.entities()},
+        "identity_merges": rt.tracker.merge_log,
         "semantic": rt.semantic.stats if rt.semantic else None,
         "supervisor_log": rt.supervisor.log[-60:],
     })

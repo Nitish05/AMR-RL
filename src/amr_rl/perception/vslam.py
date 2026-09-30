@@ -65,6 +65,14 @@ class VSLAMConfig:
     reloc_confirmations: int = 2
     motion_prior: bool = True
     consistency_window: float = 3.0
+    # Fast "frozen estimate" check: commanded travel >= freeze_min_cmd within
+    # freeze_window while vision reports < freeze_ratio of it -> wrong lock.
+    freeze_window: float = 1.2
+    freeze_min_cmd: float = 0.12
+    freeze_ratio: float = 0.25
+    # After a motion-inconsistency loss, relocalisation must agree with dead reckoning
+    # from the last trustworthy pose (gate grows with commanded travel) for this long.
+    reloc_dr_gate_seconds: float = 20.0
     local_ba_window: int = 6
     local_ba_fixed: int = 2
     sigma_scale: float = 2.0
@@ -108,11 +116,12 @@ class Landmarks:
         self.confirmed = np.zeros(0, bool)
         self.origin = np.zeros((0, 3))  # camera centre at creation
         self.marked = np.zeros(0, bool)  # already contributed obstacle evidence
+        self.created = np.zeros(0)  # timestamp of creation (-inf: loaded from a saved map)
 
     def __len__(self):
         return int(self.alive.sum())
 
-    def add(self, pos, desc, kind, origin=None, confirmed=False):
+    def add(self, pos, desc, kind, origin=None, confirmed=False, created=-np.inf):
         n = len(pos)
         if n == 0:
             return np.zeros(0, int)
@@ -127,13 +136,14 @@ class Landmarks:
         self.marked = np.concatenate([self.marked, np.zeros(n, bool)])
         o = np.zeros((n, 3)) if origin is None else np.broadcast_to(np.asarray(origin, float), (n, 3))
         self.origin = np.vstack([self.origin, o])
+        self.created = np.concatenate([self.created, np.full(n, float(created))])
         return np.arange(start, start + n)
 
     def compact(self):
         keep = self.alive
         remap = -np.ones(len(keep), int)
         remap[keep] = np.arange(int(keep.sum()))
-        for name in ("pos", "desc", "kind", "visible", "found", "alive", "confirmed", "origin", "marked"):
+        for name in ("pos", "desc", "kind", "visible", "found", "alive", "confirmed", "origin", "marked", "created"):
             setattr(self, name, getattr(self, name)[keep])
         return remap
 
@@ -166,6 +176,9 @@ class PlanarVSLAM:
         self._T_cb = model.T_cam_base
         self._motion_prior = None
         self._motion_log = []
+        self._now = 0.0
+        self._dr = None  # dead-reckoning gate after a motion-inconsistency loss
+        self.frozen_events = []
         self._last_err = None
         self._last_quality = (0, 0.0)
         self.distance_travelled = 0.0
@@ -340,6 +353,12 @@ class PlanarVSLAM:
         gray, pts, desc = self.features(rgb)
         dt = 0.0 if self.last_time is None else max(0.0, timestamp - self.last_time)
         self.last_time = timestamp
+        self._now = timestamp
+        if self._dr is not None and commanded is not None and dt > 0:
+            v, w = commanded
+            th = self._dr["pose"][2] + 0.5 * w * dt
+            self._dr["pose"] = self._dr["pose"] + np.array([v * dt * math.cos(th), v * dt * math.sin(th), w * dt])
+            self._dr["travel"] += abs(v) * dt + 0.1 * abs(w) * dt
         if self.status == INITIALIZING:
             return self._initialize(gray, pts, desc, timestamp)
         if self.status in (LOST, RELOCALIZING):
@@ -413,6 +432,7 @@ class PlanarVSLAM:
         pose, inl, H, lm_idx, kp_idx, err = result
         self._frame_candidates = None
         if not self._motion_consistent(pose, commanded, dt, timestamp):
+            self._on_frozen(timestamp)
             self.status = LOST
             self.position_sigma = self.heading_sigma = None
             self.velocity[:] = 0
@@ -440,6 +460,30 @@ class PlanarVSLAM:
                            int(inl.sum()), len(lm_idx), kf, timestamp,
                            inlier_uv=pts[kp_idx[inl]])
 
+    def _on_frozen(self, t):
+        """Vision disagreed with the commanded motion: distrust everything since the
+        start of the consistency window. Landmarks created since then were placed from
+        wrong poses (they would pull relocalisation back to the frozen pose), so they
+        are removed; relocalisation is gated by dead reckoning from the window start."""
+        if not self._motion_log:
+            return
+        t0, p0 = self._motion_log[0][0], self._motion_log[0][1].copy()
+        if self.inconsistency == "frozen":
+            t0 = max(t0, t - self.cfg.freeze_window)
+            p0 = next((e[1].copy() for e in self._motion_log if e[0] >= t0), p0)
+        dr = p0.copy()
+        travel = 0.0
+        for e in self._motion_log:
+            if e[0] > t0:
+                th = dr[2] + 0.5 * e[3]
+                dr = dr + np.array([e[2] * math.cos(th), e[2] * math.sin(th), e[3]])
+                travel += abs(e[2]) + 0.1 * abs(e[3])
+        poisoned = self.lm.alive & (self.lm.created >= t0)
+        self.lm.alive[poisoned] = False
+        self._dr = {"pose": dr, "travel": travel, "since": t, "frozen_pose": np.asarray(self.pose, float).copy()}
+        self.frozen_events.append({"t": t, "window_start": t0, "reason": self.inconsistency,
+                                   "landmarks_removed": int(poisoned.sum())})
+
     def _motion_consistent(self, pose, commanded, dt, t):
         """Compare visual displacement with the robot's own commanded motion over a
         window. Vision reporting far less (or far more) motion than was commanded
@@ -451,6 +495,13 @@ class PlanarVSLAM:
         self._motion_log.append((t, np.asarray(pose, float).copy(), v * dt, w * dt))
         while self._motion_log and t - self._motion_log[0][0] > self.cfg.consistency_window:
             self._motion_log.pop(0)
+        recent = [e for e in self._motion_log if t - e[0] <= self.cfg.freeze_window + 1e-9]
+        if len(recent) >= 5 and t - recent[0][0] >= 0.8 * self.cfg.freeze_window:
+            cmd_recent = sum(abs(e[2]) for e in recent[1:])
+            vis_recent = float(np.hypot(*(recent[-1][1][:2] - recent[0][1][:2])))
+            if cmd_recent >= self.cfg.freeze_min_cmd and vis_recent < self.cfg.freeze_ratio * cmd_recent:
+                self.inconsistency = "frozen"
+                return False
         if len(self._motion_log) < 10 or t - self._motion_log[0][0] < 0.8 * self.cfg.consistency_window:
             return True
         cmd_lin = sum(abs(e[2]) for e in self._motion_log[1:])
@@ -489,7 +540,7 @@ class PlanarVSLAM:
         if ok.sum() < 40:
             return TrackResult(INITIALIZING, None, None, None, 0, 0, False, timestamp,
                                "insufficient_floor_texture")
-        ids = self.lm.add(world[ok], desc[ok], 0, origin=self.model.T_world_cam(pose)[:3, 3])
+        ids = self.lm.add(world[ok], desc[ok], 0, origin=self.model.T_world_cam(pose)[:3, 3], created=timestamp)
         matched = -np.ones(len(pts), int)
         matched[np.flatnonzero(ok)] = ids
         self.keyframes.append(Keyframe(0, timestamp, pose.copy(), pts, desc, matched, gray))
@@ -536,7 +587,8 @@ class PlanarVSLAM:
                 # Only a near-identical descriptor at the same floor point is a duplicate;
                 # a different appearance (scale/viewpoint) is kept as a new observation.
                 ok[idx[same]] = False
-        ids = self.lm.add(world[ok], desc[ok], 0, origin=self.model.T_world_cam(self.pose)[:3, 3])
+        ids = self.lm.add(world[ok], desc[ok], 0, origin=self.model.T_world_cam(self.pose)[:3, 3],
+                          created=self._now)
         kf.landmark[np.flatnonzero(ok)] = ids
         self.keyframes.append(kf)
         if self.cfg.local_ba_window >= 4 and len(self.keyframes) >= self.cfg.local_ba_window:
@@ -576,7 +628,8 @@ class PlanarVSLAM:
         parallax = np.degrees(np.arccos(np.clip(cos, -1, 1)))
         ok = ((z1 > 0.1) & (z2 > 0.1) & (e1 < 2.0) & (e2 < 2.0) & (parallax > self.cfg.min_parallax_deg)
               & (X[:, 2] > -0.05) & (X[:, 2] < 2.0) & (np.linalg.norm(r1, axis=1) < 6.0))
-        ids = self.lm.add(X[ok], kf.desc[ia[ok]], 1, origin=np.linalg.inv(T1)[:3, 3], confirmed=True)
+        ids = self.lm.add(X[ok], kf.desc[ia[ok]], 1, origin=np.linalg.inv(T1)[:3, 3], confirmed=True,
+                          created=self._now)
         kf.landmark[ia[ok]] = ids
         ref.landmark[ib[ok]] = ids
         return int(ok.sum())
@@ -686,6 +739,15 @@ class PlanarVSLAM:
             self._reloc_candidates.clear()
             return TrackResult(self.status, None, None, None, 0, 0, False, timestamp, "relocalization_failed")
         estimate, inliers, H = pose
+        if self._dr is not None:
+            if timestamp - self._dr["since"] > self.cfg.reloc_dr_gate_seconds:
+                self._dr = None
+            else:
+                gate = 0.12 + 0.3 * self._dr["travel"]
+                if np.hypot(*(estimate[:2] - self._dr["pose"][:2])) > gate:
+                    self._reloc_candidates.clear()
+                    return TrackResult(self.status, None, None, None, inliers, inliers, False, timestamp,
+                                       "relocalization_disagrees_with_dead_reckoning")
         if self._reloc_candidates:
             prev = self._reloc_candidates[-1]
             if np.hypot(*(estimate[:2] - prev[:2])) > 0.12 or abs(wrap(estimate[2] - prev[2])) > 0.2:
@@ -695,6 +757,7 @@ class PlanarVSLAM:
             return TrackResult(self.status, None, None, None, inliers, inliers, False, timestamp,
                                "relocalization_candidate")
         self._reloc_candidates.clear()
+        self._dr = None
         self.pose, self.status, self.failures = estimate, TRACKING, 0
         self.velocity[:] = 0
         self._set_sigma(H, inliers)

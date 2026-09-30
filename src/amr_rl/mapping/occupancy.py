@@ -56,6 +56,10 @@ class OccupancyGrid:
         self.origin = np.array([-self.cfg.size / 2, -self.cfg.size / 2])
         self.logodds = np.zeros((n, n), np.float32)  # [iy, ix]
         self.revision = 0
+        # Hard keep-out discs around remembered entities (position + size + uncertainty).
+        # Derived runtime state, not saved with the map; overrides floor evidence.
+        self.keepout = np.zeros((n, n), bool)
+        self._keepout_key = None
 
     # -------------------------------------------------------------- indexing
     def to_cell(self, xy):
@@ -102,10 +106,33 @@ class OccupancyGrid:
         pts = np.stack([pose[0] + c * gx - s * gy, pose[1] + s * gx + c * gy], -1).reshape(-1, 2)
         return self.add_hits(pts, self.cfg.free_hit)
 
+    def set_keepout(self, discs):
+        """``discs``: [(x, y, radius)]. Cells within a disc are OCCUPIED for planning,
+        whatever the floor evidence says (a known object is never driven through)."""
+        key = tuple((round(x, 2), round(y, 2), round(r, 2)) for x, y, r in discs)
+        if key == self._keepout_key:
+            return False
+        mask = np.zeros_like(self.keepout)
+        for x, y, r in discs:
+            cells = int(np.ceil(r / self.cfg.resolution)) + 1
+            cx, cy = self.to_cell(np.array([x, y], float))
+            ys, xs = np.mgrid[-cells:cells + 1, -cells:cells + 1]
+            ix, iy = cx[0] + xs.ravel(), cy[0] + ys.ravel()
+            ok = self.inside(ix, iy)
+            ix, iy = ix[ok], iy[ok]
+            centres = self.to_xy(ix, iy)
+            near = np.linalg.norm(centres - np.array([x, y])[None], axis=1) <= r
+            mask[iy[near], ix[near]] = True
+        self.keepout = mask
+        self._keepout_key = key
+        self.revision += 1
+        return True
+
     def classes(self):
         out = np.full(self.logodds.shape, UNKNOWN, np.uint8)
         out[self.logodds <= self.cfg.free_threshold] = FREE
         out[self.logodds >= self.cfg.occ_threshold] = OCCUPIED
+        out[self.keepout] = OCCUPIED
         return out
 
     def classify_xy(self, xy):
@@ -150,6 +177,10 @@ class EvidenceConfig:
     min_parallax_px: float = 3.5  # its predicted parallax must reach this to count as evidence
     pose_homography_max_gap: float = 8.0  # s between keyframes for pose-predicted homography
     min_peak: float = 0.2  # NCC advantage of floor alignment over the obstacle alignment
+    # Obstacle-base evidence is committed only where >= base_confirm_pairs keyframe pairs
+    # (same new keyframe, different reference keyframes) agree within one cell. A
+    # single pair's base hits were 91 % on open floor (scripts/dev/obstacle_hits_probe.py).
+    base_confirm_pairs: int = 2
 
 
 class FloorEvidenceMapper:
@@ -169,8 +200,10 @@ class FloorEvidenceMapper:
         self.stats["skipped"][reason] = self.stats["skipped"].get(reason, 0) + 1
         return {"updated": False, "reason": reason}
 
-    def update(self, ref, cur):
-        """Accumulate evidence from keyframe ``ref`` into keyframe ``cur``'s view."""
+    def update(self, ref, cur, *, defer_bases=False):
+        """Accumulate evidence from keyframe ``ref`` into keyframe ``cur``'s view.
+        With ``defer_bases`` the obstacle-base hits are returned (``base_xy``) instead
+        of applied, so the caller can require agreement between pairs."""
         if ref.gray is None or cur.gray is None:
             return self._skip("missing_images")
         c_ref = self.model.T_world_cam(ref.pose)[:3, 3]
@@ -230,10 +263,13 @@ class FloorEvidenceMapper:
         free_cells = self.grid.add_hits(ground_xy[free_mask], self.grid.cfg.free_hit,
                                         min_count=self.cfg.min_floor_pixels_per_cell)
         bases = self._obstacle_bases(floor, nonfloor, ok)
-        occ_cells = self.grid.add_hits(ground_xy[bases[:, 1], bases[:, 0]] if len(bases) else np.zeros((0, 2)),
-                                       self.grid.cfg.occ_hit)
+        base_xy = ground_xy[bases[:, 1], bases[:, 0]] if len(bases) else np.zeros((0, 2))
+        if defer_bases:
+            occ_cells = 0
+        else:
+            occ_cells = self.grid.add_hits(base_xy, self.grid.cfg.occ_hit)
         self.stats["updates"] += 1
-        return {"updated": True, "free_cells": free_cells, "occupied_cells": occ_cells,
+        return {"updated": True, "free_cells": free_cells, "occupied_cells": occ_cells, "base_xy": base_xy,
                 "floor_pixels": int(free_mask.sum()), "nonfloor_pixels": int(nonfloor.sum()),
                 "floor_mask": floor, "nonfloor_mask": nonfloor}
 
@@ -317,10 +353,11 @@ class FloorEvidenceMapper:
         baseline (larger baselines make farther floor detectable)."""
         cur = keyframes[-1]
         results = []
+        defer = self.cfg.base_confirm_pairs > 1
         for ref in reversed(keyframes[-1 - window:-1]):
             if len([r for r in results if r["updated"]]) >= max_pairs:
                 break
-            results.append(self.update(ref, cur))
+            results.append(self.update(ref, cur, defer_bases=defer))
         if wide_pairs and len(keyframes) > window + 1:
             c_cur = self.model.T_world_cam(cur.pose)[:3, 3]
             heading = np.array([np.cos(cur.pose[2]), np.sin(cur.pose[2])])
@@ -340,8 +377,37 @@ class FloorEvidenceMapper:
                 scored.append((lateral, ref))
             scored.sort(key=lambda item: -item[0])
             for _, ref in scored[:wide_pairs]:
-                results.append(self.update(ref, cur))
+                results.append(self.update(ref, cur, defer_bases=defer))
+        if defer:
+            self._commit_confirmed_bases(results)
         return results
+
+    def _commit_confirmed_bases(self, results):
+        """Apply obstacle-base hits supported by >= base_confirm_pairs pairs (within one
+        cell, 3x3 neighbourhood); drop the rest."""
+        per_pair = []
+        for r in results:
+            if r.get("updated") and len(r.get("base_xy", ())):
+                ix, iy = self.grid.to_cell(r["base_xy"])
+                ok = self.grid.inside(ix, iy)
+                per_pair.append(set(zip(ix[ok].tolist(), iy[ok].tolist())))
+        if len(per_pair) < self.cfg.base_confirm_pairs:
+            self.stats["bases_unconfirmed"] = self.stats.get("bases_unconfirmed", 0) + sum(map(len, per_pair))
+            return 0
+        support = {}
+        for cells in per_pair:
+            near = {(x + dx, y + dy) for x, y in cells for dx in (-1, 0, 1) for dy in (-1, 0, 1)}
+            for c in near:
+                support[c] = support.get(c, 0) + 1
+        confirmed = [c for cells in per_pair for c in cells if support.get(c, 0) >= self.cfg.base_confirm_pairs]
+        confirmed = sorted(set(confirmed))
+        self.stats["bases_confirmed"] = self.stats.get("bases_confirmed", 0) + len(confirmed)
+        self.stats["bases_unconfirmed"] = self.stats.get("bases_unconfirmed", 0) + \
+            sum(map(len, per_pair)) - len(confirmed)
+        if not confirmed:
+            return 0
+        xy = self.grid.to_xy(np.array([c[0] for c in confirmed]), np.array([c[1] for c in confirmed]))
+        return self.grid.add_hits(xy, self.grid.cfg.occ_hit)
 
     def add_landmark_obstacles(self, points_xyz, low=0.04, high=0.45):
         mask = (points_xyz[:, 2] > low) & (points_xyz[:, 2] < high)

@@ -223,3 +223,26 @@ def test_idle_is_a_bounded_rest_so_the_robot_reconsiders():
         assert idle.step(None, 10.0 + 0.1 * k) == (0.0, 0.0) and not idle.done
     idle.step(None, 10.0 + Idle.REST_SECONDS + 0.01)
     assert idle.done and idle.result["status"] == "completed"
+
+
+def test_noisy_effect_needs_a_longer_failure_run_before_a_change_is_hypothesised(tmp_path):
+    """Regression (noisy world, bloom yellow with p = 0.5): three failures in a row
+    were read as a consequence change and old evidence was discounted, so the robot
+    backed off an option whose true value stayed positive."""
+    memory = open_memory(tmp_path / "m.sqlite")
+    t = 1.0
+    for outcome in ["attach:yellow", "none", "attach:yellow", "none", "attach:yellow", "attach:yellow"]:
+        observe(memory, "a", outcome, now=t)
+        t += 1
+    changes = [observe(memory, "a", "none", now=t + k)["change_hypothesis"] for k in range(3)]
+    assert not any(changes)  # a 3-failure run is unremarkable at ~60 % reliability
+    more = [observe(memory, "a", "none", now=t + 3 + k)["change_hypothesis"] for k in range(3)]
+    assert any(more)  # a long enough run is still recognised
+
+
+def test_reliable_effect_still_changes_after_three_failures(tmp_path):
+    memory = open_memory(tmp_path / "m.sqlite")
+    for k in range(5):
+        observe(memory, "a", useful(), now=1.0 + k)
+    changes = [observe(memory, "a", "none", now=10.0 + k)["change_hypothesis"] for k in range(3)]
+    assert changes == [False, False, True]

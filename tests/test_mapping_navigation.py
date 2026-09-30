@@ -204,3 +204,72 @@ def test_frontier_goals_move_away_from_spots_already_swept():
     again = frontier_goals(grid, planner, here, visited=spots)
     moved = [min(np.linalg.norm(g[0] - s) for s in spots) for g in again]
     assert np.mean(moved) > 0.05
+
+
+def test_goal_that_loses_clearance_while_driving_snaps_to_nearby_certified_cell():
+    """Regression (navigation-20260930-024431): new evidence near an accepted goal
+    removed its footprint clearance and the robot stopped ('blocked'). A replan may
+    now move the goal to the nearest certified cell within 12 cm; farther: blocked."""
+    grid = grid_with_free([(-2.0, -1.2, 2.0, 1.2)])
+    nav = Navigator()
+    pose = np.array([-1.0, 0.0, 0.0])
+    goal = np.array([0.8, 0.0])
+    assert nav.set_goal(grid, pose, goal, now=0.0)
+    _box_hits(grid, (0.8, 0.33), 0.05, times=3)  # obstacle evidence 0.33 m from the goal
+    assert not nav.planner.traversable_xy(grid, [goal])[0]
+    v, w = nav.step(grid, pose, 0.01, 2.0)  # replan period elapsed
+    assert nav.status == "following" and nav.goal_snaps == 1
+    assert 0 < np.linalg.norm(nav.goal - goal) <= nav.planner.cfg.goal_snap + 1e-9
+    assert nav.planner.traversable_xy(grid, [nav.goal])[0]
+    # evidence right at the goal: no certified cell within 12 cm -> blocked, not moved further
+    grid2 = grid_with_free([(-2.0, -1.2, 2.0, 1.2)])
+    nav2 = Navigator()
+    assert nav2.set_goal(grid2, pose, goal, now=0.0)
+    _box_hits(grid2, (0.8, 0.0), 0.1, times=3)
+    nav2.step(grid2, pose, 0.01, 2.0)
+    assert nav2.status == "blocked"
+
+
+def test_new_goals_are_still_checked_strictly():
+    grid = grid_with_free([(-2.0, -1.2, 2.0, 1.2)])
+    _box_hits(grid, (0.8, 0.33), 0.05, times=3)
+    nav = Navigator()
+    assert not nav.set_goal(grid, np.array([-1.0, 0.0, 0.0]), (0.8, 0.0))
+    assert nav.reason == "goal_lacks_footprint_clearance"
+
+
+def test_obstacle_bases_need_agreement_between_keyframe_pairs():
+    """Regression: single-pair obstacle-base hits were 91 % on open floor
+    (scripts/dev/obstacle_hits_probe.py); only bases seen by >= 2 pairs are applied."""
+    from amr_rl.mapping.occupancy import FloorEvidenceMapper
+    from amr_rl.perception.camera_model import CameraModel
+    from amr_rl.robot.spec import RobotSpec
+
+    grid = OccupancyGrid("m")
+    mapper = FloorEvidenceMapper(CameraModel.from_spec(RobotSpec.load()), grid)
+    real = np.array([[1.0, 0.0], [1.0, 0.05]])
+    results = [{"updated": True, "base_xy": real + [0.02, 0.0]},  # same obstacle from two pairs
+               {"updated": True, "base_xy": np.vstack([real, [[0.4, -0.6]]])},  # plus a one-pair stray
+               {"updated": False}]
+    mapper._commit_confirmed_bases(results)
+    ix, iy = grid.to_cell(np.array([[1.0, 0.0], [0.4, -0.6]]))
+    assert grid.logodds[iy[0], ix[0]] > 0 and grid.logodds[iy[1], ix[1]] == 0
+    assert mapper.stats["bases_confirmed"] >= 2 and mapper.stats["bases_unconfirmed"] >= 1
+
+
+def test_remembered_entities_are_hard_keepout_for_planning():
+    """Regression (map-arena-20260930-082022, t=263 s): floor evidence had eroded a
+    fixture's weak obstacle ring and the robot clipped it while turning past."""
+    grid = grid_with_free([(-2.0, -1.2, 2.0, 1.2)])
+    planner = Planner()
+    assert planner.traversable_xy(grid, [[0.0, 0.3]])[0]
+    assert grid.set_keepout([(0.0, 0.0, 0.18)]) and not grid.set_keepout([(0.0, 0.0, 0.18)])
+    ix, iy = grid.to_cell(np.array([[0.0, 0.0]]))
+    assert grid.classes()[iy[0], ix[0]] == OCCUPIED
+    # centre within radius + footprint + margin of the disc is no longer traversable
+    assert not planner.traversable_xy(grid, [[0.0, 0.3]])[0]
+    path = planner.plan(grid, (-1.2, 0.0), (1.2, 0.0))
+    dense = np.vstack([np.linspace(a, b, 20) for a, b in zip(path[:-1], path[1:])])
+    assert np.min(np.linalg.norm(dense, axis=1)) >= 0.18 + 0.262
+    assert grid.set_keepout([])  # entity forgotten/moved: space is free again
+    assert planner.traversable_xy(grid, [[0.0, 0.3]])[0]

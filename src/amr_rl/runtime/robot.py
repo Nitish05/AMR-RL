@@ -94,6 +94,8 @@ class RobotRuntime:
         self.recovery_plan = None
         self._interrupted = {}
         self._entity_marked = {}
+        self._keepout_time = -1e9
+        self._keepout_target = None
         self.acks = []
         self.triggers = []
         self.recent_outcomes = []
@@ -162,8 +164,13 @@ class RobotRuntime:
             self.recovery_plan = None
         detections = self.detector.detect(frame.rgb, self.pose if status == TRACKING else None)
         if self.pose is not None and status == TRACKING:
+            n_merges = len(self.tracker.merge_log)
             visible = self.tracker.update(detections, self.pose, self.sigma, self.slam.map_version, self.now,
                                           in_view=self.place_in_view)
+            if len(self.tracker.merge_log) != n_merges and self.activity is not None and \
+                    self.activity.target_entity is not None:
+                # a duplicate identity was folded into an older one: follow it
+                self.activity.target_entity = self.memory.resolve(self.activity.target_entity)
             for item in visible:
                 det = item.detection
                 key = item.entity_id or "tentative"
@@ -172,6 +179,7 @@ class RobotRuntime:
                     self._entity_marked[key] = self.now
                     self._mark_entity(det)
             self._semantic_requests(frame, visible)
+            self._update_keepout()
             ids = {v.entity_id for v in visible if v.entity_id}
             if ids - self._last_visible:
                 self.triggers.append("new_entity_evidence")
@@ -180,6 +188,27 @@ class RobotRuntime:
             self._last_visible = ids
         else:
             self.tracker.visible = []
+
+    def _update_keepout(self):
+        """Remembered entities in this map are hard obstacles for planning: a disc of
+        half their measured size plus their position uncertainty (engineered margin)."""
+        target = self.activity.target_entity if self.activity is not None else None
+        if self.now - self._keepout_time < 1.0 and target == self._keepout_target:
+            return
+        self._keepout_time, self._keepout_target = self.now, target
+        discs = []
+        for ent in self.known_entities():
+            if ent.get("x") is None or ent.get("map_version") != self.slam.map_version:
+                continue
+            app = ent.get("appearance") or {}
+            size = max(app.get("width_m") or 0.1, app.get("height_m") or 0.1)
+            if ent["entity_id"] == target:
+                # the object being approached: its body only, so standoffs stay reachable
+                r = float(np.clip(size / 2, 0.05, 0.15))
+            else:
+                r = float(np.clip(size / 2, 0.05, 0.2) + np.clip(ent.get("pos_sigma") or 0.05, 0.02, 0.1))
+            discs.append((float(ent["x"]), float(ent["y"]), r))
+        self.grid.set_keepout(discs)
 
     def _mark_entity(self, det):
         r = float(np.clip(min(det.width_m, det.height_m or det.width_m) / 2, 0.05, 0.15))
@@ -448,6 +477,7 @@ class RobotRuntime:
                 self._log_activity_end(self.activity)
             self.nav.reset_goal_state()
             self.activity = new
+            self._update_keepout()  # the new target's own disc shrinks before planning
         if self.activity is None:
             return 0.0, 0.0
         v, w = self.activity.step(self, now)

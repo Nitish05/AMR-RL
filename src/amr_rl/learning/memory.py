@@ -51,7 +51,9 @@ class LearningConfig:
     useful_valence: float = 0.3
     initial_probes: int = 3
     early_change_useful: int = 2
-    change_failures: int = 3
+    change_failures: int = 3  # minimum consecutive failures before a change is hypothesised
+    change_alpha: float = 0.05  # ...and enough that the run is this unlikely under the old rate
+    change_failures_max: int = 8
     stable_useful: int = 6
     max_information_value: float = 0.2
     curiosity: float = 0.5  # engineered weight on outcome uncertainty (exploration bonus)
@@ -100,6 +102,11 @@ class ExperienceMemory:
             CREATE TABLE IF NOT EXISTS updates(
                 seq INTEGER PRIMARY KEY AUTOINCREMENT, event_id TEXT NOT NULL,
                 entity_id TEXT NOT NULL, action TEXT NOT NULL, detail TEXT NOT NULL);
+            CREATE TABLE IF NOT EXISTS distinct_pairs(
+                a TEXT NOT NULL, b TEXT NOT NULL, t REAL NOT NULL, PRIMARY KEY(a, b));
+            CREATE TABLE IF NOT EXISTS merges(
+                seq INTEGER PRIMARY KEY AUTOINCREMENT, kept TEXT NOT NULL, dropped TEXT NOT NULL UNIQUE,
+                t REAL NOT NULL, reason TEXT NOT NULL);
         """)
         with self.db:
             existing = self._meta("schema_version")
@@ -151,6 +158,81 @@ class ExperienceMemory:
                     (canonical(appearance), n_obs_increment, now, label, map_version,
                      None if xy is None else float(xy[0]), None if xy is None else float(xy[1]), pos_sigma,
                      entity_id))
+
+    # ------------------------------------------------------------ identity maintenance
+    def note_distinct(self, a, b, now):
+        """Two identities were seen as two separate detections in one frame: they
+        are different objects and must never be merged."""
+        if a == b:
+            return
+        a, b = sorted((a, b))
+        with self.lock, self.db:
+            self.db.execute("INSERT OR IGNORE INTO distinct_pairs(a,b,t) VALUES(?,?,?)", (a, b, now))
+
+    def are_distinct(self, a, b):
+        a, b = sorted((a, b))
+        return self.db.execute("SELECT 1 FROM distinct_pairs WHERE a=? AND b=?", (a, b)).fetchone() is not None
+
+    def resolve(self, entity_id):
+        """Follow merges: the identity an old (merged-away) id now refers to."""
+        seen = set()
+        while entity_id not in seen:
+            seen.add(entity_id)
+            row = self.db.execute("SELECT kept FROM merges WHERE dropped=?", (entity_id,)).fetchone()
+            if row is None:
+                return entity_id
+            entity_id = row[0]
+        return entity_id
+
+    def merge_entities(self, keep, drop, *, now, reason):
+        """Fold identity ``drop`` into ``keep``: outcome windows, events, updates and
+        budgets move to ``keep`` (receipts are stored unchanged; the merge is
+        recorded). Refused for pairs known to be distinct."""
+        if keep == drop or self.are_distinct(keep, drop):
+            raise ValueError("Refusing to merge distinct or identical identities")
+        with self.lock, self.db:
+            self.db.execute("BEGIN IMMEDIATE")
+            rows = {r["entity_id"]: dict(r) for r in self.db.execute(
+                "SELECT * FROM entities WHERE entity_id IN (?,?)", (keep, drop))}
+            if len(rows) != 2:
+                raise ValueError("Unknown entity in merge")
+            for opt in self.db.execute("SELECT * FROM options WHERE entity_id=?", (drop,)).fetchall():
+                mine = self.db.execute("SELECT * FROM options WHERE entity_id=? AND action=? AND context=?",
+                                       (keep, opt["action"], opt["context"])).fetchone()
+                window = json.loads(opt["window"]) + (json.loads(mine["window"]) if mine else [])
+                window = sorted(window, key=lambda w: w[2])[-self.cfg.window:]
+                outcomes = opt["outcomes"] + (mine["outcomes"] if mine else 0)
+                self.db.execute(
+                    "INSERT INTO options(entity_id,action,context,window,outcomes) VALUES(?,?,?,?,?)"
+                    " ON CONFLICT(entity_id,action,context) DO UPDATE SET window=excluded.window,"
+                    " outcomes=excluded.outcomes", (keep, opt["action"], opt["context"], canonical(window), outcomes))
+            self.db.execute("DELETE FROM options WHERE entity_id=?", (drop,))
+            for bud in self.db.execute("SELECT * FROM budgets WHERE entity_id=?", (drop,)).fetchall():
+                mine = self.db.execute("SELECT * FROM budgets WHERE entity_id=? AND action=?",
+                                       (keep, bud["action"])).fetchone()
+                if mine is None:
+                    self.db.execute("UPDATE budgets SET entity_id=? WHERE entity_id=? AND action=?",
+                                    (keep, drop, bud["action"]))
+                elif (bud["last_outcome"] or -1) > (mine["last_outcome"] or -1):
+                    # the more recent history wins the streak/probe state
+                    self.db.execute("DELETE FROM budgets WHERE entity_id=? AND action=?", (keep, bud["action"]))
+                    self.db.execute("UPDATE budgets SET entity_id=? WHERE entity_id=? AND action=?",
+                                    (keep, drop, bud["action"]))
+            self.db.execute("DELETE FROM budgets WHERE entity_id=?", (drop,))
+            self.db.execute("UPDATE events SET entity_id=? WHERE entity_id=?", (keep, drop))
+            self.db.execute("UPDATE updates SET entity_id=? WHERE entity_id=?", (keep, drop))
+            k, d = rows[keep], rows[drop]
+            self.db.execute("UPDATE entities SET created=?, movable=?, n_obs=? WHERE entity_id=?",
+                            (min(k["created"], d["created"]), max(k["movable"], d["movable"]),
+                             k["n_obs"] + d["n_obs"], keep))
+            self.db.execute("DELETE FROM entities WHERE entity_id=?", (drop,))
+            self.db.execute("UPDATE distinct_pairs SET a=? WHERE a=?", (keep, drop))
+            self.db.execute("UPDATE distinct_pairs SET b=? WHERE b=?", (keep, drop))
+            self.db.execute("UPDATE merges SET kept=? WHERE kept=?", (keep, drop))
+            self.db.execute("INSERT INTO merges(kept,dropped,t,reason) VALUES(?,?,?,?)", (keep, drop, now, reason))
+
+    def merges(self):
+        return [dict(r) for r in self.db.execute("SELECT * FROM merges ORDER BY seq")]
 
     def set_label(self, entity_id, label):
         with self.lock, self.db:
@@ -264,6 +346,20 @@ class ExperienceMemory:
                             (entity_id, action))
 
     # ------------------------------------------------------------ learning
+    def _failures_needed(self, entity_id, action):
+        """Consecutive failures that make a consequence change credible: at least
+        ``change_failures``, and enough that such a run has probability < change_alpha
+        under the success rate observed before it (Laplace-smoothed). Called when the
+        current outcome (the first failure) is already stored."""
+        rows = self.db.execute("SELECT valence FROM events WHERE entity_id=? AND action=? ORDER BY seq DESC LIMIT ?",
+                               (entity_id, action, self.cfg.window + 1)).fetchall()[1:]
+        useful = sum(r[0] >= self.cfg.useful_valence for r in rows)
+        p = (useful + 1) / (len(rows) + 2)
+        if p >= 1.0:
+            return self.cfg.change_failures
+        k = math.ceil(math.log(self.cfg.change_alpha) / math.log(max(1e-9, 1.0 - p)))
+        return int(min(self.cfg.change_failures_max, max(self.cfg.change_failures, k)))
+
     def record_outcome(self, receipt: dict) -> dict | None:
         """Atomically store one validated receipt and update beliefs.
 
@@ -280,6 +376,7 @@ class ExperienceMemory:
         payload = canonical(receipt)
         digest = hashlib.sha256(payload.encode()).hexdigest()
         e, a, c, o, t = (receipt[k] for k in ("entity_id", "action", "context", "observed", "timestamp"))
+        e = self.resolve(e)  # an identity merged away during the interaction
         valence = float(self.cfg.valence.get(o, 0.0))
         with self.lock, self.db:
             self.db.execute("BEGIN IMMEDIATE")
@@ -312,10 +409,13 @@ class ExperienceMemory:
             probes = self.cfg.initial_probes if useful else max(0, budget["probes"] - 1)
             change = False
             if failure_streak == 1 and established:
-                # Remember that this failure run follows an established effect.
+                # Remember that this failure run follows an established effect, and how
+                # reliable that effect was (a 50 % effect produces failure runs by chance).
                 self._set_meta(f"armed:{e}:{a}", "1")
                 self._set_meta(f"armed_time:{e}:{a}", repr(float(t)))
-            if failure_streak == self.cfg.change_failures and self._meta(f"armed:{e}:{a}") == "1":
+                self._set_meta(f"armed_need:{e}:{a}", str(self._failures_needed(e, a)))
+            needed = int(self._meta(f"armed_need:{e}:{a}") or self.cfg.change_failures)
+            if failure_streak == needed and self._meta(f"armed:{e}:{a}") == "1":
                 change = True
                 stable = False
                 self._set_meta(f"armed:{e}:{a}", "0")
@@ -397,6 +497,7 @@ class ExperienceMemory:
             return {
                 "outcomes": self.db.execute("SELECT COUNT(*) FROM events").fetchone()[0],
                 "entities": self.db.execute("SELECT COUNT(*) FROM entities").fetchone()[0],
+                "merges": self.db.execute("SELECT COUNT(*) FROM merges").fetchone()[0],
                 "change_epoch": int(self._meta("change_epoch")),
                 "sessions": self.sessions,
             }
@@ -406,7 +507,8 @@ class ExperienceMemory:
         if confirm != "RESET":
             raise ValueError("Memory reset requires explicit confirmation")
         with self.lock, self.db:
-            for table in ("entities", "options", "budgets", "events", "updates", "meta"):
+            for table in ("entities", "options", "budgets", "events", "updates", "distinct_pairs", "merges",
+                          "meta"):
                 self.db.execute(f"DELETE FROM {table}")
             self._set_meta("schema_version", str(SCHEMA_VERSION))
             self._set_meta("agent_id", f"pip-{uuid.uuid4().hex[:8]}")

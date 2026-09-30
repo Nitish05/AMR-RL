@@ -171,6 +171,59 @@ def test_duplicate_claims_become_ambiguous(tmp_path):
     assert all(o.entity_id is None for o in out)
 
 
+
+def _receipt(eid, observed, event, t):
+    return {"event_id": event, "entity_id": eid, "action": "signal", "context": "attach:none", "observed": observed,
+            "timestamp": t, "authorised": True, "images_retained": True, "predicted": {}, "decision": {}}
+
+
+def test_duplicate_identity_of_one_object_is_merged_with_its_history(tmp_path):
+    """Regression (learning-20260930-022340): grump was stored twice (a bad-angle view
+    made the box look 10 cm wider; later refined to 0.66 m apart); the duplicate had no
+    red-panel history and was re-targeted. Same appearance, close, never two separate
+    detections in one frame -> merged into the older identity."""
+    memory = ExperienceMemory(tmp_path / "m.sqlite")
+    tracker = EntityTracker(memory)
+    for k in range(3):
+        out = tracker.update([detection(130, (1.0, 0.0), "green")], (0, 0, 0), 0.01, "m", float(k))
+    old = out[0].entity_id
+    memory.record_outcome(_receipt(old, "attach:red", "e1", 3.0))
+    for k in range(3):  # bad-angle view: box looks 13 cm wider (outside the appearance gate), 1.05 m away
+        out = tracker.update([detection(130, (2.0, 0.3), "green", width=0.33)], (0, 0, 0), 0.01, "m", 20.0 + k)
+    dup = out[0].entity_id
+    assert dup not in (None, old) and memory.counts()["entities"] == 2
+    # its position is later refined to 0.66 m from the original (as in the real run)
+    memory.upsert_entity(dup, appearance=memory.entities()[1]["appearance"], now=30.0, map_version="m",
+                         xy=(1.6, 0.25))
+    tracker.refresh()
+    tracker.update([], (0, 0, 0), 0.01, "m", 31.0)
+    assert memory.counts()["entities"] == 1 and memory.counts()["merges"] == 1
+    assert memory.resolve(dup) == old and tracker.merge_log[0]["kept"] == old
+    assert memory.attitude(old, 32.0)["attitude"] == "disliked"  # the red-panel history is kept
+    # a receipt for the merged-away id (interaction in flight) lands on the kept identity
+    memory.record_outcome(_receipt(dup, "attach:red", "e2", 33.0))
+    assert memory.counts()["outcomes"] == 2 and memory.counts()["entities"] == 1
+
+
+def test_twins_seen_together_are_never_merged(tmp_path):
+    memory = ExperienceMemory(tmp_path / "m.sqlite")
+    tracker = EntityTracker(memory)
+    for k in range(3):
+        tracker.update([detection(226, (1.0, 0.0))], (0, 0, 0), 0.01, "m", float(k))
+    for k in range(4):  # a look-alike seen together with the original: its own identity
+        out = tracker.update([detection(226, (1.0, 0.0)), detection(226, (2.2, 0.3))], (0, 0, 0), 0.01, "m",
+                             5.0 + k)
+    a, b = out[0].entity_id, out[1].entity_id
+    assert None not in (a, b) and a != b and memory.are_distinct(a, b)
+    # even if their remembered positions end up close, co-visibility forbids merging
+    ent_b = [e for e in memory.entities() if e["entity_id"] == b][0]
+    memory.upsert_entity(b, appearance=ent_b["appearance"], now=20.0, map_version="m", xy=(1.5, 0.2))
+    tracker.refresh()
+    tracker.update([], (0, 0, 0), 0.01, "m", 21.0)
+    assert memory.counts()["entities"] == 2 and memory.counts()["merges"] == 0
+    with pytest.raises(ValueError):
+        memory.merge_entities(a, b, now=22.0, reason="test")
+
 # ----------------------------------------------------------------- semantics
 class SlowBackend:
     name = "slow"
@@ -255,3 +308,54 @@ def test_fixture_describer_labels(model):
     assert out["label"].startswith("cyan")
     assert not any(ch.isdigit() for ch in out["label"])
     assert math.isfinite(len(out["label"]))
+
+
+def test_frozen_estimate_is_detected_quickly_and_poisoned_landmarks_removed(model):
+    """Regression (map-arena-20260930-075954, t=323 s): vision reported the robot
+    standing still while it drove 0.25 m; the long consistency window needed 0.3 m of
+    commanded motion. Relocalisation then locked back onto landmarks created from the
+    frozen pose (error 6 -> 33 cm)."""
+    from amr_rl.perception.vslam import PlanarVSLAM
+
+    slam = PlanarVSLAM(model)
+    slam.pose = np.array([1.0, 0.0, 0.0])
+    slam.lm.add(np.array([[2.0, 0.0, 0.0]]), np.zeros((1, 32), np.uint8), 0, created=5.0)   # before
+    slam.lm.add(np.array([[2.0, 0.5, 0.0]]), np.zeros((1, 32), np.uint8), 0, created=10.8)  # during
+    ok = True
+    for k in range(13):  # 1.2 s at 0.2 m/s commanded, vision says: not moving
+        ok = slam._motion_consistent((1.0, 0.0, 0.0), (0.2, 0.0), 0.1, 10.0 + 0.1 * k)
+        if not ok:
+            break
+    assert not ok and slam.inconsistency == "frozen" and 10.0 + 0.1 * k <= 11.2 + 1e-9
+    slam._on_frozen(10.0 + 0.1 * k)
+    assert slam.lm.alive.tolist() == [True, False]
+    assert slam._dr["pose"][0] > 1.15  # dead reckoning continued the commanded motion
+    # relocalisation gate: a candidate at the frozen pose is refused, one near DR accepted
+    gate = 0.12 + 0.3 * slam._dr["travel"]
+    assert np.hypot(*(np.array([1.0, 0.0]) - slam._dr["pose"][:2])) > gate
+
+
+def test_real_slow_start_is_not_flagged_as_frozen(model):
+    from amr_rl.perception.vslam import PlanarVSLAM
+
+    slam = PlanarVSLAM(model)
+    x = 0.0
+    for k in range(20):  # commanded 0.2 m/s; real motion lags then reaches 70 % of it
+        x += 0.02 * min(0.7, 0.1 * k)
+        assert slam._motion_consistent((x, 0.0, 0.0), (0.2, 0.0), 0.1, 0.1 * k)
+
+
+def test_describer_does_not_guess_box_or_cylinder_from_a_silhouette():
+    """Regression: the fill heuristic labelled the cyan cylinder 'block' and the green
+    box 'cylinder'. Only a round outline is named (ball); otherwise 'object'."""
+    import cv2
+
+    from amr_rl.perception.semantic import FixtureDescriber
+
+    d = FixtureDescriber()
+    rect = np.full((60, 60, 3), 128, np.uint8)
+    rect[10:50, 15:45] = (13, 199, 209)
+    assert d.describe(rect)["label"] == "cyan object"
+    disc = np.full((60, 60, 3), 128, np.uint8)
+    cv2.circle(disc, (30, 30), 20, (220, 40, 160), -1)
+    assert d.describe(disc)["attributes"]["shape"] == "ball"

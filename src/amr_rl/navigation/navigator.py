@@ -53,6 +53,8 @@ class Navigator:
         self.backed_off = 0.0
         self._last_xy = None
         self.holding = False
+        self.original_goal = None
+        self.goal_snaps = 0
 
     def set_goal(self, grid, pose, goal, *, heading=None, now=0.0, avoid=()):
         self.reset_goal_state()
@@ -64,6 +66,7 @@ class Navigator:
             self.rejections += 1
             return False
         self.goal, self.goal_heading = np.asarray(goal, float), heading
+        self.original_goal = self.goal.copy()
         self.index, self.status, self.reason = 1, "following", ""
         self.last_plan = now
         return True
@@ -79,6 +82,8 @@ class Navigator:
         self.backed_off = 0.0
         self._last_xy = None
         self.holding = False
+        self.original_goal = None
+        self.goal_snaps = 0
 
     def cancel(self, reason="cancelled"):
         self.reset_goal_state()
@@ -109,13 +114,13 @@ class Navigator:
         corridor_ok = self._corridor_clear(grid, pose)
         if now - self.last_plan >= self.cfg.replan_period:
             self.last_plan = now
-            if not corridor_ok or not self.planner.path_valid(grid, self.path, from_index=max(self.index - 1, 1)):
+            if not corridor_ok or not self.planner.path_valid(grid, self.path, from_index=max(self.index - 1, 0)):
                 self.replans += 1
                 if self.replans > self.cfg.max_replans:
                     self.status, self.reason = "blocked", "replan budget exhausted"
                     return 0.0, 0.0
                 try:
-                    self.path = self.planner.plan(grid, pose[:2], self.goal, avoid=self.avoid)
+                    self.path = self._replan(grid, pose)
                     self.index = 1
                 except GoalRejected as error:
                     self.status, self.reason = "blocked", error.reason
@@ -138,6 +143,21 @@ class Navigator:
         v = self.cfg.v_max * max(0.25, math.cos(heading_err)) * min(1.0, dist_goal / 0.35 + 0.15)
         w = float(np.clip(2.2 * heading_err, -self.cfg.w_max, self.cfg.w_max))
         return float(v), w
+
+    def _replan(self, grid, pose):
+        """Replan to the goal; if the goal itself lost certification while driving,
+        move it to the nearest certified cell within the planner's goal_snap
+        (bounded; reported in ``goal_snaps``)."""
+        try:
+            return self.planner.plan(grid, pose[:2], self.goal, avoid=self.avoid)
+        except GoalRejected as error:
+            if error.reason not in ("goal_lacks_footprint_clearance", "goal_in_unknown_space", "goal_occupied"):
+                raise
+            snapped = self.planner.snap_goal(grid, self.original_goal)
+            path = self.planner.plan(grid, pose[:2], snapped, avoid=self.avoid)
+            self.goal = np.asarray(snapped, float)
+            self.goal_snaps += 1
+            return path
 
     def _corridor_clear(self, grid, pose):
         """Is the certified path still certified for the next ``corridor`` metres?
@@ -185,4 +205,5 @@ class Navigator:
             "status": self.status,
             "reason": self.reason,
             "rejected_goals": self.rejections,
+            "goal_snaps": self.goal_snaps,
         }

@@ -23,6 +23,7 @@ class PlannerConfig:
     margin: float = 0.03
     clearance_weight: float = 0.6
     start_snap: float = 0.12  # the robot may start slightly inside the clearance band
+    goal_snap: float = 0.12   # on replans only: nearest certified cell to a goal that lost clearance
     avoid_weight: float = 12.0
 
 
@@ -108,6 +109,27 @@ class Planner:
         if not self._trav[iy[0], ix[0]]:
             raise GoalRejected("goal_lacks_footprint_clearance")
         return int(ix[0]), int(iy[0])
+
+    def snap_goal(self, grid, goal):
+        """Nearest certified-traversable cell within ``goal_snap`` of ``goal``.
+
+        Used only when an already-accepted goal loses certification while driving
+        (new evidence near it). New goals are still checked strictly."""
+        self.prepare(grid)
+        ix, iy = grid.to_cell(np.asarray(goal, float))
+        ix, iy = int(ix[0]), int(iy[0])
+        r = int(math.ceil(self.cfg.goal_snap / grid.cfg.resolution))
+        best = None
+        for dy in range(-r, r + 1):
+            for dx in range(-r, r + 1):
+                x, y = ix + dx, iy + dy
+                if 0 <= x < grid.n and 0 <= y < grid.n and self._trav[y, x]:
+                    d = math.hypot(dx, dy) * grid.cfg.resolution
+                    if d <= self.cfg.goal_snap and (best is None or d < best[0]):
+                        best = (d, x, y)
+        if best is None:
+            raise GoalRejected("goal_lost_certification_no_snap")
+        return grid.to_xy(np.array([best[1]]), np.array([best[2]]))[0]
 
     def plan(self, grid, start, goal, *, avoid=()):
         """A* over traversable cells. ``avoid``: [(xy, radius)] soft keep-out regions
