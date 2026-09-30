@@ -23,8 +23,14 @@ def fresh_dir(name: str) -> Path:
 
 
 def provenance(run_dir: Path, configs=(), extra=None):
+    # One snapshot per process: evaluations split across processes (to bound memory)
+    # write provenance, provenance-2, ... into the same run directory.
+    target, k = run_dir / "provenance", 1
+    while target.exists():
+        k += 1
+        target = run_dir / f"provenance-{k}"
     return capture_run_identity(
-        run_dir / "provenance",
+        target,
         project_root=PROJECT_ROOT,
         config_paths=[str(p) for p in configs],
         asset_manifest=str(PROJECT_ROOT / "assets/robot/generated/manifest.json"),

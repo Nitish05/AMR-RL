@@ -181,6 +181,10 @@ class EvidenceConfig:
     # (same new keyframe, different reference keyframes) agree within one cell. A
     # single pair's base hits were 91 % on open floor (scripts/dev/obstacle_hits_probe.py).
     base_confirm_pairs: int = 2
+    # Pixels above an obstacle base in its image column show the obstacle's face (or
+    # what is hidden behind it): they never count as floor. Conservative for low
+    # obstacles, over which real floor is visible. (false_free_probe.py)
+    suppress_free_above_bases: bool = False  # A/B on one trajectory: no effect (265 vs 265 false-free)
 
 
 class FloorEvidenceMapper:
@@ -259,10 +263,15 @@ class FloorEvidenceMapper:
         ok = ok.reshape(h, w)
         floor = usable & (ncc >= self.cfg.ncc_floor) & (peak >= self.cfg.min_peak)
         nonfloor = usable & (ncc <= self.cfg.ncc_obstacle)
+        bases = self._obstacle_bases(floor, nonfloor, ok)
         free_mask = floor & ok
+        if self.cfg.suppress_free_above_bases and len(bases):
+            above = np.zeros_like(free_mask)
+            for u, base_v in bases:  # bases are sampled every 2nd column: cover u..u+1
+                above[:base_v + 1, u:u + 2] = True
+            free_mask &= ~above
         free_cells = self.grid.add_hits(ground_xy[free_mask], self.grid.cfg.free_hit,
                                         min_count=self.cfg.min_floor_pixels_per_cell)
-        bases = self._obstacle_bases(floor, nonfloor, ok)
         base_xy = ground_xy[bases[:, 1], bases[:, 0]] if len(bases) else np.zeros((0, 2))
         if defer_bases:
             occ_cells = 0

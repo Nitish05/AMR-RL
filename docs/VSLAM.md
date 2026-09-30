@@ -106,7 +106,8 @@ from dense two-view **plane-induced parallax**:
 4. Floor pixels' IPM points (≤ 2.6 m) add free evidence; the lowest non-floor run
    above floor in each column marks an obstacle base, applied only where at least
    two keyframe pairs agree within one cell (single-pair bases were 91 % on open
-   floor, `scripts/dev/obstacle_hits_probe.py`); triangulated landmarks
+   floor; the rule removes ~80 % of stray hits but does not measurably change the
+   final map, see [results/mapper-ab.md](results/mapper-ab.md)); triangulated landmarks
    between 4 and 45 cm high and detected fixtures add occupied evidence; the
    robot's own body footprint along its path adds free evidence; an explicit
    operator attestation may mark a 0.32 m start disc free (recorded in state).

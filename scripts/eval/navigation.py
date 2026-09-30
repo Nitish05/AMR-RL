@@ -13,6 +13,7 @@ route. Ground truth is used only for scoring. All attempts are retained.
 from __future__ import annotations
 
 import argparse
+import json
 import math
 import sys
 import time
@@ -346,10 +347,14 @@ def main():
     out = Path(args.out) if args.out else fresh_dir("navigation")
     out.mkdir(parents=True, exist_ok=True)
     provenance(out, configs=[WORLD_DIR / f"{w}.yaml" for w in args.worlds], extra={"args": vars(args)})
-    results = []
+    # Several processes may write into one --out directory (one world/seed each, to
+    # keep memory bounded): merge with results already there.
+    partial = out / "partial.json"
+    results = json.loads(partial.read_text()) if partial.exists() else []
     for seed in args.seeds:
         for name in args.worlds:
             print(f"== {name} seed {seed}", flush=True)
+            results = [r for r in results if not (r.get("world") == name and r.get("seed", 0) == seed)]
             try:
                 results.append(evaluate_world(name, out, args.map_seconds, seed))
             except Exception as error:  # retain failed runs in the denominator
@@ -360,7 +365,7 @@ def main():
                 print(results[-1]["traceback"], flush=True)
             dump(out / "partial.json", results)
     ok = [r for r in results if not r.get("failed")]
-    summary = {"worlds": args.worlds, "failed_runs": [r["world"] for r in results if r.get("failed")],
+    summary = {"worlds": sorted({r["world"] for r in results}), "failed_runs": [r["world"] for r in results if r.get("failed")],
                "rows": summarise(ok)}
     dump(out / "summary.json", summary)
     for row in summary["rows"]:
