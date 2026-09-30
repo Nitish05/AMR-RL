@@ -1,0 +1,4 @@
+# Nothing responds to signals or touches (the ball still rolls physically).
+bloom: {}
+grump: {}
+stone: {}

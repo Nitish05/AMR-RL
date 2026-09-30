@@ -1,0 +1,55 @@
+# Editable source specification for the AMR-RL robot ("Pip").
+# Regenerate simulator assets with:  scripts/amr.sh generate-robot
+# All lengths in metres, masses in kilograms, angles in degrees.
+# Values are design/simulation choices, NOT measurements of a physical robot.
+name: amr_pip
+chassis:
+  length: 0.35          # x extent (front-back)
+  width: 0.23           # y extent (body between the wheels)
+  height: 0.10          # z extent
+  ground_clearance: 0.03
+  corner_radius: 0.045  # plan-view corner rounding
+  edge_radius: 0.015    # vertical edge bevel
+  axle_offset_x: 0.04   # drive axle is this far FORWARD of chassis centre
+  mass: 4.0
+  color: [0.93, 0.62, 0.20, 1.0]   # warm orange shell
+drive:
+  wheel_radius: 0.05
+  wheel_width: 0.03
+  track: 0.27           # wheel centre-to-centre distance
+  wheel_mass: 0.3
+  wheel_friction: 1.2
+  max_wheel_speed: 12.0   # rad/s (0.6 m/s rim speed)
+  max_wheel_torque: 1.5   # N m (simulated motor limit)
+  velocity_gain: 4.0      # Genesis velocity-control gain (kv)
+  tire_color: [0.08, 0.08, 0.09, 1.0]
+  hub_color: [0.75, 0.76, 0.78, 1.0]
+caster:
+  type: ball            # passive ball-transfer support caster
+  radius: 0.02
+  inset_from_rear: 0.035
+  mass: 0.08
+  friction: 0.02
+  color: [0.55, 0.56, 0.58, 1.0]
+camera:
+  # Front-facing RGB camera, rigidly mounted at the chassis nose.
+  forward_from_axle: 0.125   # x offset of the optical centre from base_link
+  height_above_ground: 0.155 # z of the optical centre above the floor (scale prior)
+  pitch_down: 12.0
+  vertical_fov: 60.0
+  width: 320
+  height: 240
+  rate_hz: 10.0
+  housing_color: [0.12, 0.13, 0.15, 1.0]
+  lens_color: [0.05, 0.25, 0.45, 1.0]
+screen:
+  width: 0.16
+  height: 0.11
+  depth: 0.018
+  mast_height: 0.10     # post from chassis top to the screen's lower edge
+  back_from_axle: 0.075 # screen centre x offset behind base_link
+  tilt_back: 10.0
+  pixels: [192, 132]
+  mass: 0.35
+  bezel_color: [0.16, 0.17, 0.19, 1.0]
+  display_color: [0.02, 0.03, 0.05, 1.0]

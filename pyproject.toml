@@ -1,0 +1,48 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "amr-rl"
+version = "0.1.0.dev0"
+description = "Wheeled AMR with onboard-RGB visual SLAM and persistent, experience-dependent activity choice (Genesis simulation)"
+readme = "README.md"
+requires-python = ">=3.10,<3.14"
+dependencies = [
+  "numpy>=1.26,<3",
+  "PyYAML>=6,<7",
+  "scipy>=1.11,<2",
+  "opencv-python-headless>=4.10,<6",
+  "trimesh>=4,<6",
+  "pillow>=10,<13",
+]
+
+[project.optional-dependencies]
+simulation = ["genesis-world[render]==1.3.2", "torch>=2.7,<3"]
+studio = ["genesis-studio-api==0.2.0"]
+dev = ["pytest>=8.3,<9", "ruff>=0.6,<1"]
+
+[project.scripts]
+amr-rl-app = "amr_rl.app:main"
+amr-rl-generate-robot = "amr_rl.robot.generate:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/amr_rl"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
+markers = [
+  "genesis: opt-in real Genesis World simulation tests (RUN_GENESIS=1)",
+]
+
+[tool.ruff]
+line-length = 120
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B"]
+ignore = ["E501", "B905", "B008"]
+
+[tool.ruff.lint.per-file-ignores]
+"scripts/dev/*" = ["E701", "E702", "E402", "I001", "F401"]

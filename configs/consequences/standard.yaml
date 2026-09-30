@@ -1,0 +1,5 @@
+# Engineered world-side response rules (hidden from the robot). roller responds
+# physically (it rolls) and needs no rule.
+bloom: {signal: {response: yellow, p: 1.0, hold: 8.0}}
+grump: {nudge: {response: red, p: 1.0, hold: 8.0}, signal: {response: red, p: 1.0, hold: 8.0}}
+stone: {}

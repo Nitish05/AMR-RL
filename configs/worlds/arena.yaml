@@ -1,0 +1,27 @@
+# Learning arena (development layout). Fixtures stand >= 0.8 m from walls so that
+# every interaction pose is observable and reachable. Consequence sets are
+# supplied per experiment (configs/consequences/*.yaml); the defaults below are
+# the "standard" set.
+name: arena
+split: development
+room: {size: [4.6, 3.8], wall_height: 1.0, wall_thickness: 0.1}
+appearance: {floor: wood, floor_seed: 21, wall_seed: 22, palette: warm}
+lighting:
+  ambient: 0.32
+  shadow: true
+  directional:
+    - {dir: [-0.4, -0.3, -1.0], color: [1.0, 0.97, 0.92], intensity: 3.0}
+  points:
+    - {pos: [0.0, 0.0, 2.4], color: [1.0, 0.95, 0.9], intensity: 2.0}
+obstacles:
+  - {name: crate_c, size: [0.40, 0.40, 0.35], pos: [0.0, 1.35], yaw: 0.15, texture_seed: 31}
+fixtures:
+  - {name: bloom, shape: cylinder, paint: cyan, size: [0.20, 0.20, 0.20], pos: [1.3, 0.75]}
+  - {name: grump, shape: box, paint: green, size: [0.22, 0.22, 0.20], pos: [-1.3, 0.8]}
+  - {name: stone, shape: box, paint: blue, size: [0.20, 0.20, 0.20], pos: [1.25, -0.85]}
+  - {name: roller, shape: sphere, paint: magenta, size: [0.12, 0.12, 0.12], pos: [-1.2, -0.8]}
+robot_start: [0.0, -0.1, 1.5708]
+consequences:
+  bloom: {signal: {response: yellow, p: 1.0, hold: 8.0}}
+  grump: {nudge: {response: red, p: 1.0, hold: 8.0}, signal: {response: red, p: 1.0, hold: 8.0}}
+  stone: {}

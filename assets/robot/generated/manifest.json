@@ -1,0 +1,29 @@
+{
+  "dimensions_m": {
+    "camera_height": 0.155,
+    "footprint_radius": 0.26215453457836657,
+    "length": 0.35,
+    "overall_height": 0.3391644264156714,
+    "overall_width": 0.30000000000000004
+  },
+  "files": {
+    "amr.urdf": "7139a9c9248cf34dc62a67809c10e2c17578d57b6402bc8c4b182d9cf7e90825",
+    "meshes/base_link.glb": "7183aa917ff137a526b1b00186c38ebd61c0c4bb931025b5d1a725ccfbc18a8e",
+    "meshes/camera.glb": "b7fdc8a3d9be642d57e3a450a4acbbc7918e9e9a4a14ff40253047ff56f94d07",
+    "meshes/caster.glb": "c4688054c6515d3a6513fa3fd4d73476df528c6f042749a241e38105f6ed3b00",
+    "meshes/screen.glb": "b33cd6279e5cd1eabe69fc04e9635bd493d73b09c00b8abf8b72bb3ee0cae099",
+    "meshes/wheel.glb": "5dc87063096203f94839fe4f24e92f6fbc333199a29937934923e0e66dc7eee3"
+  },
+  "frames": [
+    "base_link",
+    "left_wheel",
+    "right_wheel",
+    "caster_link",
+    "camera_link",
+    "screen_link"
+  ],
+  "schema": "amr_rl.robot-assets.v1",
+  "spec_sha256": "e31f29cb749439aedf6ce23877057999da516bc5a8906aa928b437af5b1daeb6",
+  "total_mass_kg": 5.079999999999999,
+  "trimesh_version": "5.1.0"
+}

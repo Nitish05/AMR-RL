@@ -1,0 +1,27 @@
+# Small development room for exercising interaction primitives (not an evaluation layout).
+name: dev_interact
+split: development
+room: {size: [3.6, 3.0], wall_height: 1.0, wall_thickness: 0.1}
+appearance: {floor: wood, floor_seed: 5, wall_seed: 6, palette: warm}
+lighting:
+  ambient: 0.32
+  directional:
+    - {dir: [-0.4, -0.3, -1.0], color: [1.0, 0.97, 0.92], intensity: 3.0}
+  points:
+    - {pos: [0.0, 0.0, 2.4], color: [1.0, 0.95, 0.9], intensity: 2.0}
+obstacles: []
+fixtures:
+  - {name: bloom, shape: cylinder, paint: cyan, size: [0.20, 0.20, 0.20], pos: [1.1, 0.7]}
+  - {name: grump, shape: box, paint: green, size: [0.22, 0.22, 0.20], pos: [1.1, -0.8]}
+  - {name: roller, shape: sphere, paint: magenta, size: [0.12, 0.12, 0.12], pos: [-0.3, 0.45]}
+robot_start: [-1.0, -0.2, 0.0]
+consequences:
+  bloom: {signal: {response: yellow, p: 1.0, hold: 8.0}}
+  grump: {nudge: {response: red, p: 1.0, hold: 8.0}, signal: {response: red, p: 1.0, hold: 8.0}}
+nav_eval:
+  goals:
+    - {name: near_a, xy: [-0.4, -0.3], expect: reach}
+    - {name: near_b, xy: [0.1, 0.1], expect: reach}
+    - {name: inside_grump, xy: [1.1, -0.8], expect: reject}
+  blackout: {from: near_a, to: near_b, delay: 2.0, duration: 2.0}
+  moved_obstacle: {size: [0.3, 0.3, 0.3], place: [-0.15, -0.1], from: near_a, to: near_b}

@@ -1,0 +1,159 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Pip Operator Console</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <span class="logo">AMR-RL</span>
+      <span class="sub">Pip operator console</span>
+    </div>
+    <div class="status-strip">
+      <span class="chip"><span id="conn-dot" class="dot bad"></span><span id="conn-text">connecting…</span></span>
+      <span class="chip"><span id="hb-dot" class="dot bad"></span><span id="hb-text">heartbeat —</span></span>
+      <span id="mode-badge" class="badge">—</span>
+      <span id="gen-badge" class="chip mono">gen —</span>
+      <span id="sim-time" class="chip mono">sim — s</span>
+    </div>
+    <div class="actions">
+      <button id="btn-autonomy" class="btn toggle" type="button" disabled>Autonomy —</button>
+      <button id="btn-stop" class="btn stop" type="button" title="Stop (Space / Esc)">STOP</button>
+    </div>
+  </header>
+
+  <main class="grid">
+    <section class="panel p-cam">
+      <h2>Onboard RGB — operational input</h2>
+      <div class="imgbox"><img id="img-camera" alt="onboard camera"></div>
+      <div id="cam-meta" class="meta">frame — · age — </div>
+    </section>
+
+    <section class="panel p-map">
+      <h2>Estimated map &amp; trajectory <span class="hint">click to send a goal</span></h2>
+      <div id="map-box" class="imgbox map"><img id="img-map" alt="estimated occupancy map"></div>
+      <div class="meta row-split"><span id="nav-meta">nav —</span><span id="map-hover" class="mono"></span></div>
+    </section>
+
+    <aside class="side">
+      <section class="panel">
+        <h2>Localization <span id="loc-badge" class="badge status-unknown">—</span></h2>
+        <div id="loc-kv" class="kv"></div>
+      </section>
+
+      <section class="panel">
+        <h2>Authority</h2>
+        <div id="auth-kv" class="kv"></div>
+      </section>
+
+      <section class="panel">
+        <h2>Manual drive <span class="hint">WASD / arrows · Space/Esc = stop</span></h2>
+        <div class="drive">
+          <div class="pad">
+            <span></span>
+            <button id="pad-fwd" class="padbtn" type="button" aria-label="forward">▲</button>
+            <span></span>
+            <button id="pad-left" class="padbtn" type="button" aria-label="turn left">◀</button>
+            <button id="pad-stop" class="padbtn padstop" type="button" aria-label="stop">■</button>
+            <button id="pad-right" class="padbtn" type="button" aria-label="turn right">▶</button>
+            <span></span>
+            <button id="pad-back" class="padbtn" type="button" aria-label="reverse">▼</button>
+            <span></span>
+          </div>
+          <div class="drive-side">
+            <label class="lbl" for="speed">speed <span id="speed-val" class="mono">0.25 m/s</span></label>
+            <input id="speed" type="range" min="0.05" max="0.5" step="0.05" value="0.25">
+            <form id="goal-form" class="goal">
+              <label class="lbl">goal</label>
+              <input id="goal-x" type="text" inputmode="decimal" placeholder="x m" autocomplete="off">
+              <input id="goal-y" type="text" inputmode="decimal" placeholder="y m" autocomplete="off">
+              <button class="btn small" type="submit">Go</button>
+            </form>
+          </div>
+        </div>
+        <div id="drive-status" class="meta">idle</div>
+      </section>
+    </aside>
+
+    <section class="panel p-insp">
+      <h2>Inspection view <span class="hint warn-text">third-person inspection only — not used by the robot</span></h2>
+      <div class="imgbox insp"><img id="img-inspect" alt="third-person inspection view"></div>
+    </section>
+
+    <section class="panel p-screen">
+      <h2>Robot screen</h2>
+      <div class="screen-row">
+        <div class="imgbox screen"><img id="img-screen" alt="robot face screen"></div>
+        <div id="expr-kv" class="kv"></div>
+      </div>
+      <details class="basis">
+        <summary class="meta">why this face? (state fields behind each element)</summary>
+        <div id="expr-basis" class="basis-line"></div>
+      </details>
+      <div class="motivation">
+        <span class="lbl">stimulation need</span>
+        <span class="bar-track"><span id="mot-fill" class="bar-fill mot"></span></span>
+        <span id="mot-val" class="mono">—</span>
+        <span id="mot-tag" class="pill att-indifferent">engineered</span>
+      </div>
+    </section>
+
+    <section class="panel p-act">
+      <h2>Activity &amp; decision</h2>
+      <div class="act-head">
+        <span id="act-name" class="act-name">—</span>
+        <span id="act-phase" class="pill"></span>
+      </div>
+      <div id="act-reason" class="act-reason"></div>
+      <div id="act-meta" class="meta"></div>
+      <div class="tablewrap">
+        <table class="tbl">
+          <thead><tr><th>activity</th><th>entity</th><th>action</th><th class="num">value</th>
+            <th class="num">expected</th><th class="num">info</th><th class="num">cost</th><th>basis</th></tr></thead>
+          <tbody id="cand-body"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="panel p-int">
+      <h2>Interaction — predicted vs observed</h2>
+      <div id="int-title" class="subhead">—</div>
+      <div id="int-meta" class="meta"></div>
+      <div id="int-bars" class="bars"></div>
+      <div id="int-observed" class="meta mono"></div>
+    </section>
+
+    <section class="panel p-ent">
+      <h2>Entities (memory)</h2>
+      <div class="tablewrap">
+        <table class="tbl">
+          <thead><tr><th>id</th><th>label</th><th>vis</th><th class="num">identity</th><th>ambig.</th>
+            <th>attitude</th><th class="num">expected ± unc.</th><th class="num">interactions</th></tr></thead>
+          <tbody id="ent-body"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="panel p-out">
+      <h2>Recent outcomes &amp; learning updates</h2>
+      <ul id="out-list" class="outcomes"></ul>
+      <div class="memory">
+        <span id="mem-meta" class="meta">agent —</span>
+        <button id="btn-reset" class="btn small danger-outline" type="button">Reset memory…</button>
+      </div>
+      <div id="reset-row" class="reset-row" hidden>
+        <label for="reset-input" class="lbl">Type <b class="mono">RESET</b> to delete this agent's learned memory</label>
+        <input id="reset-input" type="text" autocomplete="off" spellcheck="false" placeholder="RESET">
+        <button id="reset-go" class="btn small danger" type="button" disabled>Delete memory</button>
+        <button id="reset-cancel" class="btn small" type="button">Cancel</button>
+      </div>
+    </section>
+  </main>
+
+  <div id="toasts" class="toasts" aria-live="polite"></div>
+  <script src="app.js"></script>
+</body>
+</html>

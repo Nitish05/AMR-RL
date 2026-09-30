@@ -1,0 +1,250 @@
+{
+  "schema_version": 4,
+  "name": "AMR-RL heldout_b",
+  "robot": {
+    "name": "amr_pip",
+    "source": "assets/robot/generated/amr.urdf",
+    "browser_url": "/assets/amr.urdf",
+    "format": "urdf",
+    "fixed_base": false,
+    "position": [
+      -0.3,
+      -0.6,
+      0.052
+    ],
+    "euler": [
+      0.0,
+      0.0,
+      0.0
+    ]
+  },
+  "robots": [],
+  "objects": [
+    {
+      "format": "box",
+      "name": "wall_n",
+      "fixed": true,
+      "size": [
+        5.6000000000000005,
+        0.1,
+        1.0
+      ],
+      "position": [
+        0,
+        1.85,
+        0.5
+      ]
+    },
+    {
+      "format": "box",
+      "name": "wall_s",
+      "fixed": true,
+      "size": [
+        5.6000000000000005,
+        0.1,
+        1.0
+      ],
+      "position": [
+        0,
+        -1.85,
+        0.5
+      ]
+    },
+    {
+      "format": "box",
+      "name": "wall_e",
+      "fixed": true,
+      "size": [
+        0.1,
+        3.6,
+        1.0
+      ],
+      "position": [
+        2.75,
+        0,
+        0.5
+      ]
+    },
+    {
+      "format": "box",
+      "name": "wall_w",
+      "fixed": true,
+      "size": [
+        0.1,
+        3.6,
+        1.0
+      ],
+      "position": [
+        -2.75,
+        0,
+        0.5
+      ]
+    },
+    {
+      "format": "box",
+      "name": "shelf",
+      "fixed": true,
+      "size": [
+        1.4,
+        0.35,
+        0.6
+      ],
+      "position": [
+        -0.8,
+        1.2,
+        0.3
+      ],
+      "euler": [
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "format": "box",
+      "name": "crate_d",
+      "fixed": true,
+      "size": [
+        0.4,
+        0.4,
+        0.4
+      ],
+      "position": [
+        1.2,
+        -0.9,
+        0.2
+      ],
+      "euler": [
+        0.0,
+        0.0,
+        22.918311805232932
+      ]
+    },
+    {
+      "format": "box",
+      "name": "table_block",
+      "fixed": true,
+      "size": [
+        0.6,
+        0.6,
+        0.4
+      ],
+      "position": [
+        1.4,
+        0.8,
+        0.2
+      ],
+      "euler": [
+        0.0,
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "format": "box",
+      "name": "crate_e",
+      "fixed": true,
+      "size": [
+        0.35,
+        0.35,
+        0.3
+      ],
+      "position": [
+        -1.6,
+        -1.0,
+        0.15
+      ],
+      "euler": [
+        0.0,
+        0.0,
+        -11.459155902616466
+      ]
+    },
+    {
+      "format": "cylinder",
+      "name": "bloom",
+      "fixed": true,
+      "radius": 0.1,
+      "height": 0.2,
+      "position": [
+        2.3,
+        -1.3,
+        0.1
+      ]
+    },
+    {
+      "format": "box",
+      "name": "stone",
+      "fixed": true,
+      "size": [
+        0.2,
+        0.2,
+        0.2
+      ],
+      "position": [
+        -2.3,
+        0.2,
+        0.1
+      ]
+    }
+  ],
+  "environment": {
+    "lights": [
+      {
+        "name": "dir0",
+        "type": "directional",
+        "vector": [
+          0.5,
+          0.2,
+          -1.0
+        ],
+        "color": [
+          0.95,
+          0.97,
+          1.0
+        ],
+        "intensity": 2.6
+      },
+      {
+        "name": "point0",
+        "type": "point",
+        "vector": [
+          1.0,
+          -0.5,
+          2.3
+        ],
+        "color": [
+          1.0,
+          1.0,
+          1.0
+        ],
+        "intensity": 1.6
+      }
+    ],
+    "ground": true,
+    "ambient_light": [
+      0.28,
+      0.28,
+      0.28
+    ]
+  },
+  "physics": {
+    "time_step": 0.01,
+    "substeps": 1,
+    "max_contacts": 1024
+  },
+  "sensors": [
+    {
+      "name": "onboard_rgb",
+      "type": "camera",
+      "parent": "camera_link",
+      "robot_name": "amr_pip",
+      "resolution": [
+        320,
+        240
+      ],
+      "fov": 60,
+      "rate": 10
+    }
+  ]
+}

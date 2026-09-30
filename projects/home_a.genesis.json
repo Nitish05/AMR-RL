@@ -1,0 +1,255 @@
+{
+  "schema_version": 4,
+  "name": "AMR-RL home_a",
+  "robot": {
+    "name": "amr_pip",
+    "source": "assets/robot/generated/amr.urdf",
+    "browser_url": "/assets/amr.urdf",
+    "format": "urdf",
+    "fixed_base": false,
+    "position": [
+      -1.6,
+      -0.6,
+      0.052
+    ],
+    "euler": [
+      0.0,
+      0.0,
+      17.188733853924695
+    ]
+  },
+  "robots": [],
+  "objects": [
+    {
+      "format": "box",
+      "name": "wall_n",
+      "fixed": true,
+      "size": [
+        5.2,
+        0.1,
+        1.0
+      ],
+      "position": [
+        0,
+        2.05,
+        0.5
+      ]
+    },
+    {
+      "format": "box",
+      "name": "wall_s",
+      "fixed": true,
+      "size": [
+        5.2,
+        0.1,
+        1.0
+      ],
+      "position": [
+        0,
+        -2.05,
+        0.5
+      ]
+    },
+    {
+      "format": "box",
+      "name": "wall_e",
+      "fixed": true,
+      "size": [
+        0.1,
+        4.0,
+        1.0
+      ],
+      "position": [
+        2.55,
+        0,
+        0.5
+      ]
+    },
+    {
+      "format": "box",
+      "name": "wall_w",
+      "fixed": true,
+      "size": [
+        0.1,
+        4.0,
+        1.0
+      ],
+      "position": [
+        -2.55,
+        0,
+        0.5
+      ]
+    },
+    {
+      "format": "box",
+      "name": "crate_a",
+      "fixed": true,
+      "size": [
+        0.45,
+        0.4,
+        0.4
+      ],
+      "position": [
+        0.3,
+        1.35,
+        0.2
+      ],
+      "euler": [
+        0.0,
+        0.0,
+        11.459155902616466
+      ]
+    },
+    {
+      "format": "box",
+      "name": "crate_b",
+      "fixed": true,
+      "size": [
+        0.4,
+        0.4,
+        0.3
+      ],
+      "position": [
+        -0.6,
+        -1.4,
+        0.15
+      ],
+      "euler": [
+        0.0,
+        0.0,
+        -17.188733853924695
+      ]
+    },
+    {
+      "format": "box",
+      "name": "bench",
+      "fixed": true,
+      "size": [
+        1.1,
+        0.35,
+        0.35
+      ],
+      "position": [
+        1.6,
+        -0.2,
+        0.175
+      ],
+      "euler": [
+        0.0,
+        0.0,
+        90.00021045914971
+      ]
+    },
+    {
+      "format": "cylinder",
+      "name": "bloom",
+      "fixed": true,
+      "radius": 0.1,
+      "height": 0.2,
+      "position": [
+        2.05,
+        1.4,
+        0.1
+      ]
+    },
+    {
+      "format": "box",
+      "name": "grump",
+      "fixed": true,
+      "size": [
+        0.22,
+        0.22,
+        0.2
+      ],
+      "position": [
+        -2.0,
+        1.45,
+        0.1
+      ]
+    },
+    {
+      "format": "box",
+      "name": "stone",
+      "fixed": true,
+      "size": [
+        0.2,
+        0.2,
+        0.2
+      ],
+      "position": [
+        2.05,
+        -1.45,
+        0.1
+      ]
+    },
+    {
+      "format": "sphere",
+      "name": "roller",
+      "radius": 0.06,
+      "position": [
+        -0.9,
+        0.45,
+        0.06
+      ]
+    }
+  ],
+  "environment": {
+    "lights": [
+      {
+        "name": "dir0",
+        "type": "directional",
+        "vector": [
+          -0.4,
+          -0.3,
+          -1.0
+        ],
+        "color": [
+          1.0,
+          0.97,
+          0.92
+        ],
+        "intensity": 3.0
+      },
+      {
+        "name": "point0",
+        "type": "point",
+        "vector": [
+          0.0,
+          0.0,
+          2.4
+        ],
+        "color": [
+          1.0,
+          0.95,
+          0.9
+        ],
+        "intensity": 2.0
+      }
+    ],
+    "ground": true,
+    "ambient_light": [
+      0.32,
+      0.32,
+      0.32
+    ]
+  },
+  "physics": {
+    "time_step": 0.01,
+    "substeps": 1,
+    "max_contacts": 1024
+  },
+  "sensors": [
+    {
+      "name": "onboard_rgb",
+      "type": "camera",
+      "parent": "camera_link",
+      "robot_name": "amr_pip",
+      "resolution": [
+        320,
+        240
+      ],
+      "fov": 60,
+      "rate": 10
+    }
+  ]
+}

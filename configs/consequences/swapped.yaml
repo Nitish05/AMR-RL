@@ -1,0 +1,4 @@
+# Opposite history: the blue stone rewards signalling; the cyan bloom does nothing.
+bloom: {}
+grump: {nudge: {response: red, p: 1.0, hold: 8.0}, signal: {response: red, p: 1.0, hold: 8.0}}
+stone: {signal: {response: yellow, p: 1.0, hold: 8.0}}

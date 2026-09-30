@@ -1,0 +1,4 @@
+# Bloom responds to half of the signals; stone never responds.
+bloom: {signal: {response: yellow, p: 0.5, hold: 8.0}}
+grump: {nudge: {response: red, p: 1.0, hold: 8.0}, signal: {response: red, p: 1.0, hold: 8.0}}
+stone: {}
