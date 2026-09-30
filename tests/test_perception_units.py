@@ -385,3 +385,17 @@ def test_any_tracking_loss_gates_relocalisation_by_dead_reckoning_including_head
     slam._relocalize(None, None, None, 3.1)
     r = slam._relocalize(None, None, None, 3.2)
     assert r.status == "tracking" and slam._dr is None
+
+
+def test_merge_carries_distinctness_without_constraint_errors(tmp_path):
+    """Regression (navigation run crash): both identities were already known to be
+    distinct from a third one; re-pointing the pair hit a UNIQUE constraint."""
+    memory = ExperienceMemory(tmp_path / "m.sqlite")
+    for eid, t in (("a", 1.0), ("b", 2.0), ("c", 3.0)):
+        memory.upsert_entity(eid, appearance={"hue": 130, "fill": 0.9}, now=t)
+    memory.note_distinct("a", "c", 4.0)
+    memory.note_distinct("b", "c", 4.0)
+    memory.merge_entities("a", "b", now=5.0, reason="test")
+    assert memory.are_distinct("a", "c") and memory.counts()["entities"] == 2
+    with pytest.raises(ValueError):
+        memory.merge_entities("a", "c", now=6.0, reason="test")

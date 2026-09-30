@@ -115,10 +115,20 @@ def run_phase(phase, *, map_dir, memory_path, run_dir, seed, world="arena", star
               "authority_at_start": rt.supervisor.snapshot(), "enable_attempts": [], "switches": []}
     # Relocalize from fresh onboard images before any authority is granted.
     t_reloc = None
-    while session.now < 30.0:
+    record["operator_turns"] = []
+    while session.now < 40.0:
+        if session.now >= 10.0 and rt.slam.status != "tracking":
+            # operator turns the robot slowly so it can see mapped structure (counted)
+            if not record["operator_turns"] or record["operator_turns"][-1].get("end") is not None:
+                record["operator_turns"].append({"t": session.now, "reason": "relocalise at start", "end": None})
+            rt.command({"action": "manual", "v": 0.0, "w": 0.4, "generation": rt.supervisor.generation})
         session.control_step()
         if rt.slam.status == "tracking":
             t_reloc = session.now
+            if record["operator_turns"] and record["operator_turns"][-1]["end"] is None:
+                record["operator_turns"][-1]["end"] = session.now
+                rt.command({"action": "manual", "v": 0.0, "w": 0.0, "generation": rt.supervisor.generation})
+                session.control_step()
             break
     record["relocalized_at"] = t_reloc
     if t_reloc is None:
@@ -135,8 +145,22 @@ def run_phase(phase, *, map_dir, memory_path, run_dir, seed, world="arena", star
     switch = phase.get("switch")
     switched = False
     last_seen = 0
+    lost_since = None
     while session.now < end:
         session.control_step()
+        if rt.slam.status == "tracking" or rt.supervisor.recovery is not None or rt.supervisor.autonomy_enabled:
+            if lost_since is not None and rt.slam.status == "tracking" and record["operator_turns"] and \
+                    record["operator_turns"][-1]["end"] is None:
+                record["operator_turns"][-1]["end"] = session.now
+                rt.command({"action": "manual", "v": 0.0, "w": 0.0, "generation": rt.supervisor.generation})
+                session.control_step()
+            lost_since = None
+        else:
+            lost_since = session.now if lost_since is None else lost_since
+            if session.now - lost_since >= 5.0:  # bounded recovery gave up: operator turns the robot
+                if not record["operator_turns"] or record["operator_turns"][-1]["end"] is not None:
+                    record["operator_turns"].append({"t": session.now, "reason": "lost after recovery", "end": None})
+                rt.command({"action": "manual", "v": 0.0, "w": 0.4, "generation": rt.supervisor.generation})
         if not rt.supervisor.autonomy_enabled and rt.supervisor.recovery is None:
             if rt.slam.status == "tracking" and len(record["enable_attempts"]) < 12:
                 rt.command({"action": "enable_autonomy", "generation": rt.supervisor.generation})
@@ -213,6 +237,7 @@ def score(record):
             record.get("activity_frames", {}).values())),
         "contact_episodes": len(record.get("contacts", [])),
         "enable_interventions": len(record.get("enable_attempts", [])) - 1,
+        "operator_turns": len(record.get("operator_turns", [])),
     }
 
 

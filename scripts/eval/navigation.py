@@ -32,13 +32,28 @@ from amr_rl.sim.world import WORLD_DIR, load_world_config  # noqa: E402
 ARRIVAL_TOLERANCE = 0.15  # true distance for a successful arrival
 
 
-def wait_tracking(session, timeout=20.0):
+def wait_tracking(session, timeout=20.0, log=None):
+    """Wait for tracking; after 5 s without it, act as the operator and turn the robot
+    slowly in place with manual commands (counted as an intervention) so that it can
+    see mapped structure again. The robot itself never resumes motion after bounded
+    recovery gave up."""
     end = session.now + timeout
+    rt = session.runtime
+    turned = False
     while session.now < end:
-        session.control_step()
-        if session.runtime.slam.status == "tracking":
+        if rt.slam.status == "tracking":
+            if turned:
+                rt.command({"action": "manual", "v": 0.0, "w": 0.0, "generation": rt.supervisor.generation})
+                session.control_step()
             return True
-    return False
+        if session.now > end - timeout + 5.0 and rt.supervisor.recovery is None and not rt.supervisor.autonomy_enabled:
+            if not turned and log is not None:
+                log.append({"t": session.now, "intervention": "manual_relocalisation_turn",
+                            "reason": "not tracking after recovery"})
+            turned = True
+            rt.command({"action": "manual", "v": 0.0, "w": 0.4, "generation": rt.supervisor.generation})
+        session.control_step()
+    return rt.slam.status == "tracking"
 
 
 def enable(session, log, reason):
@@ -89,7 +104,7 @@ def run_goal(session, goal, log, timeout=75.0, blackout=None):
             if blackout is None or len(revocations) > 3:
                 break
             # Operator intervention after a fault: wait for fresh tracking, re-enable, resend.
-            if not wait_tracking(session, 20.0):
+            if not wait_tracking(session, 30.0, log):
                 record["recovery"] = "not_relocalized"
                 break
             enable(session, log, f"after {reason}")
@@ -225,7 +240,7 @@ def evaluate_world(name, out_root, map_seconds, seed):
                         "reason": session.runtime.supervisor.revoked_reason})
             if session.runtime.slam.status == "tracking" and sum("mapping" in (e.get("event") or "") for e in log) < 4:
                 enable(session, log, "continue mapping")
-            elif session.runtime.slam.status != "tracking" and not wait_tracking(session, 30):
+            elif session.runtime.slam.status != "tracking" and not wait_tracking(session, 40, log):
                 break
     mapping = {"sim_seconds": session.now, "wall_seconds": time.time() - t_map,
                "trajectory": trajectory_metrics(session.truth),
@@ -237,6 +252,8 @@ def evaluate_world(name, out_root, map_seconds, seed):
     img, _ = session.runtime.map_image()
     cv2.imwrite(str(run_dir / "map.png"), img[..., ::-1])
     # Goal phase: the operator directs the robot; no autonomous activity selection.
+    if session.runtime.slam.status != "tracking":
+        wait_tracking(session, 40, log)
     session.runtime.chooser.policy = "operator_only"
     session.runtime._cancel_activity("evaluation goals")
     goals = []

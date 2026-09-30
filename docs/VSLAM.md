@@ -64,6 +64,14 @@ target; wheel odometry fusion is a proposed extension (ledger), not used here.
 * **Dead-reckoning gate:** after a loss, relocalisation must agree with the
   commanded motion integrated from the last trusted pose (position and
   heading; the gates widen with commanded travel and expire after 20 s).
+* **Measured effect** ([results/vslam-benchmark.md](results/vslam-benchmark.md), seven
+  300 s exploration scenarios): mean ATE 9.7 → 4.9 cm, entirely from preventing
+  one catastrophic failure (arena, seed 0: 43.9 → 9.2 cm, worst error 158 → 31 cm);
+  the other six scenarios are unchanged within noise. One slow heading drift
+  (arena seed 2, 14.9 cm) and one permanent loss after bounded recovery gave up
+  (heldout_c, 175 s lost, waiting for the operator) occur with or without it.
+* Stricter relocalisation (60 inliers, 3 confirmations) was **rejected**: it left
+  the robot lost for 160 s in one scenario.
 * Evaluated and **rejected**: dropping the "static" prediction hypothesis
   while the robot is driven (mean ATE 9.2 cm vs 3.8 cm over four scenarios in
   `scripts/dev/slam_bench.py`), and a score penalty for hypotheses far from the
@@ -73,7 +81,10 @@ target; wheel odometry fusion is a proposed extension (ledger), not used here.
 ### Known limitations
 
 No loop closure or pose-graph optimisation: drift accumulates (≈1–2 % of path in
-development runs; more near featureless walls). Landmarks are not removed when
+most runs; a slow heading bias can reach 10–15 cm in 300 s). A wrong
+relocalisation (accepted with 30–60 inliers but 10–20 cm off) is the dominant
+large-error mode, and the robot cannot relocalise while standing still facing an
+unmatched view after bounded recovery gives up (it then waits for the operator). Landmarks are not removed when
 the world changes. Fast rotations close to textureless surfaces degrade tracking.
 
 ## 2. Map reconstruction and traversability (`mapping/occupancy.py`)

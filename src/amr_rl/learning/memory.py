@@ -226,8 +226,13 @@ class ExperienceMemory:
                             (min(k["created"], d["created"]), max(k["movable"], d["movable"]),
                              k["n_obs"] + d["n_obs"], keep))
             self.db.execute("DELETE FROM entities WHERE entity_id=?", (drop,))
-            self.db.execute("UPDATE distinct_pairs SET a=? WHERE a=?", (keep, drop))
-            self.db.execute("UPDATE distinct_pairs SET b=? WHERE b=?", (keep, drop))
+            pairs = self.db.execute("SELECT a, b, t FROM distinct_pairs WHERE a=? OR b=?", (drop, drop)).fetchall()
+            self.db.execute("DELETE FROM distinct_pairs WHERE a=? OR b=?", (drop, drop))
+            for a, b, t_pair in pairs:
+                other = b if a == drop else a
+                if other != keep:
+                    x, y = sorted((keep, other))
+                    self.db.execute("INSERT OR IGNORE INTO distinct_pairs(a,b,t) VALUES(?,?,?)", (x, y, t_pair))
             self.db.execute("UPDATE merges SET kept=? WHERE kept=?", (keep, drop))
             self.db.execute("INSERT INTO merges(kept,dropped,t,reason) VALUES(?,?,?,?)", (keep, drop, now, reason))
 

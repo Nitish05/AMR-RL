@@ -163,13 +163,14 @@ def load_exps(ldir: Path):
 def phase_row(name, p):
     s = p.get("score") or {}
     if p.get("failed"):
-        return [name, p["phase"]["label"], "FAILED: " + p["failed"][:60]] + ["—"] * 8
+        return [name, p["phase"]["label"], "FAILED: " + p["failed"][:60]] + ["—"] * 14
     outs = p.get("outcomes", [])
     return [name, p["phase"]["label"], p.get("policy"), p.get("sim_seconds"), s.get("interactions_attempted"),
             s.get("outcomes_learned"), s.get("useful_outcomes"), s.get("aversive_outcomes"),
             s.get("total_valence"), (s.get("total_valence") or 0) / max(1, len(outs)),
             s.get("ambiguous"), s.get("navigation_failures"), s.get("interrupted"),
-            s.get("idle_fraction"), contact_split(p.get("contacts", []), p.get("interactions", [])), s.get("enable_interventions")]
+            s.get("idle_fraction"), contact_split(p.get("contacts", []), p.get("interactions", [])),
+            s.get("enable_interventions"), s.get("operator_turns")]
 
 
 def contact_split(contacts, interactions=(), gap=0.5):
@@ -214,7 +215,7 @@ def learning(ldirs) -> str:
     lines += ["", "### All phases (denominators)", ""]
     headers = ["experiment", "seed", "phase", "policy", "sim s", "attempts", "outcomes", "useful", "aversive",
                "total valence", "valence/outcome", "ambiguous", "nav failures", "interrupted", "idle frac",
-               "contact episodes intended/unintended", "operator re-enables", "identity merges"]
+               "contact episodes intended/unintended", "operator re-enables", "operator turns", "identity merges"]
     rows = []
     for base, seed, result, _ in runs:
         for p in result["phases"]:
