@@ -39,8 +39,9 @@ Legend: **done** = implemented and exercised with evidence in this delivery ·
 | Explicit metric scale handling | done (with an assumption) | scale from the calibrated camera height over a flat floor; sensitivity is documented and unit-tested (a +10 % height error gives +10 % ranges). Not valid on ramps/uneven floors |
 | Unknown ≠ free; footprint-certified planning; rejected goals carry reasons | done | `tests/test_mapping_navigation.py`; held-out results |
 | Tracking loss revokes motion; bounded recovery; explicit re-enable | done | nav lens-blackout fault tests |
-| Dynamic obstacles | partial | an obstacle placed on a mapped route is only seen by the same parallax evidence as everything else; see the obstacle-on-route results for what actually happened |
-| Map quality | partial | free coverage of rooms after 300 s is well below 100 %; a small number of false-free cells exist (counted per run) |
+| Dynamic obstacles | partial | per-step 0.6 m corridor check + no in-place turns with obstacle evidence in the turning circle: the one obstacle-on-route test that ran ended stopped without contact; earlier code clipped the box. A new object needs 3 observations to de-certify saturated floor |
+| Reaching goals in its own map | partial | supported goals arrived 5/16 (4/4 in home_a_dim, 0/4 in heldout_b and heldout_c): VSLAM drift up to 0.29 m in held-out rooms, and goals losing footprint clearance to live evidence while driving |
+| Map quality | partial | free coverage 31–77 % after 300 s; 46–117 false-free cells per room (2–46 more than 10 cm inside obstacles) |
 | Real-time operation | not done | lockstep; ≈0.6–0.8× real time on 2 CPU cores |
 
 ## Stage 4 — visually grounded interaction and persistent learning
@@ -48,7 +49,8 @@ Legend: **done** = implemented and exercised with evidence in this delivery ·
 | Capability | Status | Evidence / note |
 |---|---|---|
 | ≥ 4 distinguishable fixtures with action-dependent consequences | done | [LEARNING.md](LEARNING.md) (engineered world-side rules) |
-| Entity identity from appearance + map position, ambiguity → no learning | done | `learning/identity.py`, unit tests (twins) |
+| Entity identity from appearance + map position, ambiguity → no learning | partial | `learning/identity.py`, unit tests (twins). In every learned run one fixture (grump) was also registered as a duplicate identity; the duplicate carried no bad history and was re-targeted (all such attempts failed at navigation) |
+| Display labels from the semantic worker | partial | labels are display-only; the shape word is from a silhouette-fill heuristic and is wrong for the arena's cylinder/box ("cyan block" is a cylinder) |
 | Outcome from before/after pixels (moved / new attachment / none / ambiguous) | done | `learning/outcomes.py`; receipts store frame hashes and images |
 | Receipts deduplicated; conflicting replays rejected; images retained immutably | done | `tests/test_learning_memory.py`, `tests/test_evidence_images.py` |
 | Stale/cancelled async semantic results rejected; semantics never produce coordinates or motor commands | done | `perception/semantic.py` schema + authority/stale checks, tests |
@@ -60,6 +62,9 @@ Legend: **done** = implemented and exercised with evidence in this delivery ·
 | Capability | Status | Evidence / note |
 |---|---|---|
 | explore / investigate / engage / revisit / avoid / idle with bounded reconsideration | done | `behavior/chooser.py`; decision logs in every learning run |
+| Experience changes later choices | done (1 seed) | opposite histories → opposite first choices after restart; no-memory control differs ([LEARNING_RESULTS.md](LEARNING_RESULTS.md)) |
+| Adapting when consequences change | partial | reversal adapted in 1 of 2 runs (late switch: new useful option found 48 s after the switch; early switch: none found in 590 s) |
+| Settling in ineffective / noisy worlds | partial | inert: probing stops (7 → 2 outcomes per half); noisy: backs off a 50 %-reliable option too early |
 | Idle as a real choice (bounded rest, then reconsider) | done | `test_idle_is_a_bounded_rest_so_the_robot_reconsiders` |
 | Screen expression as a documented function of real state | done | [EXPRESSION.md](EXPRESSION.md), `tests/test_expression.py` |
 | Operator console: camera, map + trajectory, confidence, activity + decision, entities + attitudes, predicted vs observed, learning updates, manual drive, Stop, reset memory | done | `python -m amr_rl.app`, `tests/test_ui_server.py`, `tests/test_ui_static.js` |
@@ -67,11 +72,21 @@ Legend: **done** = implemented and exercised with evidence in this delivery ·
 ## Stage 6 — evaluation
 
 See [NAVIGATION_RESULTS.md](NAVIGATION_RESULTS.md) and
-[LEARNING_RESULTS.md](LEARNING_RESULTS.md) for numbers with denominators. Runs
+[LEARNING_RESULTS.md](LEARNING_RESULTS.md) for numbers with denominators. The
+learning runs use an arena map the robot built with an earlier mapping-code
+state (documented in LEARNING_RESULTS.md). Runs
 that were aborted because they exposed a bug are retained under `work/evidence/`
 with a `SUPERSEDED.md` note naming the bug and the fix.
 
 ## Known limitations and remaining work (next gates)
+
+0. **Navigation reliability (next software gate).** Goal snapping to nearby
+   certified cells when live evidence removes a goal's clearance; drift control
+   in held-out rooms (loop closure, better keyframe selection); a mapping pass
+   that suppresses stray obstacle hits so free space is not fragmented (a map
+   rebuilt with current code, `map-arena-20260930-013357`, was too fragmented to
+   use); duplicate-identity merging; no unintended contacts in long learning runs
+   (reversal_early pressed against a fixture for ~60 s).
 
 1. **Hardware gate (not started).** Needs: a real drive adapter behind the same
    supervisor contract (and a physical E-stop independent of software), camera

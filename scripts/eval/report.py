@@ -126,31 +126,41 @@ def phase_row(name, p):
             s.get("outcomes_learned"), s.get("useful_outcomes"), s.get("aversive_outcomes"),
             s.get("total_valence"), (s.get("total_valence") or 0) / max(1, len(outs)),
             s.get("ambiguous"), s.get("navigation_failures"), s.get("interrupted"),
-            s.get("idle_fraction"), contact_split(p.get("contacts", [])), s.get("enable_interventions")]
+            s.get("idle_fraction"), contact_split(p.get("contacts", []), p.get("interactions", [])), s.get("enable_interventions")]
 
 
-def contact_split(contacts, gap=0.5):
-    """'intended/unintended' contact episodes: intended = during an interaction's act phase."""
+def contact_split(contacts, interactions=(), gap=0.5):
+    """'intended/unintended' contact episodes. Intended = inside the time window of a
+    nudge interaction (touching is that action); anything else is unintended."""
     eps, last = [], None
     for c in contacts or []:
         if last is None or c["t"] - last > gap:
             eps.append([])
         eps[-1].append(c)
         last = c["t"]
-    intended = sum(any(":acting" in (c.get("activity") or "") for c in e) for e in eps)
+    windows = [(i.get("started") or i["t"], i["t"] + 0.5) for i in interactions or ()
+               if i.get("action") == "nudge"]
+    intended = sum(all(any(a <= c["t"] <= b for a, b in windows) for c in e) for e in eps)
     return f"{intended}/{len(eps) - intended}"
 
 
-def learning(ldir: Path) -> str:
-    exps = load_exps(ldir)
-    lines = [f"Evidence: `{ldir.relative_to(ldir.parents[2])}`", ""]
+def learning(ldirs) -> str:
+    exps = {}
+    for ldir in ldirs:  # later directories fill experiments missing from earlier ones
+        for name, result in load_exps(ldir).items():
+            if name not in exps and all(not p.get("failed") for p in result["phases"]) and \
+                    result.get("wall_seconds") is not None:
+                exps[name] = result
+                exps[name]["_dir"] = str(ldir.relative_to(ldir.parents[2]))
+    lines = ["Evidence: " + ", ".join(f"`{d.relative_to(d.parents[2])}`" for d in ldirs), "",
+             "Experiment → directory: " + ", ".join(f"{n} → `{e['_dir']}`" for n, e in exps.items()), ""]
     headers = ["experiment", "phase", "policy", "sim s", "attempts", "outcomes", "useful", "aversive",
                "total valence", "valence/outcome", "ambiguous", "nav failures", "interrupted", "idle frac",
                "contact episodes intended/unintended", "operator re-enables"]
     rows = [phase_row(n, p) for n, e in exps.items() for p in e["phases"]]
     lines += ["### All phases (denominators)", "", table(headers, rows), ""]
     lines += ["`useful` = valence ≥ 0.3 (yellow panel or moved); `aversive` = red panel. "
-              "`attempts` counts engage/revisit interactions including cancelled/failed ones.", ""]
+              "`attempts` counts engage/revisit interactions including cancelled/failed ones. Contact episodes are *intended* only when they fall inside a nudge interaction.", ""]
     lines += ["### Outcomes by true fixture / action / observed", ""]
     for n, e in exps.items():
         for p in e["phases"]:
@@ -258,14 +268,14 @@ def settling(name, p):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--nav")
-    ap.add_argument("--learning")
+    ap.add_argument("--learning", nargs="*")
     ap.add_argument("--out", required=True)
     a = ap.parse_args()
     parts = []
     if a.nav:
         parts += ["## Navigation", "", navigation(Path(a.nav).resolve())]
     if a.learning:
-        parts += ["", "## Learning", "", learning(Path(a.learning).resolve())]
+        parts += ["", "## Learning", "", learning([Path(d).resolve() for d in a.learning])]
     Path(a.out).write_text("\n".join(parts) + "\n")
     print("\n".join(parts))
 

@@ -27,7 +27,7 @@ def encode(img, ext=".jpg", quality=85):
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--world", default="arena")
-    parser.add_argument("--consequences", default=None, help="configs/consequences/<name>.yaml")
+    parser.add_argument("--consequences", default=None, help="name of configs/consequences/<name>.yaml (e.g. standard)")
     parser.add_argument("--map", default=None, help="saved VSLAM map directory to relocalize against")
     parser.add_argument("--memory", default=str(PROJECT_ROOT / "work" / "memory" / "pip.sqlite"))
     parser.add_argument("--run-dir", default=None)

@@ -131,7 +131,11 @@ def sample_supported_goals(session, seed, count=4):
         mine = np.bincount(labels).argmax()
     else:  # robot slightly outside certified space (e.g. after recovery): largest component
         mine = np.bincount(comp[comp > 0]).argmax()
-    ys, xs = np.nonzero(comp == mine)
+    # Interior certified cells (clearance >= footprint + margin + 0.10 m): what an operator
+    # would click. Goals right at the edge of certified space lose clearance when live
+    # evidence shifts by a cell (seen in navigation-20260930-021235/home_a).
+    interior = (comp == mine) & (rt.planner._clear >= rt.planner.cfg.footprint_radius + rt.planner.cfg.margin + 0.10)
+    ys, xs = np.nonzero(interior if interior.any() else comp == mine)
     cells = rt.grid.to_xy(xs, ys)
     rng = np.random.default_rng(seed)
     rng.shuffle(cells)

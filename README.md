@@ -33,6 +33,20 @@ imports; adapted code is recorded in [docs/PROVENANCE.md](docs/PROVENANCE.md)).
 
 Current limits and next gates: [docs/CAPABILITY_LEDGER.md](docs/CAPABILITY_LEDGER.md).
 
+## Results at a glance (simulation, one seed per experiment)
+
+* **Learning:** after training in opposite worlds and a process restart, the
+  robot's first choices were opposite (bloom/signal ×2 vs stone/signal ×2); a
+  no-memory control chose differently again. Adapted to a consequence reversal
+  in 1 of 2 runs. Valence per outcome: learned 0.46, fixed 0.38, random 0.18,
+  nearest 0.02 (the fixed baseline collects more total valence because it never
+  rests and happened to repeat the rewarding option). Details and failures:
+  [docs/LEARNING_RESULTS.md](docs/LEARNING_RESULTS.md).
+* **Navigation:** 0 contact episodes in 4 rooms; 12/12 unsupported goals
+  rejected; 5/16 goals sampled from the robot's own map reached (4/4 in the
+  dimmed room, 0/4 in two held-out rooms because of VSLAM drift and clearance
+  loss). Details: [docs/NAVIGATION_RESULTS.md](docs/NAVIGATION_RESULTS.md).
+
 ## Quick start
 
 ```bash
