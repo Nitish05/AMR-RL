@@ -46,8 +46,8 @@ Regenerate the tables: `python scripts/eval/report.py --learning work/evidence/l
   gives `none`; outcomes are stored under the visible context (`attach:none`
   vs `attach:yellow`), so these do not erase the learned yellow response.
 * **Policy comparison (standard rules, same map and start).** Valence per
-  observed outcome: learned **0.455**, fixed 0.382, random 0.176, nearest
-  0.018. Total valence in 480 s: fixed 12.6, learned 5.0, random 3.0, nearest
+  observed outcome: learned **0.45**, fixed 0.38, random 0.18, nearest
+  0.02. Total valence in 480 s: fixed 12.6, learned 5.0, random 3.0, nearest
   0.6. The fixed baseline repeats whichever option sorts first by entity id;
   in this run that was bloom/signal, the rewarding option, and it never rests.
   The learned policy **idles 27 % of the time** because the engineered
