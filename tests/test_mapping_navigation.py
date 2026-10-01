@@ -275,88 +275,106 @@ def test_remembered_entities_are_hard_keepout_for_planning():
     assert planner.traversable_xy(grid, [[0.0, 0.3]])[0]
 
 
-class _FakeMapper:
-    """Stands in for FloorEvidenceMapper.update: returns preset floor/base points."""
+class _FakeDetector:
+    """Stands in for MonoDepthObstacles.detect: preset obstacle points (base frame)."""
 
     def __init__(self):
-        self.base_xy = np.zeros((0, 2))
-        self.free_xy = np.zeros((0, 2))
-        self.calls = []
+        self.points = np.zeros((0, 2))
 
-    def update(self, ref, cur, *, defer_bases=False, commit_free=True):
-        self.calls.append((defer_bases, commit_free))
-        return {"updated": True, "base_xy": self.base_xy, "free_xy": self.free_xy}
+    def detect(self, rgb):
+        return {"points": self.points, "heights": np.full(len(self.points), 0.2), "fit": {}}
 
 
-def _kf(t, pose):
-    from amr_rl.perception.vslam import Keyframe
-
-    return Keyframe(0, t, np.asarray(pose, float), np.zeros((0, 2)), np.zeros((0, 32), np.uint8),
-                    np.zeros(0, int), np.zeros((4, 4), np.uint8))
+def _box_points(x0, x1, y0, y1, step=0.02):
+    return np.array([(x, y) for x in np.arange(x0, x1, step) for y in np.arange(y0, y1, step)])
 
 
-def _frame():
-    return np.zeros((4, 4), np.uint8), np.zeros((0, 2)), np.zeros((0, 32), np.uint8)
+def _guarded(grid):
+    from amr_rl.navigation.near_field import DepthGuard
 
-
-def _guarded_nav(grid):
-    from amr_rl.navigation.near_field import NearFieldGuard
-
-    mapper = _FakeMapper()
-    guard = NearFieldGuard(mapper, grid)
+    det = _FakeDetector()
+    guard = DepthGuard(det, grid, Planner().cfg.footprint_radius)
     nav = Navigator()
     nav.guard = guard
-    return nav, guard, mapper
+    return nav, guard, det
 
 
-def _floor(x0, x1):
-    xs = np.arange(x0, x1, 0.025)
-    return np.array([(x, y) for x in xs for y in np.arange(-0.15, 0.16, 0.025)])
+RGB = np.zeros((4, 4, 3), np.uint8)
 
 
-def test_guard_creeps_until_the_band_ahead_is_freshly_seen_as_floor():
-    grid = grid_with_free([(-2.0, -0.5, 2.0, 0.5)])
-    nav, guard, mapper = _guarded_nav(grid)
+def test_depth_guard_stops_for_an_object_the_map_does_not_know():
+    grid = grid_with_free([(-2.0, -0.5, 2.0, 0.5)])  # old map: the corridor is certainly free
+    nav, guard, det = _guarded(grid)
     pose = np.array([-1.0, 0.0, 0.0])
     assert nav.set_goal(grid, pose, (1.2, 0.0), now=0.0)
-    v, _ = nav.step(grid, pose, 0.01, 0.1)
-    assert v == guard.cfg.creep_speed  # nothing verified since the map was made: creep
-    mapper.free_xy = _floor(-0.8, -0.3)
-    guard.maybe_probe(0.2, pose, [_kf(0.0, (-1.2, 0.0, 0.0))], _frame())
-    assert guard.last_fraction > 0.9 and mapper.calls[-1] == (True, False)  # never writes the map
-    v, _ = nav.step(grid, pose, 0.01, 0.3)
-    assert v > guard.cfg.creep_speed  # floor just seen ahead: full speed
-    v, _ = nav.step(grid, pose, 0.01, 0.2 + guard.cfg.verify_window + 0.2)
-    assert v == guard.cfg.creep_speed  # the look went stale
+    assert nav.step(grid, pose, 0.01, 0.0)[0] > 0.1  # nothing seen: full speed
+    det.points = _box_points(0.42, 0.6, -0.15, 0.15)  # a box face 0.42 m ahead of the base origin
+    guard.maybe_detect(0.1, pose, RGB)
+    assert guard.free_run is not None and guard.free_run < 0.2
+    assert nav.step(grid, pose, 0.01, 0.15) == (0.0, 0.0) and nav.holding  # one frame: stop
+    assert grid.classify_xy(np.array([[-0.5, 0.0]]))[0] == FREE  # one frame is not written to the map
+    guard.maybe_detect(0.4, pose, RGB)
+    assert grid.classify_xy(np.array([[-0.5, 0.0]]))[0] == OCCUPIED  # two frames agree: written
+    assert guard.stats["assert_events"] == 1
 
 
-def test_guard_holds_then_blocks_when_the_floor_ahead_cannot_be_seen():
-    """A box on the route hides the floor behind its face: the band cannot be verified
-    even though the old map says free, so the robot stops and the goal ends blocked."""
-    grid = grid_with_free([(-2.0, -0.5, 2.0, 0.5)])
-    nav, guard, mapper = _guarded_nav(grid)
+def test_depth_guard_creeps_when_something_is_ahead_and_ignores_points_beside_the_path():
+    grid = grid_with_free([(-2.0, -1.0, 2.0, 1.0)])
+    nav, guard, det = _guarded(grid)
     pose = np.array([-1.0, 0.0, 0.0])
     assert nav.set_goal(grid, pose, (1.2, 0.0), now=0.0)
-    nav.step(grid, pose, 0.01, 0.1)  # sets the band
-    mapper.free_xy = _floor(-0.8, -0.72)  # only the near edge of the band is floor
-    kfs = [_kf(0.0, (-1.2, 0.0, 0.0))]
-    guard.maybe_probe(0.5, pose, kfs, _frame())
-    v, _ = nav.step(grid, pose, 0.01, 0.55)
-    assert v == guard.cfg.creep_speed and not nav.holding  # one low probe: creep
-    guard.maybe_probe(0.85, pose, kfs, _frame())
-    assert nav.step(grid, pose, 0.01, 0.9) == (0.0, 0.0) and nav.holding
-    nav.step(grid, pose, 0.01, 0.9 + guard.cfg.hold_timeout + 0.1)
-    assert nav.status == "blocked" and nav.reason == "path_ahead_not_verified"
+    nav.step(grid, pose, 0.01, 0.0)
+    det.points = _box_points(0.3, 0.6, 0.45, 0.6)  # beside the path (a wall 0.45 m to the left)
+    guard.maybe_detect(0.1, pose, RGB)
+    assert guard.free_run is None and nav.step(grid, pose, 0.01, 0.15)[0] > 0.1
+    det.points = _box_points(0.7, 0.9, -0.1, 0.1)  # on the path, ~0.45 m of free run
+    guard.maybe_detect(0.4, pose, RGB)
+    v, _ = nav.step(grid, pose, 0.01, 0.45)
+    assert 0 < v <= guard.cfg.creep_speed
 
 
-def test_guard_skips_probes_without_baseline_and_rejected_variant_is_off():
-    from amr_rl.navigation.near_field import GuardConfig, NearFieldGuard
-
+def test_depth_guard_hold_times_out_as_blocked():
     grid = grid_with_free([(-2.0, -0.5, 2.0, 0.5)])
-    guard = NearFieldGuard(_FakeMapper(), grid)
-    guard.maybe_probe(1.0, np.array([-0.6, 0.0, 0.0]), [_kf(0.0, (-0.61, 0.0, 0.0))], _frame())
-    assert guard.stats["probes"] == 0 and guard.stats["skipped"] == 1  # 1 cm: no parallax
-    assert GuardConfig().assert_obstacles is False
+    nav, guard, det = _guarded(grid)
+    guard.cfg.confirm_window = 0.0  # keep the map unchanged: test the hold timer alone
+    pose = np.array([-1.0, 0.0, 0.0])
+    assert nav.set_goal(grid, pose, (1.2, 0.0), now=0.0)
+    nav.step(grid, pose, 0.01, 0.0)
+    det.points = _box_points(0.42, 0.6, -0.15, 0.15)
+    t = 0.1
+    while t < 0.1 + guard.cfg.hold_timeout + 0.5 and nav.status == "following":
+        guard.maybe_detect(t, pose, RGB)
+        nav.step(grid, pose, 0.01, t + 0.01)
+        t += 0.1
+    assert nav.status == "blocked" and nav.reason == "obstacle_ahead"
+
+
+def test_monocular_depth_floor_fit_recovers_metric_obstacles():
+    """Synthetic check of the scale/shift fit: render the model's output as
+    a * inverse depth + b for a floor with a 30 cm-tall, 30 cm-wide box face 0.5 m ahead."""
+    from amr_rl.perception.camera_model import CameraModel
+    from amr_rl.perception.near_depth import MonoDepthObstacles
+    from amr_rl.robot.spec import RobotSpec
+
+    cam = CameraModel.from_spec(RobotSpec.load())
+    det = MonoDepthObstacles(cam, backend=None)
+    # ground truth inverse depth per pixel: floor, or a vertical wall at x = 0.5 m (base frame)
+    rays = det.rays
+    R, t = det.R, det.t
+    d_base = rays @ R.T  # ray directions in the base frame (per unit camera depth)
+    s_wall = (0.5 - t[0]) / np.where(np.abs(d_base[:, 0]) > 1e-6, d_base[:, 0], np.nan)
+    z_floor = det.z_floor
+    wall_h = t[2] + cam.base_z + s_wall * d_base[:, 2]
+    wall_y = t[1] + s_wall * d_base[:, 1]
+    use_wall = (s_wall > 0) & (wall_h >= 0) & (wall_h <= 0.3) & (np.abs(wall_y) <= 0.15) & \
+        (~np.isfinite(z_floor) | (s_wall < z_floor))
+    z = np.where(use_wall, s_wall, z_floor)
+    rel = (2.0 / z + 0.3).reshape(cam.height, cam.width)
+    rel = np.where(np.isfinite(rel), rel, 0.3).astype(np.float32)
+    out = det.detect(None, rel=rel)
+    assert out["fit"]["a"] == pytest.approx(2.0, rel=0.05)
+    pts = out["points"]
+    assert len(pts) > 50 and np.all(np.abs(pts[:, 0] - 0.5) < 0.03)
 
 
 def test_nudge_creep_uses_the_measured_contact_edge():

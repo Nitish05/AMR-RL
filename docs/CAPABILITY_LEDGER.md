@@ -39,9 +39,9 @@ Legend: **done** = implemented and exercised with evidence in this delivery ·
 | Explicit metric scale handling | done (with an assumption) | scale from the calibrated camera height over a flat floor; sensitivity is documented and unit-tested (a +10 % height error gives +10 % ranges). Not valid on ramps/uneven floors |
 | Unknown ≠ free; footprint-certified planning; rejected goals carry reasons | done | `tests/test_mapping_navigation.py`; held-out results |
 | Tracking loss revokes motion; bounded recovery; explicit re-enable | done | nav lens-blackout fault tests |
-| Dynamic obstacles | partial | per-step 0.6 m corridor check, no in-place turns with obstacle evidence in the turning circle, back-off ≤ 0.4 m. Round 2: **4 of the 5 obstacle-on-route tests that ran ended in contact** (6 episodes); the box then filled the camera view and tracking was lost. A new object needs 3 observations to de-certify saturated floor |
-| Reaching goals in its own map | partial | round 2 (4 rooms × 3 seeds): **22/32** own-map goals (home_a 8/8, heldout_c 7/8, home_a_dim 4/8, heldout_b 3/8), up from 5/16; in 3 of 12 runs the robot was not localised at goal time and no goals could be sampled (22/44 counting those as failures). Remaining failures: wrong relocalisation (10–20 cm), heading errors during in-place rotation, one run that stayed lost |
-| Map quality | partial | free coverage 29–73 % after 300 s; deep false-free cells 0–103 per run (the plane-parallax floor test admits 0.2–0.5 % of hits inside obstacles). ATE ≤ 5 cm in 8/12 runs, worst error 45 cm. Contacts while exploring: 0 in 12 runs |
+| Dynamic obstacles | partial | Monocular depth guard (Depth Anything V2 Small, Apache-2.0, scaled to metres by the visible floor; [results/near-field-guard.md](results/near-field-guard.md)) on top of the per-step corridor and turning-circle checks. Round 3: **0 of 5 box-on-route tests in contact** (round 2: 4 of 5); 0 contact steps in 12 runs. Cost: ~23 % of the cells it marks are on open floor. Simulation images only; optional dependency (without the model the guard is off and the runtime says so) |
+| Reaching goals in its own map | partial | round 3 (with depth guard, 4 rooms × 3 seeds): **20/37** own-map goals (home_a 7/8, home_a_dim 8/12, heldout_b 4/9, heldout_c 1/8); round 2: 22/32. Misses: 10 localisation drift (robot believes it arrived, 16–76 cm off), 4 from one VSLAM failure, 3 possibly from guard marks. In 2 of 12 runs the robot was not localised at goal time. Arrival = within 0.15 m (the docs said 0.25 m until round 3; the code always used 0.15 m) |
+| Map quality | partial | round 3: free coverage 27–72 % after 300 s; deep false-free cells 0–44 per run (round 2: 0–103; the plane-parallax floor test admits a few hits inside obstacles). Contacts while exploring: 0 in 24 runs over rounds 2–3 |
 | Real-time operation | not done | lockstep; ≈0.6–0.8× real time on 2 CPU cores |
 
 ## Stage 4 — visually grounded interaction and persistent learning
@@ -86,12 +86,13 @@ with a `SUPERSEDED.md` note naming the bug and the fix.
    dead-reckoning-gated relocalisation, base confirmation, identity merging,
    keep-out discs. Still open: wrong relocalisation (10–20 cm) and heading
    errors during in-place rotation; a robot that cannot relocalise while
-   stationary once recovery is exhausted; detecting a newly placed obstacle
-   before contact (4/5 tests ended in contact); false-free from the
+   stationary once recovery is exhausted; localisation drift in held-out rooms
+   (now the main cause of missed goals); false-free from the
    plane-parallax floor test; recovery turns that start from a confidently
    wrong pose (2 bench contacts, pose 48 cm off); tracking loss near tall
-   fixtures (seed 0 learning). Two camera-only near-field guards for newly
-   placed obstacles were tried and rejected
+   fixtures (seed 0 learning). Newly placed obstacles: handled in simulation by
+   the monocular depth guard (round 3: 0/5 box tests in contact); its false
+   obstacle marks (~23 % on open floor) are the next cost to cut
    ([results/near-field-guard.md](results/near-field-guard.md)). Fixed after
    round 2, not yet re-evaluated end to end: nudge creep from the measured contact
    edge (boxes seen corner-on: 21/27 → 27/27 reach,

@@ -34,8 +34,15 @@ def provenance(run_dir: Path, configs=(), extra=None):
         project_root=PROJECT_ROOT,
         config_paths=[str(p) for p in configs],
         asset_manifest=str(PROJECT_ROOT / "assets/robot/generated/manifest.json"),
-        extra=extra or {},
+        extra={**(extra or {}), "depth_model": _depth_model_identity()},
     )
+
+
+def _depth_model_identity():
+    from amr_rl.perception.near_depth import MODEL_ID, MODEL_LICENSE, MODEL_REVISION, model_available
+
+    return {"id": MODEL_ID, "revision": MODEL_REVISION, "license": MODEL_LICENSE,
+            "available_locally": bool(model_available())}
 
 
 def jdefault(value):

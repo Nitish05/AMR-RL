@@ -11,14 +11,62 @@ start heading by *k* × 72°. Then the evaluator acts as the operator: fixed goa
 the interior of the robot's own certified map, a camera blackout during a goal,
 and a 35 cm box placed on the robot's own planned route. When the robot is lost
 and its bounded recovery has given up, the evaluator turns it slowly by hand
-(manual commands, counted) so it can relocalise. Arrival = within 0.25 m of the
+(manual commands, counted) so it can relocalise. Arrival = within 0.15 m of the
 true goal **and** the navigator reports arrival. `home_a` is the development room;
 the other three were never used for tuning.
 
-Evidence: `work/evidence/navigation-20260930-154854` (12 runs, 0 crashed). Regenerate:
-`python scripts/eval/report.py --nav work/evidence/navigation-20260930-154854 --out <file>`.
+Evidence: `work/evidence/navigation-20261001-depthguard` (round 3, current code,
+12 runs, 0 crashed) and `work/evidence/navigation-20260930-154854` (round 2).
+Regenerate: `python scripts/eval/report.py --nav <dir> --out <file>`.
 
-## Summary (round 2: 4 rooms × 3 seeds)
+**Correction (round 3):** earlier versions of this page and the README said
+arrival meant within 0.25 m. The evaluator has always used **0.15 m**
+(`ARRIVAL_TOLERANCE` in `scripts/eval/navigation.py`), so every published arrival
+count was scored at 0.15 m. Only the description was wrong.
+
+## Round 3: near-field depth guard (current code)
+
+Round 3 is round 2 plus the monocular-depth near-field guard
+([results/near-field-guard.md](results/near-field-guard.md)) and the nudge-reach
+fix (which does not affect navigation). Same rooms, seeds and protocol.
+
+| | round 2 | round 3 (depth guard) |
+|---|---|---|
+| Box-on-route tests that ran | 5 | 5 |
+| …ended in contact | **4** | **0** (4 stopped and reported blocked; 1 went around the box and arrived) |
+| Contact steps, all phases, 12 runs | 533 | **0** |
+| Own-map goals arrived | 22/32 (69 %) | 20/37 (54 %) |
+| Runs with no own-map goals (not localised at goal time) | 3 | 2 |
+| Impossible goals rejected | 36/36 | 36/36 |
+| Camera-blackout tests that ran / reached the goal | 7 / 5 | 5 / 4 |
+| Deep false-free cells per run | 0–103 | 0–44 |
+| Free coverage after 300 s | 29–73 % | 27–72 % |
+| Cells the guard wrote on open floor | — | 1,107 of 4,712 written (23 %) |
+
+**Reading these results:**
+
+* **Contacts are gone in these 12 runs.** All 5 box tests that ran ended without
+  touching. Round 2's 2 bench contacts during recovery did not recur either, but
+  those runs took different paths, so this is not evidence of a fix for them.
+* **Arrival fell from 69 % to 54 %, mostly from localisation.** Of the 17 missed
+  own-map goals:
+  - 10 were "arrived" by the robot's own estimate but 0.16–0.76 m off in truth (drift);
+  - 4 were lost to a VSLAM failure mid-drive (heldout_c seed 2: tracking lost
+    while driving across open floor, then never recovered);
+  - **3 could come from the guard's marks**: 2 ran out of replan budget and 1 goal
+    had lost clearance. Round 2 had 2 replan-budget failures.
+
+  The guard stops and slows the robot, which changes its routes and so its VSLAM
+  history. With 3 seeds per room, run-to-run variation of this size is expected,
+  and the drop cannot be attributed to the guard with confidence.
+* **Cost of the guard:** about 23 % of the cells it writes into the map are on
+  open floor (scored with a 10 cm margin around true geometry). That reduces
+  certified free space and is the next thing to improve: write only cells on or
+  near the planned path instead of everything within 1 m.
+* **Compute:** one depth frame every 0.3 s while following a path, about 0.2 s
+  each on 2 CPU cores (lockstep, so it does not change simulated timing).
+
+## Round 2 (before the depth guard): summary
 
 * **Reaching goals in its own map: 22/32 (69 %)**, up from 5/16 (31 %) in round 1.
   By room: home_a 8/8, heldout_c 7/8, home_a_dim 4/8, heldout_b 3/8.
@@ -67,38 +115,38 @@ loss, and relocalisation gated by dead reckoning. VSLAM changes were also
 benchmarked separately on seven scenarios ([results/vslam-benchmark.md](results/vslam-benchmark.md));
 mapping settings were A/B-tested on identical trajectories ([results/mapper-ab.md](results/mapper-ab.md)).
 
-Evidence: `work/evidence/navigation-20260930-154854`
+## Round 3 generated tables
 
-Runs: 12; crashed runs: 0 
+Round-2 generated tables are in git history (commit `bda4e0f`).
 
 ### Summary by room (all seeds)
 
 | room | split | seeds | own-map goals arrived | impossible goals rejected | ATE cm (range) | worst error cm | free coverage | deep false-free | contact episodes | fault tests passed / run |
 |---|---|---|---|---|---|---|---|---|---|---|
-| home_a | development | 3 | 8/8 | 9/9 | 0.4–2.9 | 6.9 | 31%–41% | 0–16 | 3 | 2/4 (2 skipped) |
-| heldout_b | heldout_layout | 3 | 3/8 | 9/9 | 2.0–16.4 | 27.7 | 29%–33% | 8–13 | 0 | 2/3 (3 skipped) |
-| heldout_c | heldout_appearance | 3 | 7/8 | 9/9 | 3.0–17.5 | 45.0 | 71%–73% | 11–103 | 4 | 1/3 (3 skipped) |
-| home_a_dim | heldout_lighting | 3 | 4/8 | 9/9 | 0.9–4.9 | 9.3 | 34%–43% | 5–13 | 1 | 1/2 (4 skipped) |
+| home_a | development | 3 | 7/8 | 9/9 | 1.9–2.8 | 5.9 | 46%–53% | 0–4 | 0 | 3/4 (2 skipped) |
+| heldout_b | heldout_layout | 3 | 4/9 | 9/9 | 4.9–14.6 | 44.6 | 27%–28% | 6–13 | 0 | 2/2 (4 skipped) |
+| heldout_c | heldout_appearance | 3 | 1/8 | 9/9 | 1.3–8.3 | 14.6 | 61%–72% | 12–44 | 0 | 0/0 (6 skipped) |
+| home_a_dim | heldout_lighting | 3 | 8/12 | 9/9 | 1.0–4.7 | 7.3 | 35%–40% | 1–12 | 0 | 4/4 (2 skipped) |
 
-**All rooms and seeds:** own-map goals arrived 22/32; impossible goals rejected 36/36; contact episodes 8.
+**All rooms and seeds:** own-map goals arrived 20/37; impossible goals rejected 36/36; contact episodes 0.
 
 
 ### Mapping by exploration (onboard RGB only)
 
 | world | split | sim s | path m | ATE m | max err m | scale | tracking frames | lost frames | free coverage | free cells | false-free cells | deep false-free | contact episodes |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|
-| home_a | development | 300.000 | 9.495 | 0.023 | 0.069 | 1.005 | 3000/3000 | 0 | 0.380 | 3006 | 97 | 16 | 0 |
-| heldout_b | heldout_layout | 300.000 | 5.726 | 0.020 | 0.040 | 0.999 | 3000/3000 | 0 | 0.332 | 2455 | 35 | 8 | 0 |
-| heldout_c | heldout_appearance | 300.000 | 9.552 | 0.030 | 0.057 | 0.995 | 3000/3000 | 0 | 0.712 | 5519 | 65 | 11 | 0 |
-| home_a_dim | heldout_lighting | 300.000 | 8.875 | 0.009 | 0.093 | 0.999 | 2883/3000 | 117 | 0.343 | 2697 | 67 | 5 | 0 |
-| home_a s1 | development | 169.500 | 3.118 | 0.004 | 0.012 | 0.997 | 1113/1695 | 582 | 0.306 | 2344 | 2 | 0 | 0 |
-| heldout_b s1 | heldout_layout | 300.000 | 5.748 | 0.164 | 0.277 | 0.907 | 2968/3000 | 32 | 0.299 | 2213 | 30 | 8 | 0 |
-| heldout_c s1 | heldout_appearance | 300.000 | 10.852 | 0.175 | 0.450 | 0.991 | 3000/3000 | 0 | 0.732 | 5767 | 159 | 79 | 0 |
-| home_a_dim s1 | heldout_lighting | 300.000 | 7.522 | 0.014 | 0.036 | 1.008 | 2873/3000 | 127 | 0.434 | 3350 | 26 | 9 | 0 |
-| home_a s2 | development | 300.000 | 7.428 | 0.029 | 0.049 | 1.002 | 2931/3000 | 69 | 0.410 | 3229 | 95 | 15 | 0 |
-| heldout_b s2 | heldout_layout | 300.000 | 5.410 | 0.138 | 0.259 | 1.068 | 3000/3000 | 0 | 0.287 | 2134 | 38 | 13 | 0 |
-| heldout_c s2 | heldout_appearance | 300.000 | 8.727 | 0.082 | 0.142 | 0.979 | 2948/3000 | 52 | 0.713 | 5675 | 222 | 103 | 0 |
-| home_a_dim s2 | heldout_lighting | 300.000 | 6.220 | 0.049 | 0.079 | 1.003 | 3000/3000 | 0 | 0.415 | 3253 | 78 | 13 | 0 |
+| home_a | development | 300.000 | 9.009 | 0.020 | 0.045 | 1.009 | 3000/3000 | 0 | 0.526 | 4047 | 16 | 0 | 0 |
+| heldout_b | heldout_layout | 300.000 | 4.842 | 0.049 | 0.124 | 1.045 | 3000/3000 | 0 | 0.282 | 2091 | 34 | 8 | 0 |
+| heldout_c | heldout_appearance | 300.000 | 8.031 | 0.039 | 0.068 | 1.001 | 3000/3000 | 0 | 0.715 | 5548 | 71 | 30 | 0 |
+| home_a_dim | heldout_lighting | 300.000 | 9.240 | 0.010 | 0.034 | 1.000 | 3000/3000 | 0 | 0.353 | 2765 | 58 | 8 | 0 |
+| home_a s1 | development | 294.900 | 6.138 | 0.019 | 0.048 | 1.005 | 2367/2949 | 582 | 0.462 | 3540 | 5 | 1 | 0 |
+| heldout_b s1 | heldout_layout | 300.000 | 5.634 | 0.146 | 0.446 | 1.180 | 2853/3000 | 147 | 0.267 | 1979 | 28 | 6 | 0 |
+| heldout_c s1 | heldout_appearance | 225.800 | 5.938 | 0.013 | 0.024 | 0.997 | 1676/2258 | 582 | 0.610 | 4718 | 48 | 12 | 0 |
+| home_a_dim s1 | heldout_lighting | 300.000 | 6.261 | 0.011 | 0.022 | 1.006 | 2873/3000 | 127 | 0.401 | 3079 | 8 | 1 | 0 |
+| home_a s2 | development | 300.000 | 8.649 | 0.028 | 0.059 | 1.000 | 3000/3000 | 0 | 0.461 | 3560 | 31 | 4 | 0 |
+| heldout_b s2 | heldout_layout | 300.000 | 5.410 | 0.138 | 0.259 | 1.068 | 3000/3000 | 0 | 0.285 | 2115 | 38 | 13 | 0 |
+| heldout_c s2 | heldout_appearance | 300.000 | 10.305 | 0.083 | 0.146 | 0.979 | 2948/3000 | 52 | 0.705 | 5567 | 174 | 44 | 0 |
+| home_a_dim s2 | heldout_lighting | 300.000 | 5.452 | 0.047 | 0.073 | 1.001 | 2949/3000 | 51 | 0.370 | 2879 | 46 | 12 | 0 |
 
 False-free = estimated FREE where the true room is occupied or outside it; deep = more than 10 cm inside an obstacle/wall. Coverage = estimated-free ∩ true-free / true free floor.
 
@@ -106,47 +154,47 @@ False-free = estimated FREE where the true room is occupied or outside it; deep 
 
 | world | config goals arrived | config-goal rejection reasons | unsupported goals rejected | supported accepted | supported arrived | supported final true distance m | contact episodes (whole run) |
 |---|---|---|---|---|---|---|---|
-| home_a | 1/4 | goal_in_unknown_space | 3/3 | 4/4 | 4/4 | 0.05, 0.06, 0.06, 0.07 | 1 |
-| heldout_b | 0/4 | goal_in_unknown_space, goal_lacks_footprint_clearance | 3/3 | 2/2 | 2/2 | 0.05, 0.05 | 0 |
-| heldout_c | 2/4 | goal_lacks_footprint_clearance | 3/3 | 4/4 | 4/4 | 0.14, 0.09, 0.03, 0.08 | 0 |
-| home_a_dim | 0/4 | autonomy_not_enabled_or_not_localized | 3/3 | 0/0 | 0/0 | — | 0 |
+| home_a | 1/4 | goal_in_unknown_space | 3/3 | 4/4 | 3/4 | 1.64, 0.03, 0.12, 0.01 | 0 |
+| heldout_b | 1/4 | goal_in_unknown_space | 3/3 | 4/4 | 4/4 | 0.08, 0.06, 0.06, 0.06 | 0 |
+| heldout_c | 2/4 | goal_in_unknown_space | 3/3 | 3/4 | 1/4 | 0.13, 0.16, 0.76, nan | 0 |
+| home_a_dim | 0/4 | goal_in_unknown_space, goal_lacks_footprint_clearance | 3/3 | 4/4 | 4/4 | 0.06, 0.07, 0.05, 0.06 | 0 |
 | home_a s1 | 0/4 | autonomy_not_enabled_or_not_localized | 3/3 | 0/0 | 0/0 | — | 0 |
-| heldout_b s1 | 0/4 | goal_in_unknown_space, goal_lacks_footprint_clearance | 3/3 | 3/3 | 1/3 | 0.16, 0.17, 0.13 | 0 |
-| heldout_c s1 | 0/4 | autonomy_not_enabled_or_not_localized, goal_lacks_footprint_clearance | 3/3 | 0/0 | 0/0 | — | 2 |
-| home_a_dim s1 | 1/4 | goal_in_unknown_space | 3/3 | 4/4 | 2/4 | 0.05, 0.07, 1.94, 2.21 | 1 |
-| home_a s2 | 1/4 | goal_in_unknown_space | 3/3 | 4/4 | 4/4 | 0.07, 0.06, 0.06, 0.04 | 2 |
-| heldout_b s2 | 0/4 | goal_in_unknown_space, goal_lacks_footprint_clearance | 3/3 | 3/3 | 0/3 | 0.34, 0.31, 0.21 | 0 |
-| heldout_c s2 | 3/4 | goal_in_unknown_space | 3/3 | 4/4 | 3/4 | 0.05, 0.21, 0.09, 0.03 | 2 |
-| home_a_dim s2 | 1/4 | goal_in_unknown_space | 3/3 | 4/4 | 2/4 | 0.06, 0.06, 0.22, 0.22 | 0 |
+| heldout_b s1 | 0/4 | goal_in_unknown_space, goal_lacks_footprint_clearance | 3/3 | 2/2 | 0/2 | 0.40, 0.46 | 0 |
+| heldout_c s1 | 0/4 | autonomy_not_enabled_or_not_localized | 3/3 | 0/0 | 0/0 | — | 0 |
+| home_a_dim s1 | 1/4 | goal_in_unknown_space | 3/3 | 4/4 | 4/4 | 0.06, 0.06, 0.07, 0.06 | 0 |
+| home_a s2 | 1/4 | goal_in_unknown_space, goal_lacks_footprint_clearance | 3/3 | 4/4 | 4/4 | 0.06, 0.06, 0.08, 0.06 | 0 |
+| heldout_b s2 | 0/4 | goal_in_unknown_space, goal_lacks_footprint_clearance | 3/3 | 3/3 | 0/3 | 0.16, 0.22, 0.17 | 0 |
+| heldout_c s2 | 2/4 | goal_in_unknown_space, goal_lacks_footprint_clearance | 3/3 | 1/4 | 0/4 | 1.56, nan, nan, nan | 0 |
+| home_a_dim s2 | 1/4 | goal_in_unknown_space | 3/3 | 4/4 | 0/4 | 0.24, 0.35, 0.29, 0.60 | 0 |
 
-Config goals are fixed world points chosen before the run (some lie in space the robot never certified; rejecting those is the conservative outcome). Supported goals are seeded samples of the robot's own certified-traversable map (what an operator would click); arrival is scored in the true world (≤ 0.25 m).
+Config goals are fixed world points chosen before the run (some lie in space the robot never certified; rejecting those is the conservative outcome). Supported goals are seeded samples of the robot's own certified-traversable map (what an operator would click); arrival is scored in the true world (≤ 0.15 m).
 
 ### Fault tests
 
 | world | fault | result | status/reason | revocations | recovery / operator | contact episodes |
 |---|---|---|---|---|---|---|
-| home_a | lens blackout | arrived | arrived | recovery_succeeded | resent: goal_accepted | 0 |
-| home_a | obstacle on route | not_arrived | — | recovery_exhausted | — | 1 |
+| home_a | lens blackout | not_arrived | failed | recovery_succeeded | resent: goal_accepted | 0 |
+| home_a | obstacle on route | not_arrived | failed | — | — | 0 |
 | heldout_b | lens blackout | arrived | arrived | recovery_succeeded | resent: goal_accepted | 0 |
-| heldout_b | obstacle on route | not_arrived | — | recovery_succeeded | — | 0 |
-| heldout_c | lens blackout | not_arrived | failed | recovery_succeeded | resent: goal_accepted | 0 |
+| heldout_b | obstacle on route | not_arrived | failed | — | — | 0 |
+| heldout_c | lens blackout | skipped | did_not_reach_start | — | — | 0 |
 | heldout_c | obstacle on route | skipped | did_not_reach_start | — | — | 0 |
-| home_a_dim | lens blackout | skipped | no_supported_pair_in_current_map | — | — | 0 |
-| home_a_dim | obstacle on route | skipped | no_supported_pair_in_current_map | — | — | 0 |
+| home_a_dim | lens blackout | arrived | arrived | recovery_succeeded | resent: goal_accepted | 0 |
+| home_a_dim | obstacle on route | not_arrived | failed | — | — | 0 |
 | home_a s1 | lens blackout | skipped | no_supported_pair_in_current_map | — | — | 0 |
 | home_a s1 | obstacle on route | skipped | no_supported_pair_in_current_map | — | — | 0 |
-| heldout_b s1 | lens blackout | not_arrived | arrived | recovery_succeeded | resent: goal_accepted | 0 |
-| heldout_b s1 | obstacle on route | skipped | did_not_reach_start | — | — | 0 |
+| heldout_b s1 | lens blackout | skipped | no_supported_pair_in_current_map | — | — | 0 |
+| heldout_b s1 | obstacle on route | skipped | no_supported_pair_in_current_map | — | — | 0 |
 | heldout_c s1 | lens blackout | skipped | no_supported_pair_in_current_map | — | — | 0 |
 | heldout_c s1 | obstacle on route | skipped | no_supported_pair_in_current_map | — | — | 0 |
 | home_a_dim s1 | lens blackout | arrived | arrived | recovery_succeeded | resent: goal_accepted | 0 |
-| home_a_dim s1 | obstacle on route | not_arrived | — | recovery_succeeded | — | 1 |
+| home_a_dim s1 | obstacle on route | not_arrived | failed | — | — | 0 |
 | home_a s2 | lens blackout | arrived | arrived | recovery_succeeded | resent: goal_accepted | 0 |
-| home_a s2 | obstacle on route | not_arrived | — | recovery_exhausted | — | 2 |
-| heldout_b s2 | lens blackout | skipped | did_not_reach_start | — | — | 0 |
+| home_a s2 | obstacle on route | arrived | arrived | — | — | 0 |
+| heldout_b s2 | lens blackout | skipped | no_supported_pair_in_current_map | — | — | 0 |
 | heldout_b s2 | obstacle on route | skipped | no_supported_pair_in_current_map | — | — | 0 |
-| heldout_c s2 | lens blackout | arrived | arrived | recovery_succeeded | resent: goal_accepted | 0 |
-| heldout_c s2 | obstacle on route | not_arrived | — | recovery_exhausted | — | 2 |
+| heldout_c s2 | lens blackout | skipped | no_supported_pair_in_current_map | — | — | 0 |
+| heldout_c s2 | obstacle on route | skipped | no_supported_pair_in_current_map | — | — | 0 |
 | home_a_dim s2 | lens blackout | skipped | did_not_reach_start | — | — | 0 |
 | home_a_dim s2 | obstacle on route | skipped | did_not_reach_start | — | — | 0 |
 
@@ -154,13 +202,13 @@ Config goals are fixed world points chosen before the run (some lie in space the
 
 * home_a: 2 operator enables (start mapping, after recovery_succeeded); mapping revocations: 0
 * heldout_b: 2 operator enables (start mapping, after recovery_succeeded); mapping revocations: 0
-* heldout_c: 2 operator enables (start mapping, after recovery_succeeded); mapping revocations: 0
-* home_a_dim: 9 operator enables (start mapping, not tracking after recovery, before goal, before goal, before goal, before goal, before goal, before goal, before goal); mapping revocations: 0
+* heldout_c: 1 operator enables (start mapping); mapping revocations: 0
+* home_a_dim: 2 operator enables (start mapping, after recovery_succeeded); mapping revocations: 0
 * home_a s1: 10 operator enables (start mapping, not tracking after recovery, not tracking after recovery, before goal, before goal, before goal, before goal, before goal, before goal, before goal); mapping revocations: 1
-* heldout_b s1: 4 operator enables (start mapping, continue mapping, continue mapping, after recovery_succeeded); mapping revocations: 2
-* heldout_c s1: 6 operator enables (start mapping, before goal, before goal, before goal, before goal, before goal); mapping revocations: 0
+* heldout_b s1: 2 operator enables (start mapping, continue mapping); mapping revocations: 1
+* heldout_c s1: 10 operator enables (start mapping, not tracking after recovery, not tracking after recovery, before goal, before goal, before goal, before goal, before goal, before goal, before goal); mapping revocations: 1
 * home_a_dim s1: 4 operator enables (start mapping, continue mapping, continue mapping, after recovery_succeeded); mapping revocations: 2
-* home_a s2: 3 operator enables (start mapping, continue mapping, after recovery_succeeded); mapping revocations: 1
+* home_a s2: 2 operator enables (start mapping, after recovery_succeeded); mapping revocations: 0
 * heldout_b s2: 1 operator enables (start mapping); mapping revocations: 0
-* heldout_c s2: 3 operator enables (start mapping, continue mapping, after recovery_succeeded); mapping revocations: 1
-* home_a_dim s2: 1 operator enables (start mapping); mapping revocations: 0
+* heldout_c s2: 5 operator enables (start mapping, continue mapping, before goal, before goal, before goal); mapping revocations: 1
+* home_a_dim s2: 2 operator enables (start mapping, continue mapping); mapping revocations: 1

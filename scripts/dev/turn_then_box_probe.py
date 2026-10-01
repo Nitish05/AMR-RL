@@ -38,7 +38,8 @@ ap.add_argument("out")
 ap.add_argument("--turns", nargs="+", type=float, default=[180, 135, 90])
 ap.add_argument("--dists", nargs="+", type=float, default=[0.6, 0.75])
 ap.add_argument("--seed", type=int, default=0)
-ap.add_argument("--guard-observe", action="store_true", help="guard records probes but changes nothing")
+ap.add_argument("--guard", choices=["on", "off", "observe"], default="on",
+                help="near-field depth guard: active, absent, or detecting without acting")
 ap.add_argument("--trace", action="store_true", help="log every control step after the box is placed")
 args = ap.parse_args()
 run_dir = Path(args.run_dir)
@@ -55,9 +56,10 @@ for turn in args.turns:
                     seed=args.seed, inspection=False, map_dir=str(run_dir / "map"), map_origin=start,
                     world_overrides={"robot_start": start})
         rt = s.runtime
-        if args.guard_observe and rt.guard is not None:
+        if args.guard == "off":
+            rt.guard = rt.nav.guard = None
+        elif args.guard == "observe" and rt.guard is not None:
             rt.guard.cfg.observe_only = True
-            rt.guard.cfg.debug = True
         log = []
         row = {"turn": turn, "dist": dist}
         if not nav_eval.wait_tracking(s, 40, log):
@@ -90,7 +92,9 @@ for turn in args.turns:
         if chosen is None:
             row["result"] = "skipped: no straight certified 1.5 m line"
             row["P_attempts"] = attempts
-            row["guard"] = dict(rt.guard.stats) if getattr(rt, "guard", None) else None
+            row["guard"] = dict(rt.guard.stats) if rt.guard else None
+            row["guard_asserted"] = None if rt.guard is None else \
+                evaluator.score_guard(s.world, rt.grid, s.origin, rt.guard.asserted_log)
             results.append(row)
             print(row, flush=True)
             s.close()
@@ -98,14 +102,11 @@ for turn in args.turns:
         here, goal, box = chosen
         box_world = np.asarray(evaluator.map_to_world(s.origin, box), float)
         s.world.place_evaluation_obstacle(box_world)
-        placed_t = s.now
         for _ in range(3):
             s.control_step()
         n0 = len(s.contacts)
         trace = []
         if args.trace:
-            if rt.guard is not None:
-                rt.guard.cfg.debug = True
             _step0 = s.control_step
 
             def _traced(*a, _step0=_step0, _trace=trace, _s=s, _rt=rt, _box=box_world, **k):
@@ -118,9 +119,7 @@ for turn in args.turns:
                                                                       max(abs(tp[1] - _box[1]) - half, 0)), 3),
                                "cmd": [round(v, 3) for v in _rt.last_command], "nav": _rt.nav.status,
                                "holding": _rt.nav.holding, "slam": _rt.slam.status,
-                               "band": None if g is None or g.last_fraction is None else round(g.last_fraction, 2),
-                               "band_age": None if g is None else round(_s.now - g.last_eval, 2),
-                               "low": None if g is None else g.low_streak})
+                               "free_run": None if g is None or g.free_run is None else round(g.free_run, 2)})
                 return r
 
             s.control_step = _traced
@@ -136,26 +135,14 @@ for turn in args.turns:
                     "first_contact_t": hit[0]["t"] - rec["t_start"] if hit else None,
                     "revocations": [r["reason"] for r in rec.get("revocations", [])],
                     "final_centre_to_box_edge_m": round(gap, 3),
-                    "guard": dict(rt.guard.stats) if getattr(rt, "guard", None) else None})
+                    "guard": dict(rt.guard.stats) if rt.guard else None, "guard_status": rt.guard_status,
+                    "guard_asserted": None if rt.guard is None else
+                    evaluator.score_guard(s.world, rt.grid, s.origin, rt.guard.asserted_log),
+                    "asserted_log": None if rt.guard is None else rt.guard.asserted_log})
         results.append(row)
         print(row, flush=True)
         if args.trace:
             (work / "trace.json").write_text(json.dumps(trace))
-            if rt.guard is not None:
-                (work / "guard_debug.json").write_text(json.dumps(rt.guard.debug_log))
-        if args.guard_observe and rt.guard is not None:
-            near = evaluator.true_obstacle_mask(s.world, rt.grid, s.origin, margin=0.1)
-            box_geo = s.world.static_geometry.pop()  # the evaluation box: absent before placement
-            near_before = evaluator.true_obstacle_mask(s.world, rt.grid, s.origin, margin=0.1)
-            s.world.static_geometry.append(box_geo)
-            for p in rt.guard.debug_log:
-                xy = np.asarray(p["base_xy"], float).reshape(-1, 2)
-                ix, iy = rt.grid.to_cell(xy)
-                ok = rt.grid.inside(ix, iy)
-                m = near if p["t"] >= placed_t else near_before
-                p["true"] = [bool(m[y, x]) if k else False for x, y, k in zip(ix, iy, ok)]
-                p["after_box"] = p["t"] >= placed_t
-            (work / "guard_debug.json").write_text(json.dumps(rt.guard.debug_log))
         s.close()
 Path(args.out).write_text(json.dumps(results, indent=1))
 n = [r for r in results if "box_contacts" in r]

@@ -80,7 +80,7 @@ def navigation(nav_dir: Path) -> str:
     lines += ["", "Config goals are fixed world points chosen before the run (some lie in space the robot "
               "never certified; rejecting those is the conservative outcome). Supported goals are "
               "seeded samples of the robot's own certified-traversable map (what an operator would "
-              "click); arrival is scored in the true world (≤ 0.25 m).", ""]
+              "click); arrival is scored in the true world (≤ 0.15 m).", ""]
     lines += ["### Fault tests", ""]
     rows = []
     for r in ok:

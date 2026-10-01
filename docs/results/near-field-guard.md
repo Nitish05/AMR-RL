@@ -1,73 +1,124 @@
-# Near-field guard for objects placed on the route (negative result)
+# Near-field guard for objects placed on the route
 
-**Status: not enabled.** `RuntimeConfig.near_field_guard` defaults to `False`; the
-code is kept in `src/amr_rl/navigation/near_field.py` so the measurements below can
-be reproduced. The round-2 failure (4 of 5 box-on-route tests ended in contact) is
-still open.
+**Status: on by default when the depth model is installed**
+(`scripts/amr.sh fetch-depth-model`; without it the runtime reports
+`near_field_guard: unavailable` and drives as before). Code:
+`src/amr_rl/perception/near_depth.py` (detector) and
+`src/amr_rl/navigation/near_field.py` (guard).
 
-## Reproducing the failure
+## The failure
 
-`scripts/dev/turn_then_box_probe.py` loads the map a navigation run saved
-(`navigation-20260930-154854/home_a`), relocalises, drives to a certified point,
-then sets a goal 1.5 m away in a direction `turn` degrees from the robot's heading
-with a 35 cm box `dist` metres along that line (both inside certified free space).
-This is the round-2 geometry: turn in place first (no parallax), then drive.
-Ground truth places the box and scores contacts only.
+Round 2: 4 of the 5 box-on-route tests ended in contact. The occupancy grid needs
+about three keyframes of obstacle evidence (one keyframe per 10 cm of travel) to
+overturn free evidence saturated at −4. An in-place turn gives no parallax at all.
+So after turning toward its route the robot reached a box 0.3–0.45 m ahead before
+the map changed.
 
-| Scenario (turn, box distance) | Guard off (current code) |
-|---|---|
-| 180°, 0.60 m | contact 4.5 s after the goal; tracking lost; recovery exhausted |
-| 180°, 0.75 m | contact after 7.7 s |
-| 135°, 0.60 m | contact after 3.7 s |
-| 135°, 0.75 m | contact after 19.9 s |
-| 90°, either | skipped: no straight certified 1.5 m line |
+`scripts/dev/turn_then_box_probe.py` reproduces it. It loads the map saved by a
+round-2 navigation run, relocalises, and drives to a certified point. It then sends
+a goal 1.5 m away in a direction 180° or 135° from the robot's heading, with a
+35 cm box 0.6 m along that line (both inside certified free space). Ground truth
+places the box and scores contacts only.
 
-**4/4 scenarios that ran ended in contact.** With the guard in observe-only mode
-the runs are identical (the probe changes nothing).
+## What works: a monocular depth model, scaled by the floor
 
-## Why the map reacts too late
+Depth Anything V2 Small (24.8 M parameters, Apache-2.0, pinned revision
+`5426e4f0`) predicts relative inverse depth from one onboard frame. Each frame, a
+robust affine fit against the floor's known inverse depth (camera height and
+pitch) makes it metric. Pixels that come out ≥ 5 cm above the floor within 1.2 m
+are obstacle points. No motion is needed, so it works right after an in-place
+turn. The model input is 336 px wide, which takes about 0.2 s on 2 CPU cores.
 
-The occupancy grid needs about three keyframes of obstacle evidence (one keyframe
-per 10 cm of travel, two agreeing keyframe pairs each) to overturn free evidence
-saturated at −4. After an in-place turn there is no translation and so no
-parallax. The box face starts 0.3–0.45 m ahead of the bumper, and the robot
-reaches it first.
+**Offline accuracy** (`scripts/dev/depth_obstacle_probe.py`): random true poses,
+with and without the box straight ahead, scored against true geometry in the
+corridor ahead (x 0.15–1.0 m, |y| ≤ 0.2 m):
 
-## Variant A: assert obstacle bases from per-frame probes (rejected)
+| Room | Obstacle within 0.6 m detected | Range error (median) | False alarm (corridor clear to 1.0 m, alarm ≤ 0.6 m) |
+|---|---|---|---|
+| home_a | 65/69 | −2.3 cm | 1/40 |
+| heldout_b | 73/75 | −3.6 cm | 2/36 |
+| heldout_c | 65/69 | −3.1 cm | 1/40 |
+| home_a_dim | 65/69 | −2.5 cm | 1/40 |
+| **all** | **268/282 (95 %)** | | **5/156 (3 %)** |
 
-Every 0.3 s, run the plane-parallax floor test between the current frame and a
-keyframe with ≥ 4 cm baseline. Write obstacle-base cells that two successive probes
-agree on into the grid at once.
+(home_a, heldout_c and home_a_dim share a layout, so the same seed gives the same
+poses there.)
 
-* In one run, before the box was even placed, it asserted **83 cells on open floor**
-  (24 events in 50 probes). Every later trip to a start point failed as
-  unreachable, so the scenario could not run.
-* Observe-mode recordings scored against ground truth (`scripts/dev/guard_rules.py`):
-  the rule "two probes agree" produced 13–63 false cells per scenario. The
-  strictest rule tried (clusters of ≥ 8 points confirmed by 3 probes) still
-  produced 4 false cells in each 135° scenario and detected the box in none of the
-  four. The box, when detected, was first confirmed 0.31–0.39 m from the robot
-  centre.
+**The guard.** Every 0.3 s while following a path, including while turning
+toward it:
 
-## Variant B: drive only where the floor ahead was just verified (rejected)
+- The free run is the along-path distance to the first path point whose
+  footprint would overlap ≥ 6 obstacle points.
+- **Stop:** one frame suffices when the free run is ≤ 0.20 m.
+- **Creep:** at 0.07 m/s when the free run is ≤ 0.50 m.
+- **Write to the map:** obstacle cells seen in two frames within 1.5 s are written
+  into the grid as occupied, so the planner routes around or reports blocked.
+- **Give up:** after 4 s stopped, the goal ends blocked (`obstacle_ahead`).
 
-Using the same probes, compute the fraction of the path band 0.30–0.50 m ahead
-(±0.10 m) that was verified as floor within 1 s. Full speed above 0.75; creep at
-0.07 m/s below; stop after two probes below 0.50; end the goal as blocked after
-2 s stopped.
+**Closed loop** (box 0.6 m along the new route; guard off = current code without
+the model):
 
-| | Result |
-|---|---|
-| 180°, 0.60 m | **no contact**: stopped 0.28 m (centre to box edge), goal blocked |
-| 180°, 0.75 m | **contact** after 13.3 s: with the box ahead the band still verified at 0.45–0.60, so it crept into it |
-| Ordinary trips on open floor | **4 of 5 failed** as `path_ahead_not_verified` in one run; open-floor bands verify at 0.45–1.0 |
+| Room | 180° turn: off | 180° turn: on | 135° turn: off | 135° turn: on |
+|---|---|---|---|---|
+| home_a | contact after 4.5 s | **no contact**, stopped 0.32 m from the box | contact after 3.7 s | skipped* |
+| heldout_b | contact after 13.9 s | **no contact**, 0.36 m | skipped* | skipped* |
+| heldout_c | contact after 4.5 s | **no contact**, 0.31 m | contact after 3.4 s | skipped* |
+| home_a_dim | contact after 13.6 s | **no contact**, 0.31 m | no contact | skipped* |
 
-## Conclusion
+Off: **6 contacts in 7 scenarios**. On: **0 contacts in 4**. Distances are robot
+centre to box edge; touching is about 0.18–0.23 m.
 
-At 0.3–0.5 m the plane-parallax floor test is not discriminative enough for a
-per-frame stop decision. On open floor it often fails to verify floor, and with
-a box ahead it still verifies some floor beside the box. A dedicated near-field
-cue is needed: a monocular depth or floor-segmentation model behind the same
-camera-only contract, a wider baseline (a short sideways arc before driving), or a
-physical bumper on hardware. The reproducible scenarios above are the acceptance
-test for whichever is tried next.
+\* Skipped: no straight certified 1.5 m line from any start point. With the guard
+on, the cells it writes into the map during the trips to the start point change
+which lines are certified. That is a real side effect, measured next.
+
+**Cells written on open floor.** Scored against true geometry with a 10 cm margin
+(`amr_rl.sim.evaluator.score_guard`), 2–31 cells per scenario were written on open
+floor (about 10–25 % of the cells written). The rest were furniture, walls and the
+box. These reduce certified free space.
+
+## Full navigation evaluation (4 rooms × 3 seeds)
+
+`work/evidence/navigation-20261001-depthguard`, compared with round 2 (same rooms,
+seeds and protocol; details in [NAVIGATION_RESULTS.md](../NAVIGATION_RESULTS.md)):
+
+| | round 2 | with guard |
+|---|---|---|
+| Box-on-route tests that ran | 5 | 5 |
+| …ended in contact | 4 | **0** (4 stopped and reported blocked, 1 went around and arrived) |
+| Contact steps, all phases | 533 | **0** |
+| Own-map goals arrived | 22/32 | 20/37 |
+| Misses plausibly caused by the guard's map marks | — | 3 of 17 (2 replan budget, 1 lost clearance) |
+| Cells written on open floor | — | 1,107 of 4,712 (23 %) |
+
+Most of the drop in arrival comes from localisation (10 drift misses, 4 from one
+VSLAM failure). The guard's false marks are the cost to reduce next: write only
+cells near the planned path instead of everything within 1 m.
+
+## Rejected camera-only variants (plane-parallax floor test)
+
+Both ran the map's plane-parallax floor test every 0.3 s between the current frame
+and a keyframe with ≥ 4 cm baseline. The code is in git history (commit `bda4e0f`).
+
+* **Write obstacle bases that two successive probes agree on:** 83 cells written
+  on open floor in one run (24 events in 50 probes); later goals became
+  unreachable. Offline, the rule "two probes agree" gave 13–63 false cells per
+  scenario. The strictest rule tried (clusters of ≥ 8 points confirmed by 3
+  probes) still gave 4 false cells in each 135° scenario and missed the box in all
+  four.
+* **Drive only where the floor ahead was just verified:** 4 of 5 ordinary
+  open-floor trips ended `path_ahead_not_verified`; with the box ahead the band
+  still verified at 0.45–0.60, and one of two scenarios ended in contact.
+
+At 0.3–0.5 m the parallax test is not discriminative enough for a per-frame
+decision. The depth model is.
+
+## Limits
+
+- About 23 % of the cells written into the map are on open floor.
+- Simulation renders only; the model has not seen this robot's real camera.
+- About 0.2 s per frame on 2 CPU cores is fine in lockstep but would need
+  acceleration on hardware.
+- The scale fit assumes a flat floor is visible below the obstacle. A wide object
+  filling the lower image can corrupt the fit.
+- Objects lower than 5 cm are not detected.

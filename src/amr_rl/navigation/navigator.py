@@ -37,7 +37,7 @@ class Navigator:
     def __init__(self, planner: Planner | None = None, config: FollowerConfig | None = None):
         self.planner = planner or Planner()
         self.cfg = config or FollowerConfig()
-        self.guard = None  # optional NearFieldGuard (speed gate on freshly verified floor)
+        self.guard = None  # optional DepthGuard (navigation/near_field.py): stops for new obstacles
         self.reset()
 
     def reset(self):
@@ -125,8 +125,6 @@ class Navigator:
                 try:
                     self.path = self._replan(grid, pose)
                     self.index = 1
-                    if self.guard is not None:
-                        self.guard.reset()
                 except GoalRejected as error:
                     self.status, self.reason = "blocked", error.reason
                     return 0.0, 0.0
@@ -138,6 +136,8 @@ class Navigator:
         # Advance the carrot along the path.
         while self.index < len(self.path) - 1 and np.linalg.norm(self.path[self.index] - pose[:2]) < self.cfg.lookahead:
             self.index += 1
+        if self.guard is not None:
+            self.guard.set_path_ahead(self._path_points(grid, pose, 0.0, self.guard.cfg.look + 0.1))
         target = self.path[min(self.index, len(self.path) - 1)]
         d = target - np.array([x, y])
         heading_err = wrap(math.atan2(d[1], d[0]) - th)
@@ -148,26 +148,16 @@ class Navigator:
         v = self.cfg.v_max * max(0.25, math.cos(heading_err)) * min(1.0, dist_goal / 0.35 + 0.15)
         w = float(np.clip(2.2 * heading_err, -self.cfg.w_max, self.cfg.w_max))
         if self.guard is not None:
-            lo, hi = self.guard.cfg.band
-            ahead = self._path_points(grid, pose, lo, min(hi, max(dist_goal - 0.05, lo)))
-            if len(ahead):
-                n = np.array([-math.sin(th), math.cos(th)])
-                hw = self.guard.cfg.band_halfwidth
-                band = np.vstack([ahead + k * hw * n[None] for k in (-1.0, -0.5, 0.0, 0.5, 1.0)])
-            else:
-                band = np.zeros((0, 2))
-            self.guard.set_band(band)
-            if len(band):
-                limit, hold, timed_out = self.guard.speed_limit(now)
-                if timed_out:
-                    self.status, self.reason = "blocked", "path_ahead_not_verified"
-                    self.holding = True
-                    return 0.0, 0.0
-                if hold:
-                    self.holding = True
-                    return 0.0, 0.0
-                if limit is not None:
-                    v = min(v, limit)
+            limit, hold, timed_out = self.guard.speed_limit(now)
+            if timed_out:
+                self.status, self.reason = "blocked", "obstacle_ahead"
+                self.holding = True
+                return 0.0, 0.0
+            if hold:
+                self.holding = True
+                return 0.0, 0.0
+            if limit is not None:
+                v = min(v, limit)
         return float(v), w
 
     def _replan(self, grid, pose):

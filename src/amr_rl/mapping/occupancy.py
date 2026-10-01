@@ -204,12 +204,10 @@ class FloorEvidenceMapper:
         self.stats["skipped"][reason] = self.stats["skipped"].get(reason, 0) + 1
         return {"updated": False, "reason": reason}
 
-    def update(self, ref, cur, *, defer_bases=False, commit_free=True):
+    def update(self, ref, cur, *, defer_bases=False):
         """Accumulate evidence from keyframe ``ref`` into keyframe ``cur``'s view.
         With ``defer_bases`` the obstacle-base hits are returned (``base_xy``) instead
-        of applied, so the caller can require agreement between pairs. With
-        ``commit_free=False`` nothing is written to the grid: floor points are returned
-        as ``free_xy`` (used by the near-field guard, which runs between keyframes)."""
+        of applied, so the caller can require agreement between pairs."""
         if ref.gray is None or cur.gray is None:
             return self._skip("missing_images")
         c_ref = self.model.T_world_cam(ref.pose)[:3, 3]
@@ -272,20 +270,15 @@ class FloorEvidenceMapper:
             for u, base_v in bases:  # bases are sampled every 2nd column: cover u..u+1
                 above[:base_v + 1, u:u + 2] = True
             free_mask &= ~above
-        if commit_free:
-            free_cells = self.grid.add_hits(ground_xy[free_mask], self.grid.cfg.free_hit,
-                                            min_count=self.cfg.min_floor_pixels_per_cell)
-        else:
-            free_cells = 0
+        free_cells = self.grid.add_hits(ground_xy[free_mask], self.grid.cfg.free_hit,
+                                        min_count=self.cfg.min_floor_pixels_per_cell)
         base_xy = ground_xy[bases[:, 1], bases[:, 0]] if len(bases) else np.zeros((0, 2))
-        if defer_bases or not commit_free:
+        if defer_bases:
             occ_cells = 0
         else:
             occ_cells = self.grid.add_hits(base_xy, self.grid.cfg.occ_hit)
-        if commit_free:
-            self.stats["updates"] += 1
-        out_free = None if commit_free else ground_xy[free_mask]
-        return {"updated": True, "free_xy": out_free, "free_cells": free_cells, "occupied_cells": occ_cells, "base_xy": base_xy,
+        self.stats["updates"] += 1
+        return {"updated": True, "free_cells": free_cells, "occupied_cells": occ_cells, "base_xy": base_xy,
                 "floor_pixels": int(free_mask.sum()), "nonfloor_pixels": int(nonfloor.sum()),
                 "floor_mask": floor, "nonfloor_mask": nonfloor}
 

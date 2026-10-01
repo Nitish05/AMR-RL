@@ -21,6 +21,9 @@ dependencies = [
 simulation = ["genesis-world[render]==1.3.2", "torch>=2.7,<3"]
 studio = ["genesis-studio-api==0.2.0"]
 dev = ["pytest>=8.3,<9", "ruff>=0.6,<1"]
+# Near-field obstacle guard (monocular depth). Weights are fetched separately into the
+# user's Hugging Face cache (scripts/amr.sh fetch-depth-model), never into the repo.
+depth = ["torch>=2.7,<3", "transformers>=4.45"]
 
 [project.scripts]
 amr-rl-app = "amr_rl.app:main"

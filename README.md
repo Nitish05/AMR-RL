@@ -56,9 +56,9 @@ tables with every denominator are in
 | Does it avoid what hurt it? | **Yes, 14/14 learned runs.** It saw the red panel once per run and never went back to that fixture or to a duplicate of it. (In round 1 a duplicate identity was re-targeted; duplicates are now merged.) |
 | Does it adapt when the rules change? | **Yes, 4/4 informative runs.** Three failed tries of the old option, then it found the new one 100–300 s after the swap. The 2 seed-0 runs are uninformative because seed 0 never learned the old option. |
 | Is it better than simple baselines? | **Not shown.** Baselines ran on seed 0 only, and seed 0 is the learned policy's failure case: it never completed an interaction with the rewarding fixture. Total valence: nearest 2.0, random 0.2, learned 0.2, fixed 0.0. On seeds 1–2 the learned policy got 0.57 and 0.54 per outcome, but with no baselines to compare. A control on the round-1 map with the same code learned normally on seed 0, so the failure depends on the map. |
-| Can it reach goals in its own map? | **22/32 (69 %)**, up from 5/16. home_a 8/8, heldout_c 7/8, home_a_dim 4/8, heldout_b 3/8. In 3 of the 12 runs the robot was not localised when goals began, so none could be sampled (22/44 if those count as failures). |
+| Can it reach goals in its own map? | **20/37 (54 %)** in the latest run with the depth guard; 22/32 (69 %) in round 2; 5/16 in round 1. Most misses are localisation drift (the robot thinks it arrived but is 16–76 cm off); 3 of 17 may come from the guard's false obstacle marks. In 2 of 12 runs the robot was not localised when goals began. |
 | Does it refuse goals it cannot justify? | **Yes, 36/36.** Unknown space is never treated as free. |
-| Does it touch things? | **Never while exploring** (0 contacts in 12 × 300 s). **But 4 of the 5 box-on-route tests ended in contact**, and there were 2 bench contacts during recovery turns. In learning runs: 0 unintended contacts (round 1: 7). |
+| Does it touch things? | **No contacts in the latest 12 navigation runs**, including all 5 box-on-route tests that ran (round 2: 4 of 5 ended in contact). A monocular depth model now stops the robot for objects its map doesn't know about ([details](docs/results/near-field-guard.md)). In learning runs: 0 unintended contacts (round 1: 7; learning not yet re-run with the guard). |
 
 ![Valence per outcome by seed](docs/media/policy-comparison.png)
 
@@ -179,7 +179,7 @@ deliberately impossible), four goals sampled from the *interior* of the robot's
 own certified map, a camera blackout during a goal, and a 35 cm box placed on
 the robot's own planned route. When the robot is lost and its bounded recovery
 has given up, the evaluator turns it slowly by hand (counted). Arrival means
-≤ 0.25 m from the true goal **and** the navigator reporting arrival. `home_a`
+≤ 0.15 m from the true goal **and** the navigator reporting arrival. `home_a`
 was used for development; the other three rooms were never used for tuning.
 
 ![Estimated maps after 300 s of exploration](docs/media/nav-maps.png)
@@ -187,36 +187,41 @@ was used for development; the other three rooms were never used for tuning.
 *Seed 0 maps. Light = certified free, dark = unknown or occupied, blue =
 estimated trajectory, rings = detected fixtures.*
 
+Latest run (round 3, with the near-field depth guard), 3 seeds per room:
+
 | Room | Split | Own-map goals arrived | Impossible goals rejected | ATE cm (3 seeds) | Worst error cm | Free coverage | Contact episodes |
 |---|---|---|---|---|---|---|---|
-| home_a | development | 8/8 | 9/9 | 0.4–2.9 | 6.9 | 31–41 % | 3 |
-| heldout_b | held-out layout | 3/8 | 9/9 | 2.0–16.4 | 27.7 | 29–33 % | 0 |
-| heldout_c | held-out appearance | 7/8 | 9/9 | 3.0–17.5 | 45.0 | 71–73 % | 4 |
-| home_a_dim | held-out lighting | 4/8 | 9/9 | 0.9–4.9 | 9.3 | 34–43 % | 1 |
+| home_a | development | 7/8 | 9/9 | 1.9–2.8 | 5.9 | 46–53 % | 0 |
+| heldout_b | held-out layout | 4/9 | 9/9 | 4.9–14.6 | 44.6 | 27–28 % | 0 |
+| heldout_c | held-out appearance | 1/8 | 9/9 | 1.3–8.3 | 14.6 | 61–72 % | 0 |
+| home_a_dim | held-out lighting | 8/12 | 9/9 | 1.0–4.7 | 7.3 | 35–40 % | 0 |
 
-*ATE: absolute trajectory error (RMS) against ground truth. All contact
-episodes were in the fault phase; none while exploring.*
+*ATE: absolute trajectory error (RMS) against ground truth. Round 2 (no guard)
+reached 22/32 own-map goals and had 8 contact episodes; see
+[docs/NAVIGATION_RESULTS.md](docs/NAVIGATION_RESULTS.md).*
 
 **Reading these results:**
 
-* **Arrival improved from 5/16 to 22/32.** Round 2 added goal snapping (12 cm)
-  when live evidence removes a goal's clearance, fixed periodic path
-  validation, and made VSLAM fail safely: it detects a frozen estimate within
-  1.2 s, drops landmarks created just before a loss, and accepts a
-  relocalisation only if it agrees with dead reckoning. On a 7-scenario VSLAM
-  benchmark, mean error fell from 9.7 to 4.9 cm
+* **Objects placed on the route.** In round 2, 4 of the 5 box-on-route tests
+  ended in contact: the map needs several snapshots taken while moving to
+  overturn "this floor is clear", and a turn on the spot gives none. A monocular
+  depth model (Depth Anything V2 Small, Apache-2.0, ~0.2 s per frame on 2 CPU
+  cores) now checks the path ahead every 0.3 s, scaled to metres
+  by the visible floor. With it: **0 of 5 box tests ended in contact** (4
+  stopped and reported blocked, 1 went around and arrived), and no contact
+  anywhere in 12 runs ([details](docs/results/near-field-guard.md)).
+* **Arrival: 20/37, against 22/32 in round 2.** Most misses are localisation
+  drift (10 goals where the robot believed it had arrived but was 16–76 cm off)
+  or one VSLAM failure (4 goals). 3 misses may come from the guard: about 23 %
+  of the cells it marks as obstacles are on open floor, which can cut certified
+  routes. That is the guard's main cost and the next thing to reduce.
+* **Earlier VSLAM work still holds:** frozen-estimate detection, landmark
+  purging on loss and dead-reckoning-gated relocalisation cut mean error on a
+  7-scenario benchmark from 9.7 to 4.9 cm
   ([docs/results/vslam-benchmark.md](docs/results/vslam-benchmark.md)).
-* **Remaining arrival failures** come from wrong relocalisations (10–20 cm),
-  heading errors during in-place rotation in the held-out layout and
-  appearance rooms, and three runs where the robot was not localised when the
-  goals began.
-* **Dynamic obstacles are the weak point.** The box was placed on the route in
-  5 tests that ran; 4 ended in contact (6 episodes). The box then filled the
-  camera view and tracking was lost. The other 2 contacts were with a bench
-  during a recovery turn that started from a pose already 48 cm wrong.
-* **Blackout handling works:** in all 7 tests that ran, tracking loss revoked
+* **Blackout handling works:** in all 5 tests that ran, tracking loss revoked
   motion, bounded recovery relocalised the robot, and it was re-enabled
-  explicitly; 5 of 7 reached the goal. Skipped tests (no reachable start/end
+  explicitly; 4 of 5 reached the goal. Skipped tests (no reachable start/end
   pair) stay in the denominator.
 
 ---
@@ -300,7 +305,10 @@ The full status of every capability is in
 
 **Known limitations**
 
-* **Newly placed obstacles:** 4 of 5 box-on-route tests ended in contact.
+* **Newly placed obstacles:** handled by the depth guard in simulation (0/5
+  box tests in contact), but about 23 % of the cells it marks are on open floor,
+  and the model has only seen simulated images.
+* **Localisation drift in held-out rooms** is now the main reason goals are missed.
 * **Relocalisation:** wrong fixes of 10–20 cm, heading errors during in-place
   rotation, and no way to relocalise while stationary once recovery is used up.
 * **Tracking near tall objects:** approaching or nudging the cylinder can blind
@@ -316,11 +324,9 @@ The full status of every capability is in
 
 **Next gates**
 
-1. **Navigation reliability:** detect a newly placed obstacle before contact (two
-   camera-only guards were tried and rejected, see
-   [docs/results/near-field-guard.md](docs/results/near-field-guard.md)), catch
-   confidently wrong poses before a recovery turn, reject wrong relocalisations,
-   and relocalise while stationary.
+1. **Navigation reliability:** reduce the depth guard's false obstacle marks
+   (write only cells near the planned path), cut localisation drift in held-out
+   rooms, reject wrong relocalisations, and relocalise while stationary.
 2. **Statistical learning evaluation:** 10 or more seeds with randomised start
    poses and fixture placements, baselines on every seed, and reporting of
    distributions.
@@ -346,8 +352,10 @@ used for all evidence; on macOS, Genesis uses its Metal/CPU backends.
 
 ```bash
 git clone https://github.com/Nitish05/AMR-RL.git && cd AMR-RL
-scripts/amr.sh setup                    # isolated .venv: genesis-world 1.3.2, torch, opencv, ...
-scripts/amr.sh test                     # 249 tests + ruff + UI script checks (fast, no simulation)
+scripts/amr.sh setup                    # isolated .venv: genesis-world 1.3.2, torch, transformers, opencv, ...
+scripts/amr.sh fetch-depth-model        # optional: depth model for the near-field guard (~100 MB, Apache-2.0,
+                                        # into the Hugging Face cache, not the repo); without it the guard is off
+scripts/amr.sh test                     # 256 tests + ruff + UI script checks (fast, no simulation)
 RUN_GENESIS=1 scripts/amr.sh test-sim   # real Genesis checks: body, wheels, camera, screen, fixtures
 
 # Operator console (loopback only). Autonomy starts DISABLED; press "Enable autonomy".

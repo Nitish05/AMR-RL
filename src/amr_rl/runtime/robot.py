@@ -27,10 +27,15 @@ from ..learning.memory import ExperienceMemory, LearningConfig
 from ..mapping.occupancy import OCCUPIED, FloorEvidenceMapper, OccupancyGrid
 from ..mapping.render import render_map
 from ..navigation.navigator import Navigator
-from ..navigation.near_field import NearFieldGuard
+from ..navigation.near_field import DepthGuard
 from ..navigation.planner import Planner, PlannerConfig
 from ..perception.camera_model import CameraModel
 from ..perception.entities import FixtureDetector
+from ..perception.near_depth import MODEL_ID as DEPTH_MODEL_ID
+from ..perception.near_depth import MODEL_REVISION as DEPTH_MODEL_REVISION
+from ..perception.near_depth import LazyBackend as LazyDepthBackend
+from ..perception.near_depth import MonoDepthObstacles
+from ..perception.near_depth import model_available as depth_model_available
 from ..perception.semantic import SemanticWorker
 from ..perception.vslam import PREDICTED, TRACKING, PlanarVSLAM, VSLAMConfig
 
@@ -48,7 +53,10 @@ class RuntimeConfig:
     semantic: bool = True
     audit_images: bool = False
     seed: int = 0
-    near_field_guard: bool = False  # experimental, not good enough to enable (navigation/near_field.py)
+    # Stop for objects placed on the route (navigation/near_field.py). Needs the optional
+    # depth model in the local cache (scripts/amr.sh fetch-depth-model); without it the
+    # robot runs without this guard and reports so in its state.
+    near_field_guard: bool = True
 
 
 class RobotRuntime:
@@ -71,7 +79,15 @@ class RobotRuntime:
         self.mapper = FloorEvidenceMapper(self.model, self.grid)
         self.planner = Planner(PlannerConfig(footprint_radius=spec.footprint_radius))
         self.nav = Navigator(self.planner)
-        self.guard = NearFieldGuard(self.mapper, self.grid) if self.cfg.near_field_guard else None
+        self.guard = None
+        self.guard_status = "disabled"
+        if self.cfg.near_field_guard:
+            if not depth_model_available():
+                self.guard_status = "unavailable: depth model not in the local cache"
+            else:
+                self.guard = DepthGuard(MonoDepthObstacles(self.model, backend=LazyDepthBackend()), self.grid,
+                                        self.planner.cfg.footprint_radius)
+                self.guard_status = f"active ({DEPTH_MODEL_ID}@{DEPTH_MODEL_REVISION[:8]})"
         self.nav.guard = self.guard
         self.supervisor = Supervisor(backend, self.cfg.supervisor, wall_clock=wall_clock or time.monotonic)
         self.detector = FixtureDetector(self.model)
@@ -157,8 +173,7 @@ class RobotRuntime:
                     self.mapper.add_landmark_obstacles(lm.pos[idx], low=0.10)
                 self._frontier_cache = (None, [])
             if self.guard is not None and self.nav.status == "following":
-                self.guard.maybe_probe(frame.timestamp, self.pose, self.slam.keyframes,
-                                       getattr(self.slam, "last_features", None))
+                self.guard.maybe_detect(frame.timestamp, self.pose, frame.rgb)
         elif status == PREDICTED and result.pose is not None:
             # Bounded dead reckoning: usable only by bounded primitives, never for mapping.
             self.pose, self.sigma = result.pose, result.position_sigma
@@ -575,7 +590,10 @@ class RobotRuntime:
             "recent_outcomes": list(reversed(self.recent_outcomes[-8:])),
             "learning_updates": list(reversed(self.learning_updates[-8:])),
             "motivation": self.motivation.snapshot(),
-            "navigation": self.nav.snapshot(),
+            "navigation": {**self.nav.snapshot(), "near_field_guard": {
+                "status": self.guard_status,
+                "free_run_m": None if self.guard is None else self.guard.free_run,
+                **({} if self.guard is None else self.guard.stats)}},
             "trajectory": self.trajectory[-600:],
             "memory": {"agent_id": self.memory.agent_id, "db": self.memory.path, **self.memory.counts()},
             "map": {**self.grid.counts(), "map_version": self.grid.map_version,

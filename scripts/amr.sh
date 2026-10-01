@@ -15,7 +15,12 @@ case "$cmd" in
     # Isolated environment for AMR-RL only (does not touch BB8-RL or Studio envs).
     python3.12 -m venv "$ROOT/.venv"
     "$ROOT/.venv/bin/python" -m pip install --upgrade pip
-    "$ROOT/.venv/bin/python" -m pip install -e ".[simulation,dev]"
+    "$ROOT/.venv/bin/python" -m pip install -e ".[simulation,dev,depth]"
+    ;;
+  fetch-depth-model)
+    # Downloads the pinned Depth Anything V2 Small weights (Apache-2.0, ~100 MB) into the
+    # Hugging Face cache outside the repository. Without them the near-field guard is off.
+    "$PY" -c "from amr_rl.perception.near_depth import load_backend; import sys; sys.exit(0 if load_backend(allow_download=True) else 1)"
     ;;
   test)
     "$PY" -m pytest -q -p no:cacheprovider -m "not genesis" "$@"
@@ -42,6 +47,6 @@ case "$cmd" in
     "$PY" scripts/eval/learning.py "$@"
     ;;
   *)
-    echo "usage: scripts/amr.sh {setup|test|test-sim|generate-robot|app|map|eval-nav|eval-learning} [args]"
+    echo "usage: scripts/amr.sh {setup|fetch-depth-model|test|test-sim|generate-robot|app|map|eval-nav|eval-learning} [args]"
     ;;
 esac
