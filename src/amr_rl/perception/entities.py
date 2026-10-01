@@ -77,6 +77,7 @@ class Detection:
     width_m: float | None = None
     height_m: float | None = None
     bearing: float | None = None  # radians, CCW-positive in the robot frame
+    contact_range_m: float | None = None  # range to the nearest visible floor contact (front edge)
 
     @property
     def state_token(self) -> str:
@@ -182,6 +183,7 @@ class FixtureDetector:
         x0, y0, x1, y1 = det.bbox
         det.width_m = (x1 - x0) * slant / f
         det.height_m = (y1 - y0) * slant / self.model.K[1, 1]
+        det.contact_range_m = float(np.linalg.norm(contact[:2]))
         ray = contact[:2] - cam[:2]
         ray /= max(np.linalg.norm(ray), 1e-6)
         # A round silhouette's lowest point lies under its centre; a box/cylinder's

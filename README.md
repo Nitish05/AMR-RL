@@ -213,7 +213,7 @@ episodes were in the fault phase; none while exploring.*
 * **Dynamic obstacles are the weak point.** The box was placed on the route in
   5 tests that ran; 4 ended in contact (6 episodes). The box then filled the
   camera view and tracking was lost. The other 2 contacts were with a bench
-  during a recovery or operator turn, which the turning check does not cover.
+  during a recovery turn that started from a pose already 48 cm wrong.
 * **Blackout handling works:** in all 7 tests that ran, tracking loss revoked
   motion, bounded recovery relocalised the robot, and it was re-enabled
   explicitly; 5 of 7 reached the goal. Skipped tests (no reachable start/end
@@ -276,6 +276,10 @@ compare little:
 The fixed baseline nudged grump 53 times and never touched it: the robot's
 estimate of the box's position was 12 cm too near, so the nudge stopped about
 10 cm short. That is a limitation of the nudge, not evidence about the rules.
+It is now fixed: the creep uses the measured range to the object's nearest floor
+contact, and in a static probe boxes seen corner-on are reached in 27/27 views
+instead of 21/27 ([docs/results/nudge-reach.md](docs/results/nudge-reach.md)).
+The learning evaluation has not been re-run with the fix.
 
 A **control** ran history_a and history_b on seed 0 with the same code and the
 round-1 map. There, history_a learned bloom (4 yellows, total valence 3.0) and
@@ -303,8 +307,8 @@ The full status of every capability is in
   the camera; this caused the seed-0 learning failure.
 * **Map quality:** 29–73 % coverage in 300 s; the floor test still lets a few
   hits inside obstacles become free (up to 103 deep false-free cells in one run).
-* **Nudge reach:** creep is planned from the estimated centre, which is 10+ cm
-  off for boxes seen at an angle.
+* **Nudge reach (fixed, not re-evaluated):** the creep used to be planned from the
+  estimated centre, which is 10+ cm off for boxes seen at an angle.
 * **Evidence strength:** 3 seeds at most, one arena, fixed fixture positions;
   baselines and the inert and noisy worlds on one seed.
 * **Perception generality:** the detector relies on uniformly painted objects
@@ -312,16 +316,23 @@ The full status of every capability is in
 
 **Next gates**
 
-1. **Navigation reliability:** detect a newly placed obstacle before contact,
-   cover recovery and operator turns with the turning check, reject wrong
-   relocalisations, and relocalise while stationary.
+1. **Navigation reliability:** detect a newly placed obstacle before contact (two
+   camera-only guards were tried and rejected, see
+   [docs/results/near-field-guard.md](docs/results/near-field-guard.md)), catch
+   confidently wrong poses before a recovery turn, reject wrong relocalisations,
+   and relocalise while stationary.
 2. **Statistical learning evaluation:** 10 or more seeds with randomised start
    poses and fixture placements, baselines on every seed, and reporting of
    distributions.
-3. **Interaction:** nudge creep from the measured contact edge; keeping
+3. **Interaction:** re-run learning with the nudge fix; keeping
    tracking beside tall objects.
 4. **Perception:** a learned detector behind the same contract (pixels in,
-   labelled regions out; never coordinates or motor commands).
+   labelled regions out; never coordinates or motor commands). A survey of
+   VLMs/VLAs for this robot ([docs/research/VLM_VLA_SURVEY.md](docs/research/VLM_VLA_SURVEY.md))
+   found no single model that can run the whole stack. Small open VLMs
+   (Qwen3-VL-2B, Moondream 2) are the best fit for detection and outcome
+   judging. A monocular depth model is a candidate near-field cue for newly placed
+   obstacles.
 5. **Hardware:** a drive adapter behind the same supervisor, a physical
    emergency stop, real camera calibration, and perception running off the
    control thread in real time.

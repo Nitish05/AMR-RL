@@ -283,6 +283,10 @@ def evaluate_world(name, out_root, map_seconds, seed):
         "supervisor_log": session.runtime.supervisor.log[-80:], "all_contacts": session.contacts,
         "final_trajectory": trajectory_metrics(session.truth),
         "timing": "lockstep simulation (physics paused during perception)",
+        "guard": None if session.runtime.guard is None else {
+            **session.runtime.guard.stats,
+            **evaluator.score_guard(session.world, session.runtime.grid, session.origin,
+                                    session.runtime.guard.asserted_log)},
     }
     dump(run_dir / "result.json", result)
     session.save_summary()

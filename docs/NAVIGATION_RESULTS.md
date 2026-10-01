@@ -37,9 +37,11 @@ Evidence: `work/evidence/navigation-20260930-154854` (12 runs, 0 crashed). Regen
 * **Contacts: none while exploring (0 in 12 runs × 300 s).** 8 contact episodes
   in the fault phase: **6 with the box placed on the route** (4 of the 5
   obstacle tests that ran ended in contact; the box then filled the camera view
-  and tracking was lost) and 2 with the bench in heldout_c while not navigating
-  (during recovery or the evaluator's manual turn, which the turning check does
-  not cover).
+  and tracking was lost) and 2 with the bench in heldout_c seed 1, both during
+  bounded recovery. Recovery rotates in place only if the last good pose had
+  footprint clearance, and it did on the map, but that pose was already 48 cm
+  wrong: VSLAM was confidently off before it lost tracking. (An earlier version
+  of this page blamed a gap in the turning check; the trace shows otherwise.)
 * **Camera blackout:** 7 tests ran (5 skipped: no reachable start/end pair);
   in every one tracking loss revoked motion, bounded recovery relocalised and the
   operator re-enabled; 5 reached the goal.

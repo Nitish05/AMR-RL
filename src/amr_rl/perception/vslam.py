@@ -370,6 +370,7 @@ class PlanarVSLAM:
     def track(self, rgb: np.ndarray, timestamp: float, commanded=None) -> TrackResult:
         self.frames += 1
         gray, pts, desc = self.features(rgb)
+        self.last_features = (gray, pts, desc)  # read by the near-field guard
         dt = 0.0 if self.last_time is None else max(0.0, timestamp - self.last_time)
         self.last_time = timestamp
         self._now = timestamp

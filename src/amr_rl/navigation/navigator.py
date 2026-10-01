@@ -37,6 +37,7 @@ class Navigator:
     def __init__(self, planner: Planner | None = None, config: FollowerConfig | None = None):
         self.planner = planner or Planner()
         self.cfg = config or FollowerConfig()
+        self.guard = None  # optional NearFieldGuard (speed gate on freshly verified floor)
         self.reset()
 
     def reset(self):
@@ -69,6 +70,8 @@ class Navigator:
         self.original_goal = self.goal.copy()
         self.index, self.status, self.reason = 1, "following", ""
         self.last_plan = now
+        if self.guard is not None:
+            self.guard.reset()
         return True
 
     def reset_goal_state(self):
@@ -122,6 +125,8 @@ class Navigator:
                 try:
                     self.path = self._replan(grid, pose)
                     self.index = 1
+                    if self.guard is not None:
+                        self.guard.reset()
                 except GoalRejected as error:
                     self.status, self.reason = "blocked", error.reason
                     return 0.0, 0.0
@@ -142,6 +147,27 @@ class Navigator:
                                                                       self.cfg.w_max)))
         v = self.cfg.v_max * max(0.25, math.cos(heading_err)) * min(1.0, dist_goal / 0.35 + 0.15)
         w = float(np.clip(2.2 * heading_err, -self.cfg.w_max, self.cfg.w_max))
+        if self.guard is not None:
+            lo, hi = self.guard.cfg.band
+            ahead = self._path_points(grid, pose, lo, min(hi, max(dist_goal - 0.05, lo)))
+            if len(ahead):
+                n = np.array([-math.sin(th), math.cos(th)])
+                hw = self.guard.cfg.band_halfwidth
+                band = np.vstack([ahead + k * hw * n[None] for k in (-1.0, -0.5, 0.0, 0.5, 1.0)])
+            else:
+                band = np.zeros((0, 2))
+            self.guard.set_band(band)
+            if len(band):
+                limit, hold, timed_out = self.guard.speed_limit(now)
+                if timed_out:
+                    self.status, self.reason = "blocked", "path_ahead_not_verified"
+                    self.holding = True
+                    return 0.0, 0.0
+                if hold:
+                    self.holding = True
+                    return 0.0, 0.0
+                if limit is not None:
+                    v = min(v, limit)
         return float(v), w
 
     def _replan(self, grid, pose):
@@ -159,11 +185,10 @@ class Navigator:
             self.goal_snaps += 1
             return path
 
-    def _corridor_clear(self, grid, pose):
-        """Is the certified path still certified for the next ``corridor`` metres?
-
-        Samples along the planned polyline (not the robot->carrot chord: the robot
-        may legitimately sit inside the clearance band after a start snap)."""
+    def _path_points(self, grid, pose, lo, hi):
+        """Points sampled along the planned polyline (not the robot->carrot chord: the
+        robot may legitimately sit inside the clearance band after a start snap) whose
+        distance from the robot lies in [lo, hi]."""
         here = np.asarray(pose[:2], float)
         verts = self.path[max(self.index - 1, 0):]
         pts = []
@@ -171,13 +196,17 @@ class Navigator:
             n = max(1, int(np.linalg.norm(b - a) / (grid.cfg.resolution / 2)))
             seg = a + (b - a) * (np.arange(1, n + 1)[:, None] / n)
             pts.append(seg)
-            if np.linalg.norm(b - here) > self.cfg.corridor + 0.3:
+            if np.linalg.norm(b - here) > hi + 0.3:
                 break
         if not pts:
-            return True
+            return np.zeros((0, 2))
         pts = np.vstack(pts)
         d = np.linalg.norm(pts - here[None], axis=1)
-        pts = pts[(d >= self.cfg.corridor_skip) & (d <= self.cfg.corridor)]
+        return pts[(d >= lo) & (d <= hi)]
+
+    def _corridor_clear(self, grid, pose):
+        """Is the certified path still certified for the next ``corridor`` metres?"""
+        pts = self._path_points(grid, pose, self.cfg.corridor_skip, self.cfg.corridor)
         return len(pts) == 0 or bool(self.planner.traversable_xy(grid, pts).all())
 
     def _turn_or_back_off(self, grid, pose, w):

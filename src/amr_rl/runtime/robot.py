@@ -27,6 +27,7 @@ from ..learning.memory import ExperienceMemory, LearningConfig
 from ..mapping.occupancy import OCCUPIED, FloorEvidenceMapper, OccupancyGrid
 from ..mapping.render import render_map
 from ..navigation.navigator import Navigator
+from ..navigation.near_field import NearFieldGuard
 from ..navigation.planner import Planner, PlannerConfig
 from ..perception.camera_model import CameraModel
 from ..perception.entities import FixtureDetector
@@ -47,6 +48,7 @@ class RuntimeConfig:
     semantic: bool = True
     audit_images: bool = False
     seed: int = 0
+    near_field_guard: bool = False  # experimental, not good enough to enable (navigation/near_field.py)
 
 
 class RobotRuntime:
@@ -69,6 +71,8 @@ class RobotRuntime:
         self.mapper = FloorEvidenceMapper(self.model, self.grid)
         self.planner = Planner(PlannerConfig(footprint_radius=spec.footprint_radius))
         self.nav = Navigator(self.planner)
+        self.guard = NearFieldGuard(self.mapper, self.grid) if self.cfg.near_field_guard else None
+        self.nav.guard = self.guard
         self.supervisor = Supervisor(backend, self.cfg.supervisor, wall_clock=wall_clock or time.monotonic)
         self.detector = FixtureDetector(self.model)
         self.memory = ExperienceMemory(memory_path, config=self.cfg.learning)
@@ -152,6 +156,9 @@ class RobotRuntime:
                     lm.marked[idx] = True
                     self.mapper.add_landmark_obstacles(lm.pos[idx], low=0.10)
                 self._frontier_cache = (None, [])
+            if self.guard is not None and self.nav.status == "following":
+                self.guard.maybe_probe(frame.timestamp, self.pose, self.slam.keyframes,
+                                       getattr(self.slam, "last_features", None))
         elif status == PREDICTED and result.pose is not None:
             # Bounded dead reckoning: usable only by bounded primitives, never for mapping.
             self.pose, self.sigma = result.pose, result.position_sigma

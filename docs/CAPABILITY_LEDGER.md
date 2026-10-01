@@ -88,10 +88,14 @@ with a `SUPERSEDED.md` note naming the bug and the fix.
    errors during in-place rotation; a robot that cannot relocalise while
    stationary once recovery is exhausted; detecting a newly placed obstacle
    before contact (4/5 tests ended in contact); false-free from the
-   plane-parallax floor test; the turning check does not cover recovery or
-   operator turns (2 bench contacts); tracking loss near tall fixtures (seed 0
-   learning); nudge creep computed from the estimated centre stops ~10 cm short
-   of boxes seen corner-on (fixed baseline: 0/53 nudges touched grump).
+   plane-parallax floor test; recovery turns that start from a confidently
+   wrong pose (2 bench contacts, pose 48 cm off); tracking loss near tall
+   fixtures (seed 0 learning). Two camera-only near-field guards for newly
+   placed obstacles were tried and rejected
+   ([results/near-field-guard.md](results/near-field-guard.md)). Fixed after
+   round 2, not yet re-evaluated end to end: nudge creep from the measured contact
+   edge (boxes seen corner-on: 21/27 → 27/27 reach,
+   [results/nudge-reach.md](results/nudge-reach.md)).
 
 1. **Hardware gate (not started).** Needs: a real drive adapter behind the same
    supervisor contract (and a physical E-stop independent of software), camera

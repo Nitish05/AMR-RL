@@ -273,3 +273,97 @@ def test_remembered_entities_are_hard_keepout_for_planning():
     assert np.min(np.linalg.norm(dense, axis=1)) >= 0.18 + 0.262
     assert grid.set_keepout([])  # entity forgotten/moved: space is free again
     assert planner.traversable_xy(grid, [[0.0, 0.3]])[0]
+
+
+class _FakeMapper:
+    """Stands in for FloorEvidenceMapper.update: returns preset floor/base points."""
+
+    def __init__(self):
+        self.base_xy = np.zeros((0, 2))
+        self.free_xy = np.zeros((0, 2))
+        self.calls = []
+
+    def update(self, ref, cur, *, defer_bases=False, commit_free=True):
+        self.calls.append((defer_bases, commit_free))
+        return {"updated": True, "base_xy": self.base_xy, "free_xy": self.free_xy}
+
+
+def _kf(t, pose):
+    from amr_rl.perception.vslam import Keyframe
+
+    return Keyframe(0, t, np.asarray(pose, float), np.zeros((0, 2)), np.zeros((0, 32), np.uint8),
+                    np.zeros(0, int), np.zeros((4, 4), np.uint8))
+
+
+def _frame():
+    return np.zeros((4, 4), np.uint8), np.zeros((0, 2)), np.zeros((0, 32), np.uint8)
+
+
+def _guarded_nav(grid):
+    from amr_rl.navigation.near_field import NearFieldGuard
+
+    mapper = _FakeMapper()
+    guard = NearFieldGuard(mapper, grid)
+    nav = Navigator()
+    nav.guard = guard
+    return nav, guard, mapper
+
+
+def _floor(x0, x1):
+    xs = np.arange(x0, x1, 0.025)
+    return np.array([(x, y) for x in xs for y in np.arange(-0.15, 0.16, 0.025)])
+
+
+def test_guard_creeps_until_the_band_ahead_is_freshly_seen_as_floor():
+    grid = grid_with_free([(-2.0, -0.5, 2.0, 0.5)])
+    nav, guard, mapper = _guarded_nav(grid)
+    pose = np.array([-1.0, 0.0, 0.0])
+    assert nav.set_goal(grid, pose, (1.2, 0.0), now=0.0)
+    v, _ = nav.step(grid, pose, 0.01, 0.1)
+    assert v == guard.cfg.creep_speed  # nothing verified since the map was made: creep
+    mapper.free_xy = _floor(-0.8, -0.3)
+    guard.maybe_probe(0.2, pose, [_kf(0.0, (-1.2, 0.0, 0.0))], _frame())
+    assert guard.last_fraction > 0.9 and mapper.calls[-1] == (True, False)  # never writes the map
+    v, _ = nav.step(grid, pose, 0.01, 0.3)
+    assert v > guard.cfg.creep_speed  # floor just seen ahead: full speed
+    v, _ = nav.step(grid, pose, 0.01, 0.2 + guard.cfg.verify_window + 0.2)
+    assert v == guard.cfg.creep_speed  # the look went stale
+
+
+def test_guard_holds_then_blocks_when_the_floor_ahead_cannot_be_seen():
+    """A box on the route hides the floor behind its face: the band cannot be verified
+    even though the old map says free, so the robot stops and the goal ends blocked."""
+    grid = grid_with_free([(-2.0, -0.5, 2.0, 0.5)])
+    nav, guard, mapper = _guarded_nav(grid)
+    pose = np.array([-1.0, 0.0, 0.0])
+    assert nav.set_goal(grid, pose, (1.2, 0.0), now=0.0)
+    nav.step(grid, pose, 0.01, 0.1)  # sets the band
+    mapper.free_xy = _floor(-0.8, -0.72)  # only the near edge of the band is floor
+    kfs = [_kf(0.0, (-1.2, 0.0, 0.0))]
+    guard.maybe_probe(0.5, pose, kfs, _frame())
+    v, _ = nav.step(grid, pose, 0.01, 0.55)
+    assert v == guard.cfg.creep_speed and not nav.holding  # one low probe: creep
+    guard.maybe_probe(0.85, pose, kfs, _frame())
+    assert nav.step(grid, pose, 0.01, 0.9) == (0.0, 0.0) and nav.holding
+    nav.step(grid, pose, 0.01, 0.9 + guard.cfg.hold_timeout + 0.1)
+    assert nav.status == "blocked" and nav.reason == "path_ahead_not_verified"
+
+
+def test_guard_skips_probes_without_baseline_and_rejected_variant_is_off():
+    from amr_rl.navigation.near_field import GuardConfig, NearFieldGuard
+
+    grid = grid_with_free([(-2.0, -0.5, 2.0, 0.5)])
+    guard = NearFieldGuard(_FakeMapper(), grid)
+    guard.maybe_probe(1.0, np.array([-0.6, 0.0, 0.0]), [_kf(0.0, (-0.61, 0.0, 0.0))], _frame())
+    assert guard.stats["probes"] == 0 and guard.stats["skipped"] == 1  # 1 cm: no parallax
+    assert GuardConfig().assert_obstacles is False
+
+
+def test_nudge_creep_uses_the_measured_contact_edge():
+    from amr_rl.behavior.activities import FRONT_EXTENT, MAX_CREEP, PUSH_DEPTH, nudge_creep
+
+    # A box seen corner-on was taken for round: its "centre" is its front edge. The old
+    # estimate (centre - radius) stopped ~10 cm short; the contact edge does not.
+    assert nudge_creep(0.40, 0.40, 0.11) == pytest.approx(0.40 - FRONT_EXTENT + PUSH_DEPTH)
+    assert nudge_creep(None, 0.40, 0.11) == pytest.approx(0.40 - 0.11 - FRONT_EXTENT + PUSH_DEPTH)
+    assert nudge_creep(0.10, 0.2, 0.1) == 0.0 and nudge_creep(2.0, 2.0, 0.1) == MAX_CREEP

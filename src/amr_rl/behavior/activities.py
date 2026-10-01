@@ -23,6 +23,24 @@ NUDGE_STANDOFF = (0.52, 0.47, 0.58)
 INVESTIGATE_STANDOFF = (0.9, 1.1, 1.3, 1.6, 1.9)
 FRONT_EXTENT = 0.14
 PUSH_DEPTH = 0.03  # engineered: how far past estimated contact a nudge pushes
+MAX_CREEP = 0.40
+
+
+def nudge_creep(contact_range: float | None, centre_range: float | None, radius: float) -> float:
+    """Forward distance a nudge creeps from where it stands.
+
+    Prefer the range to the nearest visible floor contact (a box's front edge, a
+    sphere's near-centre contact): it does not depend on guessing the object's shape.
+    The older estimate (centre range minus a radius) stopped ~10 cm short of boxes
+    seen corner-on, whose silhouette the detector took for round (fixed baseline,
+    round 2: 0/53 nudges touched grump). For a sphere the contact-edge estimate pushes
+    up to one radius deeper, which only rolls it further.
+    """
+    if contact_range is not None:
+        creep = contact_range - FRONT_EXTENT + PUSH_DEPTH
+    else:
+        creep = (centre_range if centre_range is not None else NUDGE_STANDOFF[0]) - (radius + FRONT_EXTENT) + PUSH_DEPTH
+    return float(np.clip(creep, 0.0, MAX_CREEP))
 
 
 class Activity:
@@ -357,7 +375,8 @@ class Engage(Activity):
             if det is not None and conf >= 0.6 and not det.partial and det.position is not None:
                 self.before.append({"token": det.state_token, "position": list(det.position),
                                     "frame_sha256": frame["raw_rgb_sha256"], "t": now,
-                                    "bearing": det.bearing, "range": det.range_m})
+                                    "bearing": det.bearing, "range": det.range_m,
+                                    "contact_range": det.contact_range_m})
                 self.appearance = rt.entity_appearance(self.target_entity)
             if len(self.before) >= 3 and self.before[-1]["t"] - self.before[0]["t"] >= 0.2:
                 tokens = [b["token"] for b in self.before[-3:]]
@@ -367,11 +386,12 @@ class Engage(Activity):
                     self.prediction = rt.memory.predict(self.target_entity, self.action, self.context, now)
                     self.phase, self.phase_until = "acting", now + 2.2
                     self.act_start_pose = np.array(rt.pose)
-                    rng = self.before[-1]["range"] or NUDGE_STANDOFF[0]
                     app = rt.entity_appearance(self.target_entity) or {}
                     size = min(app.get("width_m") or 0.2, 1.1 * (app.get("height_m") or 0.2))
                     radius = float(np.clip(size / 2, 0.05, 0.15))
-                    self.creep = float(np.clip(rng - (radius + FRONT_EXTENT) + PUSH_DEPTH, 0.0, 0.40))
+                    contacts = [b.get("contact_range") for b in self.before[-3:] if b.get("contact_range")]
+                    self.creep = nudge_creep(float(np.median(contacts)) if contacts else None,
+                                             self.before[-1]["range"], radius)
                     if self.action == "nudge":
                         self.phase_until = now + self.creep / 0.06 + 2.5
                     rt.memory.note_proposal(self.target_entity, self.action)

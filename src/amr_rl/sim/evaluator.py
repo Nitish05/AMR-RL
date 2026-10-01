@@ -119,3 +119,18 @@ def score_map(world, grid, origin_pose):
         "free_coverage": float((free & ~truth).sum() / max(1, (~truth).sum())),
         "occupied_on_truth": int(((cls == OCCUPIED) & truth).sum()),
     }
+
+
+def score_guard(world, grid, origin_pose, asserted_log, margin=0.1):
+    """Scoring only: where did the near-field guard assert fresh obstacles? Cells within
+    ``margin`` of true geometry count as justified; the rest lie on open floor."""
+    cells = set()
+    for _, xy in asserted_log:
+        if len(xy):
+            ix, iy = grid.to_cell(np.asarray(xy, float))
+            cells |= set(zip(ix.tolist(), iy.tolist()))
+    if not cells:
+        return {"asserted_cells": 0, "near_true_geometry": 0, "on_open_floor": 0}
+    near = true_obstacle_mask(world, grid, origin_pose, margin=margin)
+    on = sum(bool(near[y, x]) for x, y in cells if 0 <= x < grid.n and 0 <= y < grid.n)
+    return {"asserted_cells": len(cells), "near_true_geometry": int(on), "on_open_floor": len(cells) - int(on)}
