@@ -4,148 +4,224 @@ Evaluated separately from navigation ([NAVIGATION_RESULTS.md](NAVIGATION_RESULTS
 
 **Protocol** (`scripts/eval/learning.py`): every experiment starts from a FRESH
 agent memory in the arena (four engineered fixtures, rules hidden from the
-robot, [LEARNING.md](LEARNING.md)) using the same saved map, which the robot
-built itself from onboard RGB (`map-arena-20260929-225035`; built with the
-earlier mapping code, i.e. before frontier tiling and the navigation
-safeguards; a map rebuilt with current code was fragmented and is not used, see
-its `NOTE.md`). Every phase is a new process: autonomy starts disabled and is
-enabled only after the robot has relocalized from fresh images. Test phases
-after a restart use **inert** consequences so that what is measured is the
-choice made from memory, not a fresh reward. One seed and one start pose per
-experiment; the simulator is deterministic, so identical configurations give
-identical runs (`history_a` and `learned_standard` are the same configuration
-and match exactly).
+robot, [LEARNING.md](LEARNING.md)) and the same saved map, which the robot built
+itself from onboard RGB with the current code (`map-arena-20260930-122444`:
+420 s, ATE 1.4 cm, free coverage 60 %, 3 deep false-free cells). Seed *k*
+starts at a different pose (`ARENA_STARTS`), so the robot must relocalise
+against the saved map before any authority is granted. Every phase is a new
+process: autonomy starts disabled and is enabled only after relocalisation.
+Test phases after a restart use **inert** consequences, so what is measured is
+the choice made from memory, not a fresh reward. The simulator is
+deterministic: identical configurations give identical runs.
 
-Regenerate the tables: `python scripts/eval/report.py --learning work/evidence/learning-20260930-022340 work/evidence/learning-20260930-042009 --out <file>`.
+Round 2 ran **3 seeds** for history_a, history_b, no_memory and both reversal
+experiments, and **seed 0 only** for the baselines, the inert and the noisy
+world (30 phases, 0 crashes).
 
-## What was learned, and how it changed behaviour
+Evidence: `work/evidence/learning-20260930-154854`; control run
+`work/evidence/learning-control-oldmap`. Regenerate:
+`python scripts/eval/report.py --learning work/evidence/learning-20260930-154854 --out <file>`.
 
-* **Opposite histories → opposite choices after restart.** `history_a`
-  (standard rules: signalling bloom raises a yellow panel) learned
-  P(yellow | bloom, signal, no panel) = 0.90 from 8 weighted outcomes;
-  `history_b` (swapped: signalling stone raises yellow, bloom does nothing)
-  learned P(yellow | stone, signal) = 0.92. After a process restart (authority
-  not carried over; relocalized at 0.2 s; explicit enable), the first two
-  interactions were **bloom/signal ×2** for A and **stone/signal ×2** for B.
-  With **no memory**, the same start produced roller/signal and grump/signal
-  (uninformed, nearest-first by cost). This is the clearest evidence that
-  remembered, image-grounded outcomes change later choices.
-* **Aversion — partial, limited by identity fragmentation.** In every learned
-  run grump's red panel was observed once (`attach:red`, engineered valence −1);
-  that entity became *disliked*, an `avoid` activity followed, and that entity
-  was never engaged again. **However**, grump was also registered as a second,
-  duplicate identity (seen from another place with a slightly different
-  appearance), and the duplicate — having no bad history — was chosen again
-  in every learned run (history_a 1×, noisy 3×, reversal_late 4×,
-  reversal_early 5×). Every one of those attempts ended as a navigation
-  failure, so no second red panel occurred, but that was not due to learning.
-  Merging duplicate identities is on the next-gate list. (A superseded run also
-  showed the dependence on perception: a detector bug classified the red panel
-  as `none`; fixed and regression-tested.)
-* **Context dependence.** Signalling bloom while its panel is still raised
-  gives `none`; outcomes are stored under the visible context (`attach:none`
-  vs `attach:yellow`), so these do not erase the learned yellow response.
-* **Policy comparison (standard rules, same map and start).** Valence per
-  observed outcome: learned **0.45**, fixed 0.38, random 0.18, nearest
-  0.02. Total valence in 480 s: fixed 12.6, learned 5.0, random 3.0, nearest
-  0.6. The fixed baseline repeats whichever option sorts first by entity id;
-  in this run that was bloom/signal, the rewarding option, and it never rests.
-  The learned policy **idles 27 % of the time** because the engineered
-  stimulation need drops after useful outcomes; it is not a reward-rate
-  maximiser. Learned vs random: fewer aversive outcomes (1 vs 2), higher
-  valence (5.0 vs 3.0) from fewer attempts (19 vs 43).
-* **Reversal.** Late switch (after 10 outcomes, t = 360 s): three failed
-  bloom/signal tries, then stone/signal was tried and produced yellow 48 s
-  after the switch (2 yellows). Early switch (after 6 outcomes, t = 189 s): three
-  failed bloom/signal tries, then **no new useful option was found in the
-  remaining 590 s** (8 navigation failures, 5 unintended contact episodes, 11
-  operator re-enables in that run). Reversal adaptation: **1 of 2**.
-* **Settling.** Inert world: 7 outcomes in the first half, 2 in the second,
-  no useful outcomes; it stops probing but spends much of the time exploring
-  rather than idle (idle 17 %). Noisy world (bloom yellow with p = 0.5): 2
-  yellows from 6 bloom signals, then only 1 outcome in the second half — it
-  backed off bloom although its true expected value stayed positive
-  (change detection treated noise as change; a limitation).
+## Summary (round 2)
 
-## Safety and interventions during learning runs
+* **Restart persistence: 5/5.** In every run where training produced a liked
+  option, the first decision after a restart targeted that option (history_a
+  seeds 1–2 → bloom/signal; history_b seeds 0–2 → stone/signal). With no
+  memory, all three seeds chose roller/signal then grump/signal.
+  **But the decision was carried out on the intended fixture in only 3/5.** In
+  history_b seeds 0 and 1 the robot turned to the remembered stone, did not
+  confirm it in fresh images from where it stood, aborted (it never acts on
+  memory alone) and moved on to the next option, bloom.
+* **Aversion held in every learned run (14/14; the seed-0 runs share one
+  trajectory up to that point).** Grump's red panel was seen
+  exactly once per run; afterwards no activity targeted it or any entity
+  within 0.6 m of it (only `avoid`). In round 1 a duplicate identity of grump
+  was re-targeted in 4 learned runs; round 2 merges duplicates (15 merges in
+  total across runs) and that did not recur. The nearest-first baseline, which
+  ignores valence, did go back to it twice.
+* **Reversal: 4/4 informative runs adapted** (seeds 1–2). After the swap the
+  robot tried bloom/signal exactly 3 more times (the change detector's
+  minimum), stopped, and found the newly rewarding stone/signal
+  100–130 s (late swap) or 250–300 s (early swap) later; 6–10 yellows followed.
+  The seed-0 reversal runs are not informative: on seed 0 the robot never
+  learned bloom before the swap.
+* **Seed 0 is a failure case.** On seed 0 the robot never completed an
+  interaction with bloom under the standard rules: 4 approaches lost tracking
+  near it and 1 failed to plan. Its learned total valence was 0.2 (10
+  outcomes). This makes seed 0 useless for the inert/noisy/baseline
+  comparisons below.
+* **Map or code? The map.** A control ran history_a and history_b on seed 0
+  with the *same current code* but round 1's arena map. There, history_a
+  reached bloom (4 yellows, valence 3.0, 0.30 per outcome) and both restarts
+  chose the learned option (bloom/signal, stone/signal). The simulator is
+  deterministic and the map was the only changed input, so the seed-0 failure
+  comes from the map. It is not simply map quality: the current map scores
+  better on every measure (ATE 1.4 vs 4.1 cm, coverage 60 vs 49 %, deep
+  false-free 3 vs 11). Small differences in what the robot relocalises against
+  change where it loses tracking near the tall cylinder. See
+  [Control](#control-same-code-round-1-map).
+* **Baselines (seed 0 only):** total valence — nearest 2.0, random 0.2,
+  learned 0.2, fixed 0.0. **The learned policy did not beat the baselines on
+  seed 0**, the only seed with baselines. On seeds 1–2 it reached 0.57 and 0.54
+  valence per outcome, but there are no baselines for those seeds, so this
+  round does not establish a policy advantage.
+* **Fixed baseline found a nudge reach limit.** It nudged grump 53 times and
+  never touched it: the estimated grump position was 12 cm nearer than the
+  truth (consistent with the detector's shape heuristic treating the box as
+  round and placing its centre at its front edge), so the planned creep stopped about 10 cm short. Every one of those
+  53 "none" outcomes is a real observation, but none tested the grump rule.
+* **Settling (seed 0):** in the inert world outcomes fell from 10 in the first
+  half to 5 in the second; the 4 "useful" outcomes there are the roller rolling
+  when nudged (physics, not a rule). The noisy world is **untested** this
+  round: on seed 0 the robot never signalled bloom, so noise never arose
+  (its run matches history_a seed 0 exactly).
+* **Contacts:** 0 unintended contact episodes in all learned runs (round 1: 7
+  in 2 runs). One in the nearest-first baseline.
 
-Contact episodes are split into intended (inside a nudge interaction) and
-unintended. Unintended contacts occurred only in the reversal runs:
-reversal_early 5 episodes (one lasting ~60 s, pressing against bloom late in the
-run during approach/explore) and reversal_late 2. Nudging the tall bloom
-cylinder often filled the camera view and caused tracking loss → bounded
-recovery → operator re-enable (the "operator re-enables" column); the option
-is then suppressed after two such interruptions.
+![Valence per outcome by seed](media/policy-comparison.png)
+
+## Round 1 → round 2
+
+| | round 1 (seed 0, old map) | round 2 (seeds 0–2, current map) |
+|---|---|---|
+| restart: first decision = learned option | 2/2 | 5/5 |
+| restart: completed on that fixture | 2/2 | 3/5 |
+| aversion held (no return to the red fixture or a duplicate) | no: a duplicate identity was re-targeted in 4 runs | 14/14 |
+| reversal adapted | 1/2 | 4/4 informative (2 uninformative) |
+| unintended contacts in learned runs | 7 episodes in 2 runs | 0 |
+| learned beats baselines in total valence | no (fixed 12.6 vs 5.0) | no (seed 0: nearest 2.0 vs 0.2) |
+| noisy world | backed off too early | untested |
+
+Round-2 changes that bear on this: identity merging of duplicates, adaptive
+change detection (failures needed scale with the prior success rate),
+keep-out discs around remembered entities, the navigation and VSLAM changes in
+[NAVIGATION_RESULTS.md](NAVIGATION_RESULTS.md), and a map rebuilt with
+current code.
+
+## Control: same code, round-1 map
+
+`work/evidence/learning-control-oldmap` (seed 0, `map-arena-20260929-225035`):
+
+| experiment | phase | outcomes | useful | aversive | total valence | first decision after restart | first completed after restart |
+|---|---|---|---|---|---|---|---|
+| history_a | train | 10 | 4 | 1 | 3.0 | bloom/signal (P(yellow) = 0.84) | stone/nudge; bloom/signal |
+| history_b | train | 15 | 9 | 1 | 8.0 | stone/signal (P(yellow) = 0.94) | stone/signal; stone/signal |
+
+On the round-2 map the same seed gave history_a 10 outcomes, 2 useful (both
+the roller rolling), valence 0.2, and no liked option.
 
 ## Limits of this evidence
 
-One seed per experiment, one arena, one start pose; engineered valences and
-need dynamics; the map is from an earlier mapping-code state; fixture
-detection relies on saturated uniform colours. The next gate is ≥ 10 seeds
-with randomised start poses and fixture placements.
+Three seeds at most, one arena, fixed fixture placements; baselines and the
+inert/noisy worlds on one seed only, and that seed is the failure case;
+engineered valences and need dynamics; fixture detection relies on saturated
+uniform colours. The next gate is ≥ 10 seeds with randomised start poses and
+fixture placements, baselines on every seed, and a fix for the nudge creep
+(measure the contact edge, not the estimated centre).
 
+## Generated tables
 
-Evidence: `work/evidence/learning-20260930-022340`, `work/evidence/learning-20260930-042009`
+### Restart persistence and opposite histories
 
-Experiment → directory: baseline_fixed → `work/evidence/learning-20260930-022340`, baseline_nearest → `work/evidence/learning-20260930-022340`, baseline_random → `work/evidence/learning-20260930-022340`, history_a → `work/evidence/learning-20260930-022340`, history_b → `work/evidence/learning-20260930-022340`, no_memory → `work/evidence/learning-20260930-022340`, reversal_early → `work/evidence/learning-20260930-022340`, reversal_late → `work/evidence/learning-20260930-022340`, inert → `work/evidence/learning-20260930-042009`, learned_standard → `work/evidence/learning-20260930-042009`, noisy → `work/evidence/learning-20260930-042009`
+| experiment | seed | best option learned in training | first decision after restart (basis) | first completed interactions | decision = learned option | operator turns |
+|---|---|---|---|---|---|---|
+| history_a | 0 | — | bloom/signal (0 weighted outcomes; P(none)=0.60; need 0.60; probes 3) | bloom/signal; bloom/signal | n/a (nothing liked after training) | 1 |
+| history_b | 0 | stone/signal | stone/signal (6 weighted outcomes; P(attach:yellow)=0.84; need 0.60; probes 3) | bloom/signal; bloom/signal | yes | 0 |
+| no_memory | 0 | — | roller/signal (0 weighted outcomes; P(none)=0.60; need 0.66; probes 3) | roller/signal; grump/signal | — | 0 |
+| history_a | 1 | bloom/signal | bloom/signal (11 weighted outcomes; P(attach:yellow)=0.95; need 0.66; probes 3) | bloom/signal | yes | 2 |
+| history_b | 1 | stone/signal | stone/signal (12 weighted outcomes; P(attach:yellow)=0.95; need 0.66; probes 3) | bloom/signal; bloom/signal | yes | 1 |
+| no_memory | 1 | — | roller/signal (0 weighted outcomes; P(none)=0.60; need 0.70; probes 3) | roller/signal; grump/signal | — | 1 |
+| history_a | 2 | bloom/signal | bloom/signal (9 weighted outcomes; P(attach:yellow)=0.95; need 0.66; probes 3) | bloom/signal; bloom/signal | yes | 1 |
+| history_b | 2 | stone/signal | stone/signal (10 weighted outcomes; P(attach:yellow)=0.93; need 0.66; probes 3) | stone/signal; stone/signal | yes | 1 |
+| no_memory | 2 | — | roller/signal (0 weighted outcomes; P(none)=0.60; need 0.74; probes 3) | roller/signal; grump/signal | — | 1 |
+
+**Where training produced a liked option, the first decision after restart targeted it in 5/5 runs.** Designed opposite histories: history_a rewards bloom/signal, history_b rewards stone/signal.
+
+### Policy comparison (standard rules)
+
+| policy | seed | outcomes | useful | aversive | total valence | valence / outcome | idle frac |
+|---|---|---|---|---|---|---|---|
+| fixed | 0 | 53 | 0 | 0 | 0.000 | 0.000 | 0.000 |
+| nearest | 0 | 23 | 5 | 1 | 2.000 | 0.087 | 0.000 |
+| random | 0 | 7 | 2 | 1 | 0.200 | 0.029 | 0.000 |
+| learned | 0 | 10 | 2 | 1 | 0.200 | 0.020 | 0.000 |
+| learned | 1 | 14 | 9 | 1 | 8.000 | 0.571 | 0.403 |
+| learned | 2 | 13 | 8 | 1 | 7.000 | 0.538 | 0.301 |
+
+### Consequence changes and settling
+
+| experiment | seed | switch at s | outcomes before | first useful new option | adapted |
+|---|---|---|---|---|---|
+| reversal_early | 0 | 89 | 4 | 299 s (stone/signal) | yes |
+| reversal_late | 0 | 360 | 8 | 28 s (stone/signal) | yes |
+| reversal_early | 1 | 108 | 6 | 306 s (stone/signal) | yes |
+| reversal_late | 1 | 360 | 12 | 135 s (stone/signal) | yes |
+| reversal_early | 2 | 153 | 6 | 178 s (None/nudge) | yes |
+| reversal_late | 2 | 360 | 11 | 105 s (stone/signal) | yes |
+
+* **inert s0**: outcomes first half 10, second half 5; useful 4; idle fraction 0.117; by fixture/action: None/nudge/moved ×4, None/nudge/none ×3, None/signal/none ×2, bloom/signal/none ×1, grump/nudge/none ×1, grump/signal/none ×2, stone/nudge/none ×1, stone/signal/none ×1
+* **noisy s0**: outcomes first half 8, second half 2; useful 2; idle fraction 0.000; by fixture/action: None/nudge/moved ×2, None/nudge/none ×3, None/signal/none ×2, grump/signal/attach:red ×1, stone/nudge/none ×1, stone/signal/none ×1
 
 ### All phases (denominators)
 
-| experiment | phase | policy | sim s | attempts | outcomes | useful | aversive | total valence | valence/outcome | ambiguous | nav failures | interrupted | idle frac | contact episodes intended/unintended | operator re-enables |
-|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
-| baseline_fixed | train | fixed | 480.300 | 50 | 33 | 13 | 0 | 12.600 | 0.382 | 0 | 9 | 3 | 0.000 | 5/0 | 2 |
-| baseline_nearest | train | nearest | 480.300 | 41 | 34 | 1 | 0 | 0.600 | 0.018 | 0 | 5 | 1 | 0.000 | 2/0 | 1 |
-| baseline_random | train | random | 480.300 | 43 | 17 | 5 | 2 | 3.000 | 0.176 | 0 | 10 | 11 | 0.000 | 3/0 | 6 |
-| history_a | train | learned | 480.300 | 19 | 11 | 6 | 1 | 5.000 | 0.455 | 0 | 2 | 3 | 0.267 | 2/0 | 5 |
-| history_a | test_after_restart | learned | 65.700 | 4 | 2 | 0 | 0 | 0.000 | 0.000 | 0 | 1 | 0 | 0.000 | 0/0 | 0 |
-| history_b | train | learned | 480.300 | 19 | 13 | 7 | 1 | 6.000 | 0.462 | 0 | 2 | 0 | 0.366 | 1/0 | 0 |
-| history_b | test_after_restart | learned | 20.700 | 2 | 2 | 0 | 0 | 0.000 | 0.000 | 0 | 0 | 0 | 0.000 | 0/0 | 0 |
-| no_memory | test_fresh_memory | learned | 34.400 | 2 | 2 | 0 | 0 | 0.000 | 0.000 | 0 | 0 | 0 | 0.000 | 0/0 | 0 |
-| reversal_early | train | learned | 780.300 | 26 | 10 | 2 | 1 | 1.000 | 0.100 | 0 | 8 | 5 | 0.359 | 3/5 | 11 |
-| reversal_late | train | learned | 780.300 | 30 | 15 | 7 | 1 | 6.000 | 0.400 | 0 | 9 | 2 | 0.371 | 2/2 | 5 |
-| inert | train | learned | 480.300 | 17 | 9 | 0 | 0 | 0.000 | 0.000 | 0 | 7 | 0 | 0.167 | 2/0 | 2 |
-| learned_standard | train | learned | 480.300 | 19 | 11 | 6 | 1 | 5.000 | 0.455 | 0 | 2 | 3 | 0.267 | 2/0 | 5 |
-| noisy | train | learned | 480.300 | 19 | 10 | 2 | 1 | 1.000 | 0.100 | 0 | 4 | 2 | 0.220 | 3/0 | 4 |
+| experiment | seed | phase | policy | sim s | attempts | outcomes | useful | aversive | total valence | valence/outcome | ambiguous | nav failures | interrupted | idle frac | contact episodes intended/unintended | operator re-enables | operator turns | identity merges |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| baseline_fixed | 0 | train | fixed | 480.300 | 53 | 53 | 0 | 0 | 0.000 | 0.000 | 0 | 0 | 0 | 0.000 | 0/0 | 0 | 0 | 0 |
+| baseline_nearest | 0 | train | nearest | 480.300 | 28 | 23 | 5 | 1 | 2.000 | 0.087 | 0 | 3 | 2 | 0.000 | 22/1 | 2 | 0 | 0 |
+| baseline_random | 0 | train | random | 480.300 | 11 | 7 | 2 | 1 | 0.200 | 0.029 | 0 | 1 | 2 | 0.000 | 1/0 | 1 | 1 | 0 |
+| history_a | 0 | train | learned | 480.300 | 18 | 10 | 2 | 1 | 0.200 | 0.020 | 0 | 1 | 5 | 0.000 | 6/0 | 6 | 2 | 0 |
+| history_a | 0 | test_after_restart | learned | 110.100 | 4 | 2 | 0 | 0 | 0.000 | 0.000 | 0 | 0 | 1 | 0.000 | 0/0 | 1 | 1 | 0 |
+| history_b | 0 | train | learned | 480.300 | 22 | 14 | 6 | 1 | 4.200 | 0.300 | 0 | 1 | 5 | 0.086 | 5/0 | 6 | 2 | 0 |
+| history_b | 0 | test_after_restart | learned | 37.100 | 3 | 2 | 0 | 0 | 0.000 | 0.000 | 0 | 0 | 0 | 0.000 | 0/0 | 0 | 0 | 0 |
+| inert | 0 | train | learned | 480.300 | 23 | 15 | 4 | 0 | 2.400 | 0.160 | 0 | 1 | 5 | 0.117 | 8/0 | 4 | 0 | 0 |
+| learned_standard | 0 | train | learned | 480.300 | 18 | 10 | 2 | 1 | 0.200 | 0.020 | 0 | 1 | 5 | 0.000 | 6/0 | 6 | 2 | 0 |
+| no_memory | 0 | test_fresh_memory | learned | 32.700 | 2 | 2 | 0 | 0 | 0.000 | 0.000 | 0 | 0 | 0 | 0.000 | 0/0 | 0 | 0 | 0 |
+| noisy | 0 | train | learned | 480.300 | 18 | 10 | 2 | 1 | 0.200 | 0.020 | 0 | 1 | 5 | 0.000 | 6/0 | 6 | 2 | 0 |
+| reversal_early | 0 | train | learned | 780.300 | 28 | 18 | 9 | 1 | 7.200 | 0.400 | 0 | 1 | 5 | 0.133 | 6/0 | 6 | 2 | 0 |
+| reversal_late | 0 | train | learned | 780.300 | 28 | 18 | 9 | 1 | 7.200 | 0.400 | 0 | 1 | 5 | 0.133 | 6/0 | 6 | 2 | 0 |
+| history_a | 1 | train | learned | 494.900 | 16 | 14 | 9 | 1 | 8.000 | 0.571 | 0 | 0 | 2 | 0.403 | 2/0 | 2 | 1 | 1 |
+| history_a | 1 | test_after_restart | learned | 134.900 | 4 | 1 | 0 | 0 | 0.000 | 0.000 | 0 | 2 | 1 | 0.000 | 0/0 | 0 | 2 | 1 |
+| history_b | 1 | train | learned | 494.900 | 15 | 15 | 10 | 1 | 9.000 | 0.600 | 0 | 0 | 0 | 0.680 | 1/0 | 0 | 1 | 0 |
+| history_b | 1 | test_after_restart | learned | 85.300 | 5 | 2 | 0 | 0 | 0.000 | 0.000 | 0 | 0 | 2 | 0.000 | 2/0 | 2 | 1 | 0 |
+| no_memory | 1 | test_fresh_memory | learned | 41.700 | 2 | 2 | 0 | 0 | 0.000 | 0.000 | 0 | 0 | 0 | 0.000 | 0/0 | 0 | 1 | 0 |
+| reversal_early | 1 | train | learned | 794.900 | 24 | 22 | 12 | 1 | 11.000 | 0.500 | 0 | 0 | 2 | 0.389 | 4/0 | 2 | 2 | 0 |
+| reversal_late | 1 | train | learned | 794.900 | 31 | 22 | 13 | 1 | 12.000 | 0.545 | 0 | 0 | 4 | 0.372 | 3/0 | 5 | 1 | 1 |
+| history_a | 2 | train | learned | 496.000 | 15 | 13 | 8 | 1 | 7.000 | 0.538 | 0 | 0 | 2 | 0.301 | 2/0 | 3 | 1 | 1 |
+| history_a | 2 | test_after_restart | learned | 36.500 | 2 | 2 | 0 | 0 | 0.000 | 0.000 | 0 | 0 | 0 | 0.000 | 0/0 | 0 | 1 | 0 |
+| history_b | 2 | train | learned | 496.000 | 18 | 16 | 8 | 1 | 7.000 | 0.438 | 0 | 1 | 0 | 0.359 | 1/0 | 0 | 1 | 0 |
+| history_b | 2 | test_after_restart | learned | 33.800 | 2 | 2 | 0 | 0 | 0.000 | 0.000 | 0 | 0 | 0 | 0.000 | 0/0 | 0 | 1 | 0 |
+| no_memory | 2 | test_fresh_memory | learned | 51.800 | 2 | 2 | 0 | 0 | 0.000 | 0.000 | 0 | 0 | 0 | 0.000 | 0/0 | 0 | 1 | 0 |
+| reversal_early | 2 | train | learned | 796.000 | 34 | 24 | 13 | 1 | 11.600 | 0.483 | 0 | 1 | 4 | 0.290 | 2/0 | 3 | 3 | 9 |
+| reversal_late | 2 | train | learned | 796.000 | 27 | 25 | 15 | 1 | 14.000 | 0.560 | 0 | 0 | 2 | 0.437 | 3/0 | 3 | 1 | 2 |
 
 `useful` = valence ≥ 0.3 (yellow panel or moved); `aversive` = red panel. `attempts` counts engage/revisit interactions including cancelled/failed ones. Contact episodes are *intended* only when they fall inside a nudge interaction.
 
 ### Outcomes by true fixture / action / observed
 
-* **baseline_fixed / train**: None/nudge/moved ×1, None/nudge/none ×5, bloom/signal/attach:yellow ×12, bloom/signal/none ×10, stone/nudge/none ×5
-* **baseline_nearest / train**: None/nudge/moved ×1, None/nudge/none ×5, stone/nudge/none ×28
-* **baseline_random / train**: None/signal/attach:yellow ×1, bloom/signal/attach:yellow ×4, grump/nudge/attach:red ×1, grump/signal/attach:red ×1, grump/signal/none ×1, roller/nudge/none ×1, roller/signal/none ×4, stone/nudge/none ×1, stone/signal/none ×3
-* **history_a / train**: bloom/signal/attach:yellow ×6, bloom/signal/none ×2, grump/signal/attach:red ×1, roller/signal/none ×1, stone/signal/none ×1
-* **history_a / test_after_restart**: bloom/signal/none ×2
-* **history_b / train**: bloom/signal/none ×1, grump/signal/attach:red ×1, roller/signal/none ×1, stone/nudge/none ×1, stone/signal/attach:yellow ×7, stone/signal/none ×2
-* **history_b / test_after_restart**: stone/signal/none ×2
-* **no_memory / test_fresh_memory**: grump/signal/none ×1, roller/signal/none ×1
-* **reversal_early / train**: bloom/signal/attach:yellow ×2, bloom/signal/none ×4, grump/signal/attach:red ×1, roller/signal/none ×1, stone/nudge/none ×1, stone/signal/none ×1
-* **reversal_late / train**: bloom/signal/attach:yellow ×5, bloom/signal/none ×5, grump/signal/attach:red ×1, roller/signal/none ×1, stone/signal/attach:yellow ×2, stone/signal/none ×1
-* **inert / train**: bloom/nudge/none ×1, bloom/signal/none ×1, grump/nudge/none ×1, grump/signal/none ×2, roller/signal/none ×1, stone/nudge/none ×1, stone/signal/none ×2
-* **learned_standard / train**: bloom/signal/attach:yellow ×6, bloom/signal/none ×2, grump/signal/attach:red ×1, roller/signal/none ×1, stone/signal/none ×1
-* **noisy / train**: bloom/signal/attach:yellow ×2, bloom/signal/none ×4, grump/signal/attach:red ×1, roller/signal/none ×1, stone/nudge/none ×1, stone/signal/none ×1
-
-### Restart persistence and opposite histories (first interactions after restart)
-
-| experiment | phase | prior sessions in memory | relocalized at s | autonomy at start | first interactions (true fixture/action) | first decisions (basis) |
-|---|---|---|---|---|---|---|
-| history_a | test_after_restart | 1 | 0.200 | False | bloom/signal; bloom/signal | revisit signal: 8 weighted outcomes; P(attach:yellow)=0.90; need 0.60; probes 3; revisit signal: 0 weighted outcomes; P(none)=0.60; need 0.64; probes 3 |
-| history_b | test_after_restart | 1 | 0.200 | False | stone/signal; stone/signal | revisit signal: 9 weighted outcomes; P(attach:yellow)=0.92; need 0.60; probes 3; engage signal: 10 weighted outcomes; P(attach:yellow)=0.82; need 0.65; probes 2 |
-| no_memory | test_fresh_memory | 0 | 0.200 | False | roller/signal; grump/signal | engage signal: 0 weighted outcomes; P(none)=0.60; need 0.63; probes 3; revisit signal: 0 weighted outcomes; P(none)=0.60; need 0.67; probes 3 |
-
-### Policy comparison under the standard rules (same map, same start)
-
-| run | policy | outcomes | useful | aversive | total valence | valence / 100 s | idle frac |
-|---|---|---|---|---|---|---|---|
-| learned_standard | learned | 11 | 6 | 1 | 5.000 | 1.041 | 0.267 |
-| history_a | learned | 11 | 6 | 1 | 5.000 | 1.041 | 0.267 |
-| baseline_random | random | 17 | 5 | 2 | 3.000 | 0.625 | 0.000 |
-| baseline_nearest | nearest | 34 | 1 | 0 | 0.600 | 0.125 | 0.000 |
-| baseline_fixed | fixed | 33 | 13 | 0 | 12.600 | 2.623 | 0.000 |
-
-### Consequence changes (reversal) and settling
-
-* **reversal_early**: switch to `swapped` at t = 189 s after 6 outcomes. Before: bloom/signal/attach:yellow ×2, bloom/signal/none ×1, grump/signal/attach:red ×1, roller/signal/none ×1, stone/signal/none ×1. After: bloom/signal/none ×3, stone/nudge/none ×1. Failed tries of the formerly useful option before first trying something else: 3. First useful outcome from a different option: never. Second half after switch: none.
-* **reversal_late**: switch to `swapped` at t = 360 s after 10 outcomes. Before: bloom/signal/attach:yellow ×5, bloom/signal/none ×2, grump/signal/attach:red ×1, roller/signal/none ×1, stone/signal/none ×1. After: bloom/signal/none ×3, stone/signal/attach:yellow ×2. Failed tries of the formerly useful option before first trying something else: 3. First useful outcome from a different option: t = 408 s (stone/signal, 48 s after the switch). Second half after switch: none.
-* **inert**: outcomes first half 7, second half 2; useful 0; idle fraction 0.167; by fixture/action: bloom/nudge/none ×1, bloom/signal/none ×1, grump/nudge/none ×1, grump/signal/none ×2, roller/signal/none ×1, stone/nudge/none ×1, stone/signal/none ×2
-* **noisy**: outcomes first half 9, second half 1; useful 2; idle fraction 0.220; by fixture/action: bloom/signal/attach:yellow ×2, bloom/signal/none ×4, grump/signal/attach:red ×1, roller/signal/none ×1, stone/nudge/none ×1, stone/signal/none ×1
+* **baseline_fixed s0 / train**: grump/nudge/none ×53
+* **baseline_nearest s0 / train**: grump/nudge/attach:red ×1, roller/nudge/moved ×5, roller/nudge/none ×17
+* **baseline_random s0 / train**: None/nudge/moved ×2, None/nudge/none ×1, None/signal/none ×2, grump/nudge/none ×1, grump/signal/attach:red ×1
+* **history_a s0 / train**: grump/signal/attach:red ×1, roller/nudge/moved ×2, roller/nudge/none ×3, roller/signal/none ×2, stone/nudge/none ×1, stone/signal/none ×1
+* **history_a s0 / test_after_restart**: bloom/signal/none ×2
+* **history_b s0 / train**: None/nudge/moved ×2, None/nudge/none ×3, None/signal/none ×2, grump/signal/attach:red ×1, stone/signal/attach:yellow ×4, stone/signal/none ×2
+* **history_b s0 / test_after_restart**: bloom/signal/none ×2
+* **inert s0 / train**: None/nudge/moved ×4, None/nudge/none ×3, None/signal/none ×2, bloom/signal/none ×1, grump/nudge/none ×1, grump/signal/none ×2, stone/nudge/none ×1, stone/signal/none ×1
+* **learned_standard s0 / train**: None/nudge/moved ×2, None/nudge/none ×3, None/signal/none ×2, grump/signal/attach:red ×1, stone/nudge/none ×1, stone/signal/none ×1
+* **no_memory s0 / test_fresh_memory**: grump/signal/none ×1, roller/signal/none ×1
+* **noisy s0 / train**: None/nudge/moved ×2, None/nudge/none ×3, None/signal/none ×2, grump/signal/attach:red ×1, stone/nudge/none ×1, stone/signal/none ×1
+* **reversal_early s0 / train**: None/nudge/moved ×2, None/nudge/none ×3, None/signal/none ×2, grump/signal/attach:red ×1, stone/nudge/none ×1, stone/signal/attach:yellow ×7, stone/signal/none ×2
+* **reversal_late s0 / train**: None/nudge/moved ×2, None/nudge/none ×3, None/signal/none ×2, grump/signal/attach:red ×1, stone/nudge/none ×1, stone/signal/attach:yellow ×7, stone/signal/none ×2
+* **history_a s1 / train**: bloom/signal/attach:yellow ×9, bloom/signal/none ×2, grump/signal/attach:red ×1, roller/signal/none ×1, stone/signal/none ×1
+* **history_a s1 / test_after_restart**: bloom/signal/none ×1
+* **history_b s1 / train**: grump/signal/attach:red ×1, roller/signal/none ×1, stone/nudge/none ×1, stone/signal/attach:yellow ×10, stone/signal/none ×2
+* **history_b s1 / test_after_restart**: bloom/signal/none ×2
+* **no_memory s1 / test_fresh_memory**: grump/signal/none ×1, roller/signal/none ×1
+* **reversal_early s1 / train**: bloom/signal/attach:yellow ×2, bloom/signal/none ×4, grump/signal/attach:red ×1, roller/signal/none ×1, stone/nudge/none ×2, stone/signal/attach:yellow ×10, stone/signal/none ×2
+* **reversal_late s1 / train**: bloom/signal/attach:yellow ×7, bloom/signal/none ×5, grump/signal/attach:red ×1, roller/signal/none ×1, stone/nudge/none ×1, stone/signal/attach:yellow ×6, stone/signal/none ×1
+* **history_a s2 / train**: bloom/signal/attach:yellow ×8, bloom/signal/none ×1, grump/signal/attach:red ×1, roller/nudge/none ×1, roller/signal/none ×2
+* **history_a s2 / test_after_restart**: bloom/signal/none ×2
+* **history_b s2 / train**: bloom/signal/none ×1, grump/signal/attach:red ×1, roller/nudge/none ×1, roller/signal/none ×2, stone/nudge/none ×1, stone/signal/attach:yellow ×8, stone/signal/none ×2
+* **history_b s2 / test_after_restart**: stone/signal/none ×2
+* **no_memory s2 / test_fresh_memory**: grump/signal/none ×1, roller/signal/none ×1
+* **reversal_early s2 / train**: None/nudge/moved ×1, None/nudge/none ×1, None/signal/none ×3, bloom/signal/attach:yellow ×2, bloom/signal/none ×3, grump/signal/attach:red ×1, stone/signal/attach:yellow ×10, stone/signal/none ×3
+* **reversal_late s2 / train**: bloom/signal/attach:yellow ×6, bloom/signal/none ×4, grump/signal/attach:red ×1, roller/nudge/none ×1, roller/signal/none ×2, stone/nudge/none ×1, stone/signal/attach:yellow ×9, stone/signal/none ×1

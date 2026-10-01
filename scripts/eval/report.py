@@ -191,6 +191,40 @@ def contact_split(contacts, interactions=(), gap=0.5):
 EXPECTED_AFTER_RESTART = {"history_a": ("bloom", "signal"), "history_b": ("stone", "signal")}
 
 
+def entity_fixtures(phase):
+    """Scoring only: entity id -> true fixture, from the entity's remembered position
+    at the end of the phase (robust when a fixture was moved, e.g. the rolling ball)."""
+    return {eid: a.get("fixture") for eid, a in (phase.get("attitudes") or {}).items() if a.get("fixture")}
+
+
+def repair_fixtures(result):
+    """Fill interaction fixture labels that position matching left empty, using the
+    entity's own fixture mapping from this or any phase of the same experiment."""
+    mapping, votes = {}, {}
+    for p in result["phases"]:
+        for i in p.get("interactions", []) or []:
+            if i.get("fixture") and i.get("entity_id"):
+                votes.setdefault(i["entity_id"], {}).setdefault(i["fixture"], 0)
+                votes[i["entity_id"]][i["fixture"]] += 1
+    for eid, v in votes.items():  # fallback: the fixture its interaction targets matched most often
+        mapping[eid] = max(v, key=v.get)
+    for p in result["phases"]:
+        mapping.update(entity_fixtures(p))
+    for p in result["phases"]:
+        for key in ("interactions", "outcomes"):
+            for i in p.get(key, []) or []:
+                if i.get("fixture") is None and i.get("entity_id") in mapping:
+                    i["fixture"] = mapping[i["entity_id"]]
+        outs = p.get("outcomes", []) or []
+        if p.get("score") is not None:
+            c = {}
+            for o in outs:
+                k = f'{o["fixture"]}/{o["action"]}/{o["observed"]}'
+                c[k] = c.get(k, 0) + 1
+            p["score"]["by_fixture_action"] = c
+    return mapping
+
+
 def learning(ldirs) -> str:
     runs = []  # (base name, seed, result, dir)
     seen = set()
@@ -200,6 +234,7 @@ def learning(ldirs) -> str:
             if (base, seed) in seen or result.get("wall_seconds") is None:
                 continue
             seen.add((base, seed))
+            result["_fixtures"] = repair_fixtures(result)
             runs.append((base, seed, result, str(ldir.relative_to(ldir.parents[2]))))
     runs.sort(key=lambda r: (r[1], r[0]))
     lines = ["Evidence: " + ", ".join(f"`{d.relative_to(d.parents[2])}`" for d in ldirs), ""]
@@ -242,21 +277,40 @@ def restart_table(runs):
             continue
         test = result["phases"][-1]
         if test.get("failed"):
-            rows.append([base, seed, "FAILED: " + str(test["failed"])[:50], "—", "—", "—"])
+            rows.append([base, seed, "FAILED: " + str(test["failed"])[:50], "—", "—", "—", "—"])
             continue
-        first = (test.get("score") or {}).get("first_interactions") or []
-        expected = EXPECTED_AFTER_RESTART.get(base)
+        fx = result.get("_fixtures", {})
+        first_dec = next((d["chosen"] for d in test.get("decisions", [])
+                          if (d.get("chosen") or {}).get("activity") in ("engage", "revisit")), None)
+        dec = None if first_dec is None else (fx.get(first_dec.get("entity_id")), first_dec.get("action"))
+        outs = [(i["fixture"], i["action"]) for i in test.get("interactions", [])
+                if i["status"] in ("outcome", "ambiguous_outcome")]
+        # What did THIS robot learn as best in training? (an option it ended up liking)
+        learned = None
+        if len(result["phases"]) > 1:
+            att = result["phases"][0].get("attitudes") or {}
+            liked = [(a.get("expected_value") or 0, eid, a) for eid, a in att.items() if a.get("attitude") == "liked"]
+            if liked:
+                _, eid, a = max(liked, key=lambda x: x[0])
+                learned = (fx.get(eid), a.get("best_action"))
         verdict = "—"
-        if expected:
-            total += 1
-            ok = bool(first) and tuple(first[0]) == expected
-            hits += ok
-            verdict = "yes" if ok else "no"
-        rows.append([base, seed, test.get("relocalized_at"), (test.get("authority_at_start") or {}).get(
-            "autonomy_enabled"), "; ".join(f"{f}/{a}" for f, a in first) or "—", verdict])
-    out = table(["experiment", "seed", "relocalized at s", "autonomy at start", "first interactions after restart",
-                 "first choice = learned option"], rows)
-    return out + f"\n\n**First choice after restart matched the learned option in {hits}/{total} runs.**"
+        if base in EXPECTED_AFTER_RESTART:
+            if learned is None:
+                verdict = "n/a (nothing liked after training)"
+            else:
+                total += 1
+                ok = dec == learned
+                hits += ok
+                verdict = "yes" if ok else "no"
+        rows.append([base, seed, "—" if learned is None else f"{learned[0]}/{learned[1]}",
+                     "—" if dec is None else f"{dec[0]}/{dec[1]} ({first_dec.get('basis', '')})",
+                     "; ".join(f"{f}/{a}" for f, a in outs[:2]) or "—", verdict,
+                     len(test.get("operator_turns") or [])])
+    out = table(["experiment", "seed", "best option learned in training", "first decision after restart (basis)",
+                 "first completed interactions", "decision = learned option", "operator turns"], rows)
+    return out + (f"\n\n**Where training produced a liked option, the first decision after restart targeted it "
+                  f"in {hits}/{total} runs.** Designed opposite histories: history_a rewards bloom/signal, "
+                  "history_b rewards stone/signal.")
 
 
 def policy_table(runs):

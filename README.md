@@ -42,24 +42,25 @@ Right: the same moment from Pip's onboard camera — the only sensor it perceive
 
 ## Results summary
 
-All numbers come from one seed per experiment, so they show what happened,
-not statistics. Navigation and learning were evaluated separately. Full tables
-with every denominator are in
+These are round-2 results: navigation in 4 rooms × 3 seeds, and learning on
+up to 3 seeds (start poses). That is enough to see failure modes, not to
+report statistics. Navigation and learning were evaluated separately. Full
+tables with every denominator are in
 [docs/NAVIGATION_RESULTS.md](docs/NAVIGATION_RESULTS.md) and
 [docs/LEARNING_RESULTS.md](docs/LEARNING_RESULTS.md).
 
 | Question | Result |
 |---|---|
-| Does remembered experience change later choices? | **Yes.** Trained in opposite worlds, then restarted: one robot's first two choices were bloom/signal, the other's stone/signal. A robot with no memory chose roller/signal and grump/signal. |
-| Does it survive a restart without keeping motion permission? | **Yes.** Knowledge persisted; autonomy started disabled every time and was re-enabled only after relocalizing from fresh images (0.2 s). |
-| Does it adapt when the rules change? | **Partly — 1 of 2.** After a late rule swap it found the new rewarding option 48 s later. After an early swap it never did in 590 s. |
-| Is it better than simple baselines? | **Per interaction, yes.** Valence per observed outcome: learned 0.45, fixed 0.38, random 0.18, nearest 0.02. **In total, no:** the fixed-order baseline collected 12.6 vs 5.0, because it never rests and happened to repeat the rewarding option. |
-| Does it avoid what hurt it? | **Partly.** The fixture that showed a red panel was never engaged again, but it was also registered as a duplicate identity, and the duplicate was re-targeted (every such attempt failed at navigation). |
-| Does it touch things while navigating? | **No contact** in any of the 4 navigation rooms, including when a box was placed on its route. In long learning runs there were unintended contacts (7 episodes across 2 of 11 runs). |
-| Does it refuse goals it cannot justify? | **Yes.** 12/12 goals inside furniture or outside the room were rejected; unknown space is never treated as free. |
-| Can it reach goals in its own map? | **Not reliably: 5/16.** 4/4 in one held-out room; 0/4 in two others, because of visual-odometry drift (up to 29 cm) and goals losing clearance to new evidence. |
+| Does remembered experience change later choices? | **Yes, 5/5.** After a restart, every robot that had learned a liked option chose it first (bloom/signal after history_a, stone/signal after history_b, seeds 0–2). With no memory, all three seeds chose roller/signal and then grump/signal. **Carried out on the intended fixture in 3/5:** twice the remembered fixture was not confirmed in fresh images, and the robot moved on. |
+| Does it survive a restart without keeping motion permission? | **Yes.** In all 9 restart phases, autonomy started disabled and was enabled only after relocalising from fresh images. |
+| Does it avoid what hurt it? | **Yes, 14/14 learned runs.** It saw the red panel once per run and never went back to that fixture or to a duplicate of it. (In round 1 a duplicate identity was re-targeted; duplicates are now merged.) |
+| Does it adapt when the rules change? | **Yes, 4/4 informative runs.** Three failed tries of the old option, then it found the new one 100–300 s after the swap. The 2 seed-0 runs are uninformative because seed 0 never learned the old option. |
+| Is it better than simple baselines? | **Not shown.** Baselines ran on seed 0 only, and seed 0 is the learned policy's failure case: it never completed an interaction with the rewarding fixture. Total valence: nearest 2.0, random 0.2, learned 0.2, fixed 0.0. On seeds 1–2 the learned policy got 0.57 and 0.54 per outcome, but with no baselines to compare. A control on the round-1 map with the same code learned normally on seed 0, so the failure depends on the map. |
+| Can it reach goals in its own map? | **22/32 (69 %)**, up from 5/16. home_a 8/8, heldout_c 7/8, home_a_dim 4/8, heldout_b 3/8. In 3 of the 12 runs the robot was not localised when goals began, so none could be sampled (22/44 if those count as failures). |
+| Does it refuse goals it cannot justify? | **Yes, 36/36.** Unknown space is never treated as free. |
+| Does it touch things? | **Never while exploring** (0 contacts in 12 × 300 s). **But 4 of the 5 box-on-route tests ended in contact**, and there were 2 bench contacts during recovery turns. In learning runs: 0 unintended contacts (round 1: 7). |
 
-![Policy comparison](docs/media/policy-comparison.png)
+![Valence per outcome by seed](docs/media/policy-comparison.png)
 
 ---
 
@@ -171,130 +172,120 @@ robot with a trained memory revisiting the fixture it learned to like
 
 ## Navigation results
 
-**Protocol:** fresh process per room. The robot explores for 300 s of
-simulated time using only its camera. Then an evaluator acts as the operator:
-fixed goals (some deliberately impossible), four goals sampled from the
-*interior* of the robot's own certified map, a camera blackout during a goal,
-and a 35 cm box placed on the robot's own planned route. Arrival means ≤ 0.25 m
-from the true goal **and** the navigator reporting arrival. `home_a` was used
-for development; the other three rooms were never used for tuning.
+**Protocol:** one fresh process per room and seed; seed *k* turns the start
+heading by *k* × 72°. The robot explores for 300 s of simulated time using
+only its camera. Then an evaluator acts as the operator: fixed goals (some
+deliberately impossible), four goals sampled from the *interior* of the robot's
+own certified map, a camera blackout during a goal, and a 35 cm box placed on
+the robot's own planned route. When the robot is lost and its bounded recovery
+has given up, the evaluator turns it slowly by hand (counted). Arrival means
+≤ 0.25 m from the true goal **and** the navigator reporting arrival. `home_a`
+was used for development; the other three rooms were never used for tuning.
 
 ![Estimated maps after 300 s of exploration](docs/media/nav-maps.png)
 
-*Light = certified free, dark = unknown or occupied, blue = estimated
-trajectory, rings = detected fixtures.*
+*Seed 0 maps. Light = certified free, dark = unknown or occupied, blue =
+estimated trajectory, rings = detected fixtures.*
 
-### Mapping by exploration
+| Room | Split | Own-map goals arrived | Impossible goals rejected | ATE cm (3 seeds) | Worst error cm | Free coverage | Contact episodes |
+|---|---|---|---|---|---|---|---|
+| home_a | development | 8/8 | 9/9 | 0.4–2.9 | 6.9 | 31–41 % | 3 |
+| heldout_b | held-out layout | 3/8 | 9/9 | 2.0–16.4 | 27.7 | 29–33 % | 0 |
+| heldout_c | held-out appearance | 7/8 | 9/9 | 3.0–17.5 | 45.0 | 71–73 % | 4 |
+| home_a_dim | held-out lighting | 4/8 | 9/9 | 0.9–4.9 | 9.3 | 34–43 % | 1 |
 
-| Room | Split | Path (m) | ATE (cm) | Max error (cm) | Scale | Frames tracked | Free coverage | False-free cells (deep) | Contacts |
-|---|---|---|---|---|---|---|---|---|---|
-| home_a | development | 9.2 | 1.8 | 3.4 | 0.999 | 3000/3000 | 43 % | 60 (2) | 0 |
-| heldout_b | held-out layout | 6.2 | 16.8 | 28.5 | 0.967 | 2996/3000 | 31 % | 46 (16) | 0 |
-| heldout_c | held-out appearance | 10.4 | 9.3 | 20.9 | 1.003 | 2987/3000 | 77 % | 117 (46) | 0 |
-| home_a_dim | held-out lighting | 8.0 | 1.4 | 3.1 | 0.998 | 2996/3000 | 38 % | 50 (5) | 0 |
-
-*ATE: absolute trajectory error (RMS) against ground truth. False-free:
-estimated free where the true room is occupied; "deep" means more than 10 cm
-inside an obstacle.*
-
-### Goals and faults
-
-| Room | Impossible goals rejected | Pre-chosen goals arrived | Own-map goals arrived | True distance at end (m) | Blackout test | Obstacle-on-route test |
-|---|---|---|---|---|---|---|
-| home_a | 3/3 | 0/4 | 1/4 | 0.56, 0.05, rejected, 0.30 | recovered, then blocked on goal clearance | skipped (start not reached) |
-| heldout_b | 3/3 | 0/4 | 0/4 | 0.26, 0.41, 0.30, 1.23 | skipped | skipped |
-| heldout_c | 3/3 | 0/4 | 0/4 | 0.57, 0.25, 0.34, 0.20 | skipped | skipped |
-| home_a_dim | 3/3 | 0/4 | **4/4** | 0.06, 0.06, 0.06, 0.07 | **arrived** after recovery + re-enable | stopped, **no contact** |
+*ATE: absolute trajectory error (RMS) against ground truth. All contact
+episodes were in the fault phase; none while exploring.*
 
 **Reading these results:**
 
-* **Safety held:** zero contact episodes in all four rooms. In the one
-  obstacle test that ran, the robot stopped and then refused to turn in place
-  beside the box.
-* **Conservatism held:** every impossible goal was rejected. The cost is
-  coverage: 300 s certified only 31–77 % of each room, so most pre-chosen
-  goals were rejected too.
-* **Two failure modes limit arrival.** (a) *Drift:* in heldout_b and heldout_c
-  the robot believed it had arrived but was 0.20–0.41 m away. (b) *Clearance
-  loss:* new obstacle evidence near a goal removed its footprint clearance
-  mid-route.
-* **Tracking loss handling works:** blackout → revoke → bounded recovery →
-  explicit operator re-enable → goal resent.
-* Of 8 fault tests, 3 ran and 5 were skipped because no valid start/end pair
-  existed or the start could not be reached. Skipped tests stay in the
-  denominator.
-* An earlier code version (retained evidence) reached more own-map goals but
-  drove into the test box. The current code gives up arrival rate to avoid
-  touching things.
+* **Arrival improved from 5/16 to 22/32.** Round 2 added goal snapping (12 cm)
+  when live evidence removes a goal's clearance, fixed periodic path
+  validation, and made VSLAM fail safely: it detects a frozen estimate within
+  1.2 s, drops landmarks created just before a loss, and accepts a
+  relocalisation only if it agrees with dead reckoning. On a 7-scenario VSLAM
+  benchmark, mean error fell from 9.7 to 4.9 cm
+  ([docs/results/vslam-benchmark.md](docs/results/vslam-benchmark.md)).
+* **Remaining arrival failures** come from wrong relocalisations (10–20 cm),
+  heading errors during in-place rotation in the held-out layout and
+  appearance rooms, and three runs where the robot was not localised when the
+  goals began.
+* **Dynamic obstacles are the weak point.** The box was placed on the route in
+  5 tests that ran; 4 ended in contact (6 episodes). The box then filled the
+  camera view and tracking was lost. The other 2 contacts were with a bench
+  during a recovery or operator turn, which the turning check does not cover.
+* **Blackout handling works:** in all 7 tests that ran, tracking loss revoked
+  motion, bounded recovery relocalised the robot, and it was re-enabled
+  explicitly; 5 of 7 reached the goal. Skipped tests (no reachable start/end
+  pair) stay in the denominator.
 
 ---
 
 ## Learning results
 
 **Protocol:** every experiment starts from a fresh memory in the arena, with
-the four fixtures and a map the robot built itself. Every phase is a new
-process: autonomy starts disabled and is enabled only after relocalization.
+the four fixtures and a map the robot built itself with the current code. Seed
+*k* starts at a different pose and has to relocalise first. Every phase is a
+new process: autonomy starts disabled and is enabled only after relocalisation.
 Tests after a restart use *inert* rules, so what is measured is the choice
 made from memory, not a fresh reward.
 
 ### Opposite histories and restart persistence
 
-| Experiment | Training world | What it learned | First two choices after restart |
-|---|---|---|---|
-| history_a | standard (bloom rewards signal) | P(yellow \| bloom, signal) = 0.90 from 8 weighted outcomes | **bloom/signal, bloom/signal** |
-| history_b | swapped (stone rewards signal) | P(yellow \| stone, signal) = 0.92 from 9 weighted outcomes | **stone/signal, stone/signal** |
-| no_memory | — | nothing | roller/signal, grump/signal |
+| Experiment | Seed | Learned in training | First decision after restart | First interactions completed |
+|---|---|---|---|---|
+| history_a (bloom rewards signal) | 0 | nothing liked | bloom/signal (no evidence) | bloom/signal ×2 |
+| | 1 | bloom/signal, P(yellow) = 0.95 | **bloom/signal** | bloom/signal |
+| | 2 | bloom/signal, P(yellow) = 0.95 | **bloom/signal** | bloom/signal ×2 |
+| history_b (stone rewards signal) | 0 | stone/signal, P(yellow) = 0.84 | **stone/signal** | bloom/signal ×2 (stone not confirmed) |
+| | 1 | stone/signal, P(yellow) = 0.95 | **stone/signal** | bloom/signal ×2 (stone not confirmed) |
+| | 2 | stone/signal, P(yellow) = 0.93 | **stone/signal** | stone/signal ×2 |
+| no_memory | 0–2 | — | roller/signal | roller/signal, grump/signal |
 
-**Context matters.** Signalling bloom while its panel is still raised gives
-`none`. Those outcomes are stored under the visible context `attach:yellow`,
-so they do not erase the learned response in context `attach:none`. In
-history_a, all 8 bloom outcomes follow this pattern.
+Before acting, the robot must confirm a remembered fixture in fresh images. In
+history_b seeds 0 and 1 it did not see the stone from where it stood, so it
+aborted and took the next option.
 
-### Policies under the same rules
+### Changing consequences
 
-| Policy | Attempts | Outcomes | Useful | Aversive (red) | Total valence | Valence / outcome | Idle |
-|---|---|---|---|---|---|---|---|
-| **Learned** | 19 | 11 | 6 | 1 | 5.0 | **0.45** | 27 % |
-| Fixed order | 50 | 33 | 13 | 0 | **12.6** | 0.38 | 0 % |
-| Random | 43 | 17 | 5 | 2 | 3.0 | 0.18 | 0 % |
-| Nearest first | 41 | 34 | 1 | 0 | 0.6 | 0.02 | 0 % |
+| Experiment | Seed | Swap at | Old option tried after swap | New option first rewarded |
+|---|---|---|---|---|
+| reversal_early | 1 | 108 s | 3× | +302 s (10 yellows) |
+| reversal_early | 2 | 153 s | 3× | +249 s (10 yellows) |
+| reversal_late | 1 | 360 s | 3× | +132 s (6 yellows) |
+| reversal_late | 2 | 360 s | 3× | +102 s (9 yellows) |
 
-The learned policy chooses better per interaction but is not a reward-rate
-maximizer: its engineered need drops after useful outcomes, so it rests. The
-fixed-order baseline's advantage in total valence is luck of ordering: it
-repeats whichever option sorts first, and here that was the rewarding one.
+Change detection is adaptive: the number of failures needed is the smallest
+run that would be unlikely (p < 0.05) under the learned success rate, between
+3 and 8.
 
-### Changing and unreliable consequences
+### Seed 0, baselines and the control
 
-| Experiment | What happened | Verdict |
-|---|---|---|
-| Late rule swap (after 10 outcomes, t = 360 s) | 3 failed bloom/signal tries, then stone/signal → yellow **48 s after the swap** (2 yellows) | adapted |
-| Early rule swap (after 6 outcomes, t = 189 s) | 3 failed bloom/signal tries, then no new useful option found in 590 s (8 navigation failures, 5 unintended contacts) | did not adapt |
-| Inert world (nothing responds) | 7 outcomes in the first half, 2 in the second; nothing useful | stops probing |
-| Noisy world (bloom rewards 50 % of the time) | 2 yellows from 6 bloom signals, then only 1 outcome in the second half | backs off too early |
+On seed 0 the learned robot never completed an interaction with bloom (4
+approaches lost tracking beside the tall cylinder, 1 failed to plan). The
+baselines, the inert world and the noisy world ran on seed 0 only, so they
+compare little:
 
-### All learning runs (denominators)
+| Policy (seed 0) | Outcomes | Useful | Aversive | Total valence |
+|---|---|---|---|---|
+| Learned | 10 | 2 | 1 | 0.2 |
+| Nearest first | 23 | 5 | 1 | 2.0 |
+| Random | 7 | 2 | 1 | 0.2 |
+| Fixed order | 53 | 0 | 0 | 0.0 |
 
-| Experiment | Phase | Policy | Sim s | Attempts | Outcomes | Useful | Aversive | Nav failures | Interrupted | Contacts intended / unintended | Operator re-enables |
-|---|---|---|---|---|---|---|---|---|---|---|---|
-| history_a | train | learned | 480 | 19 | 11 | 6 | 1 | 2 | 3 | 2 / 0 | 5 |
-| history_a | after restart | learned | 66 | 4 | 2 | 0 | 0 | 1 | 0 | 0 / 0 | 0 |
-| history_b | train | learned | 480 | 19 | 13 | 7 | 1 | 2 | 0 | 1 / 0 | 0 |
-| history_b | after restart | learned | 21 | 2 | 2 | 0 | 0 | 0 | 0 | 0 / 0 | 0 |
-| no_memory | fresh memory | learned | 34 | 2 | 2 | 0 | 0 | 0 | 0 | 0 / 0 | 0 |
-| reversal_early | train | learned | 780 | 26 | 10 | 2 | 1 | 8 | 5 | 3 / 5 | 11 |
-| reversal_late | train | learned | 780 | 30 | 15 | 7 | 1 | 9 | 2 | 2 / 2 | 5 |
-| inert | train | learned | 480 | 17 | 9 | 0 | 0 | 7 | 0 | 2 / 0 | 2 |
-| noisy | train | learned | 480 | 19 | 10 | 2 | 1 | 4 | 2 | 3 / 0 | 4 |
-| learned_standard | train | learned | 480 | 19 | 11 | 6 | 1 | 2 | 3 | 2 / 0 | 5 |
-| baseline_fixed | train | fixed | 480 | 50 | 33 | 13 | 0 | 9 | 3 | 5 / 0 | 2 |
-| baseline_random | train | random | 480 | 43 | 17 | 5 | 2 | 10 | 11 | 3 / 0 | 6 |
-| baseline_nearest | train | nearest | 480 | 41 | 34 | 1 | 0 | 5 | 1 | 2 / 0 | 1 |
+The fixed baseline nudged grump 53 times and never touched it: the robot's
+estimate of the box's position was 12 cm too near, so the nudge stopped about
+10 cm short. That is a limitation of the nudge, not evidence about the rules.
 
-*Intended contacts are those inside a nudge interaction. Most operator
-re-enables follow tracking loss when nudging the tall cylinder fills the
-camera view. `learned_standard` and history_a's training phase are the same
-configuration and match exactly, because the simulator is deterministic.*
+A **control** ran history_a and history_b on seed 0 with the same code and the
+round-1 map. There, history_a learned bloom (4 yellows, total valence 3.0) and
+both restarts chose the learned option. Since the simulator is deterministic,
+the seed-0 failure comes from the map input, even though the new map scores
+better (ATE 1.4 vs 4.1 cm, coverage 60 vs 49 %).
+
+The inert world settled (10 outcomes in the first half, 5 in the second). The
+noisy world is untested this round: on seed 0 the robot never signalled the
+noisy fixture.
 
 ---
 
@@ -305,32 +296,33 @@ The full status of every capability is in
 
 **Known limitations**
 
-* **Navigation arrival rate** (5/16), limited by visual drift in held-out rooms
-  and by goals losing clearance to live evidence.
-* **Map quality:** partial coverage in 300 s, and 46–117 false-free cells per room.
-* **Identity fragmentation:** one fixture was recorded twice, and the duplicate
-  carried none of its bad history.
-* **Unintended contacts in long learning runs:** one run pressed against a
-  fixture for about 60 s late in the run.
-* **Nudging tall objects** blinds the camera and causes tracking loss.
-* **Noise handling:** backs off a 50 %-reliable option too early.
-* **Perception generality:** the detector relies on uniformly painted objects in
-  desaturated rooms, and the console's shape words can be wrong (the cyan
-  cylinder is labelled "block").
-* **Evidence strength:** one seed and one start pose per experiment.
-* **Map provenance:** the learning runs use an arena map built with an earlier
-  mapping-code state. A map rebuilt with current code was too fragmented to use.
+* **Newly placed obstacles:** 4 of 5 box-on-route tests ended in contact.
+* **Relocalisation:** wrong fixes of 10–20 cm, heading errors during in-place
+  rotation, and no way to relocalise while stationary once recovery is used up.
+* **Tracking near tall objects:** approaching or nudging the cylinder can blind
+  the camera; this caused the seed-0 learning failure.
+* **Map quality:** 29–73 % coverage in 300 s; the floor test still lets a few
+  hits inside obstacles become free (up to 103 deep false-free cells in one run).
+* **Nudge reach:** creep is planned from the estimated centre, which is 10+ cm
+  off for boxes seen at an angle.
+* **Evidence strength:** 3 seeds at most, one arena, fixed fixture positions;
+  baselines and the inert and noisy worlds on one seed.
+* **Perception generality:** the detector relies on uniformly painted objects
+  in desaturated rooms.
 
 **Next gates**
 
-1. **Navigation reliability:** goal snapping to nearby certified cells, drift
-   control (loop closure, better keyframes), suppressing stray obstacle hits,
-   merging duplicate identities, and no unintended contacts in long runs.
-2. **Statistical learning evaluation:** 10 or more seeds with randomized start
-   poses and fixture placements, reporting distributions.
-3. **Perception:** a learned detector behind the same contract (pixels in,
+1. **Navigation reliability:** detect a newly placed obstacle before contact,
+   cover recovery and operator turns with the turning check, reject wrong
+   relocalisations, and relocalise while stationary.
+2. **Statistical learning evaluation:** 10 or more seeds with randomised start
+   poses and fixture placements, baselines on every seed, and reporting of
+   distributions.
+3. **Interaction:** nudge creep from the measured contact edge; keeping
+   tracking beside tall objects.
+4. **Perception:** a learned detector behind the same contract (pixels in,
    labelled regions out; never coordinates or motor commands).
-4. **Hardware:** a drive adapter behind the same supervisor, a physical
+5. **Hardware:** a drive adapter behind the same supervisor, a physical
    emergency stop, real camera calibration, and perception running off the
    control thread in real time.
 
@@ -344,7 +336,7 @@ used for all evidence; on macOS, Genesis uses its Metal/CPU backends.
 ```bash
 git clone https://github.com/Nitish05/AMR-RL.git && cd AMR-RL
 scripts/amr.sh setup                    # isolated .venv: genesis-world 1.3.2, torch, opencv, ...
-scripts/amr.sh test                     # 236 tests + ruff + UI script checks (fast, no simulation)
+scripts/amr.sh test                     # 249 tests + ruff + UI script checks (fast, no simulation)
 RUN_GENESIS=1 scripts/amr.sh test-sim   # real Genesis checks: body, wheels, camera, screen, fixtures
 
 # Operator console (loopback only). Autonomy starts DISABLED; press "Enable autonomy".
@@ -364,16 +356,17 @@ environment.
 
 ```bash
 scripts/amr.sh map --world arena --seconds 420                       # build + save an arena map by exploration
-scripts/amr.sh eval-nav --worlds home_a heldout_b heldout_c home_a_dim --map-seconds 300
-scripts/amr.sh eval-learning --map work/evidence/<map-arena-…>/map   # all learning experiments
+scripts/amr.sh eval-nav --worlds home_a heldout_b heldout_c home_a_dim --map-seconds 300 --seeds 0 1 2
+scripts/amr.sh eval-learning --map work/evidence/<map-arena-…>/map --seeds 0 1 2   # learning experiments
 python scripts/eval/report.py --nav work/evidence/<navigation-…> \
     --learning work/evidence/<learning-…> --out report.md             # tables with denominators
 PYTHONPATH=src python scripts/dev/results_figures.py --learning … --nav … --out docs/media
 ```
 
-The results above come from `navigation-20260930-024431`,
-`learning-20260930-022340` + `learning-20260930-042009` and the arena map
-`map-arena-20260929-225035`. Runs that exposed bugs were kept with a
+The results above come from `navigation-20260930-154854`,
+`learning-20260930-154854` and the arena map `map-arena-20260930-122444`; the
+control is `learning-control-oldmap` (round-1 map `map-arena-20260929-225035`).
+Round-1 results are in the git history. Runs that exposed bugs were kept with a
 `SUPERSEDED.md` note naming the bug and its fix. The evidence itself (maps,
 receipts, logs, trained memories) is not committed. The simulation runs at
 about 0.6–0.8× real time on 2 CPU cores, so the full learning suite takes
