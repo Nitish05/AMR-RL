@@ -180,10 +180,19 @@ class Planner:
         xy[-1] = goal
         return self._shortcut(grid, xy)
 
+    @staticmethod
+    def segment_samples(grid, a, b):
+        """Points checked along a straight segment (both ends included, quarter-cell
+        spacing). The planner's shortcut test and the navigator's per-step corridor
+        test use these SAME points: with different samplers a one-cell sliver at the
+        edge of the clearance band could pass one test and fail the other, and the
+        robot then held forever on a path the planner kept re-issuing."""
+        a, b = np.asarray(a, float), np.asarray(b, float)
+        steps = max(2, int(math.ceil(np.linalg.norm(b - a) / (grid.cfg.resolution / 4))) + 1)
+        return np.linspace(a, b, steps)
+
     def segment_clear(self, grid, a, b):
-        steps = max(2, int(np.linalg.norm(np.asarray(b) - np.asarray(a)) / (grid.cfg.resolution / 2)))
-        pts = np.linspace(a, b, steps)
-        return bool(self.traversable_xy(grid, pts).all())
+        return bool(self.traversable_xy(grid, self.segment_samples(grid, a, b)).all())
 
     def _shortcut(self, grid, xy):
         if len(xy) <= 2:

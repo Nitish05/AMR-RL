@@ -385,3 +385,26 @@ def test_nudge_creep_uses_the_measured_contact_edge():
     assert nudge_creep(0.40, 0.40, 0.11) == pytest.approx(0.40 - FRONT_EXTENT + PUSH_DEPTH)
     assert nudge_creep(None, 0.40, 0.11) == pytest.approx(0.40 - 0.11 - FRONT_EXTENT + PUSH_DEPTH)
     assert nudge_creep(0.10, 0.2, 0.1) == 0.0 and nudge_creep(2.0, 2.0, 0.1) == MAX_CREEP
+
+
+def test_paths_the_planner_accepts_pass_the_navigator_corridor_check():
+    """Regression (learning round 3, seed 0): the planner's shortcut test and the
+    navigator's corridor test sampled path segments at different points, so a
+    one-cell sliver at the edge of the clearance band passed one and failed the
+    other. The robot held on a path the planner kept re-issuing until the replan
+    budget ran out, 41 times in a row. Both now check the same samples."""
+    rng = np.random.default_rng(3)
+    checked = 0
+    for trial in range(40):
+        grid = grid_with_free([(-2.0, -2.0, 2.0, 2.0)])
+        for _ in range(4):
+            _box_hits(grid, tuple(rng.uniform(-1.5, 1.5, 2)), float(rng.uniform(0.05, 0.2)), times=3)
+        nav = Navigator()
+        start, goal = rng.uniform(-1.7, 1.7, 2), rng.uniform(-1.7, 1.7, 2)
+        pose = np.array([*start, 0.0])
+        if not nav.planner.traversable_xy(grid, [start])[0] or not nav.set_goal(grid, pose, goal, now=0.0):
+            continue
+        pts = nav._path_points(grid, pose, nav.cfg.corridor_skip, 100.0)
+        assert nav.planner.traversable_xy(grid, pts).all(), f"trial {trial}: accepted path fails the corridor"
+        checked += 1
+    assert checked >= 15

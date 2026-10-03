@@ -183,9 +183,7 @@ class Navigator:
         verts = self.path[max(self.index - 1, 0):]
         pts = []
         for a, b in zip(verts[:-1], verts[1:]):
-            n = max(1, int(np.linalg.norm(b - a) / (grid.cfg.resolution / 2)))
-            seg = a + (b - a) * (np.arange(1, n + 1)[:, None] / n)
-            pts.append(seg)
+            pts.append(self.planner.segment_samples(grid, a, b))  # same points the planner certified
             if np.linalg.norm(b - here) > hi + 0.3:
                 break
         if not pts:
