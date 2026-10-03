@@ -1,0 +1,7 @@
+# Policy-comparison permutation (pre-registered, docs/results/policy-comparison-prereg.md):
+# the reward and the punishment change fixtures, so the rewarding fixture is no longer
+# the one next to the usual starts. grump (red box) now rewards signalling; bloom
+# (cyan cylinder) gives the red panel on signal and nudge.
+bloom: {nudge: {response: red, p: 1.0, hold: 8.0}, signal: {response: red, p: 1.0, hold: 8.0}}
+grump: {signal: {response: yellow, p: 1.0, hold: 8.0}}
+stone: {}

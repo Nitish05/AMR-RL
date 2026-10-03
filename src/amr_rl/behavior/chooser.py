@@ -30,6 +30,10 @@ class MotivationConfig:
     satiation: float = 0.35  # need reduction per unit positive valence
     habituation_half_life: float = 120.0
     idle_below: float = 0.2
+    # Evaluation-only ablation: need fixed at 1, no satiation, no habituation. It
+    # isolates choice quality from the engineered drive (which makes the deployed
+    # policy idle once satisfied); idle stays available. Never a deployed setting.
+    clamp: bool = False
 
 
 @dataclass
@@ -55,11 +59,14 @@ class Motivation:
 
     def __init__(self, cfg: MotivationConfig | None = None):
         self.cfg = cfg or MotivationConfig()
-        self.need = self.cfg.initial_need
+        self.need = 1.0 if self.cfg.clamp else self.cfg.initial_need
         self.habituation: dict[str, float] = {}
         self.last = None
 
     def update(self, now):
+        if self.cfg.clamp:
+            self.last = now
+            return
         if self.last is not None:
             dt = max(0.0, now - self.last)
             self.need = min(1.0, self.need + self.cfg.need_growth * dt)
@@ -68,7 +75,7 @@ class Motivation:
         self.last = now
 
     def on_outcome(self, entity_id, valence):
-        if valence > 0:
+        if valence > 0 and not self.cfg.clamp:
             self.need = max(0.0, self.need - self.cfg.satiation * valence)
             self.habituation[entity_id] = self.habituation.get(entity_id, 0.0) + 1.0
 
@@ -76,7 +83,7 @@ class Motivation:
         return 1.0 / (1.0 + self.habituation.get(entity_id, 0.0))
 
     def snapshot(self):
-        return {"stimulation_need": self.need, "engineered": True,
+        return {"stimulation_need": self.need, "engineered": True, "drive_clamped": self.cfg.clamp,
                 "habituation": {k: round(v, 3) for k, v in self.habituation.items()}}
 
 

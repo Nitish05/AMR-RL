@@ -24,6 +24,7 @@ import yaml
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from common import FALSE_RELOC_M, FALSE_RELOC_RAD, dump, fresh_dir, provenance, trajectory_metrics  # noqa: E402
 
+from amr_rl.behavior.chooser import MotivationConfig  # noqa: E402
 from amr_rl.control.supervisor import SupervisorConfig  # noqa: E402
 from amr_rl.learning.memory import LearningConfig  # noqa: E402
 from amr_rl.robot.spec import PROJECT_ROOT  # noqa: E402
@@ -64,6 +65,17 @@ EXPERIMENTS = {
     "baseline_nearest": [{"label": "train", "consequences": "standard", "seconds": 480, "policy": "nearest"}],
     "baseline_fixed": [{"label": "train", "consequences": "standard", "seconds": 480, "policy": "fixed"}],
 }
+# Pre-registered policy comparison (docs/results/policy-comparison-prereg.md): rule
+# permutations x policies, one fresh 480 s phase each. "clamped" is the evaluation-
+# only drive-clamped ablation of the learned policy. Selected with --experiments.
+SUITE_PERMUTATIONS = ("standard", "swapped", "mirror")
+SUITE_POLICIES = ("learned", "clamped", "random", "nearest", "fixed")
+SUITE = {
+    f"suite-{perm}-{pol}": [{"label": "train", "consequences": perm, "seconds": 480,
+                             "policy": "learned" if pol in ("learned", "clamped") else pol,
+                             **({"motivation": {"clamp": True}} if pol == "clamped" else {})}]
+    for perm in SUITE_PERMUTATIONS for pol in SUITE_POLICIES
+}
 
 
 # Start poses (world frame) for seeded runs: central floor of the arena, varied headings.
@@ -103,7 +115,7 @@ def fixture_for(session, map_xy):
 def run_phase(phase, *, map_dir, memory_path, run_dir, seed, world="arena", start=None, map_origin=None):
     policy = phase.get("policy", "learned")
     config = RuntimeConfig(supervisor=SupervisorConfig(require_heartbeat=False), policy=policy, seed=seed,
-                           initial_survey=False)
+                           initial_survey=False, motivation=MotivationConfig(**phase.get("motivation", {})))
     consequences = load_consequences(phase["consequences"])
     session = Session(world, run_dir=run_dir, memory_path=memory_path, config=config, consequences=consequences,
                       seed=seed, inspection=False, map_dir=map_dir, map_origin=map_origin,
@@ -279,7 +291,7 @@ def main():
             results = {"experiment": name, "seed": seed, "start_world": list(start), "phases": []}
             t0 = time.time()
             print(f"== {name} seed {seed} start {start}", flush=True)
-            for index, phase in enumerate(EXPERIMENTS[name]):
+            for index, phase in enumerate({**EXPERIMENTS, **SUITE}[name]):
                 mem = memory
                 if phase.get("memory") == "fresh":
                     mem = exp_dir / f"memory-fresh-{index}.sqlite"

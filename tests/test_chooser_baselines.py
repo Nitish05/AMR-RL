@@ -26,3 +26,17 @@ def test_fixed_baseline_follows_first_seen_order_not_random_ids():
         choice = rt.chooser._pick(rt, rt.chooser.candidates_for(rt, 5.0))
         picks.append(ids.index(choice["entity_id"]))
     assert picks == [0, 0]  # always the first entity seen
+
+
+def test_drive_clamp_is_an_evaluation_ablation_with_no_satiation_or_habituation():
+    from amr_rl.behavior.chooser import Motivation, MotivationConfig
+
+    m = Motivation(MotivationConfig(clamp=True))
+    m.update(0.0)
+    m.on_outcome("a", 1.0)
+    m.update(300.0)
+    assert m.need == 1.0 and m.novelty("a") == 1.0 and m.snapshot()["drive_clamped"]
+    d = Motivation()
+    d.update(0.0)
+    d.on_outcome("a", 1.0)
+    assert d.need < 0.6 and d.novelty("a") < 1.0 and not d.snapshot()["drive_clamped"]
