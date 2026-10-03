@@ -60,6 +60,13 @@ class OccupancyGrid:
         # Derived runtime state, not saved with the map; overrides floor evidence.
         self.keepout = np.zeros((n, n), bool)
         self._keepout_key = None
+        # Evidence journal for loop closure: every update with the keyframe it was
+        # measured from (``anchor``, set by the runtime) and the cell centres it hit.
+        # After a loop closure the grid is rebuilt from ``_base`` by replaying the
+        # journal with each anchor's correction (points kept exactly, not re-quantised).
+        self.anchor = -1
+        self.journal = []  # (anchor, xy float32 (k, 2), delta)
+        self._base = self.logodds.copy()
 
     # -------------------------------------------------------------- indexing
     def to_cell(self, xy):
@@ -86,8 +93,28 @@ class OccupancyGrid:
             return 0
         values = self.logodds.reshape(-1)
         values[cells] = np.clip(values[cells] + delta, -self.cfg.free_clamp, self.cfg.clamp)
+        self.journal.append((self.anchor, self.to_xy(cells % self.n, cells // self.n).astype(np.float32), float(delta)))
         self.revision += 1
         return len(cells)
+
+    def replay(self, transforms):
+        """Rebuild the evidence after a loop closure. ``transforms``: {anchor keyframe
+        id: planar transform (tx, ty, theta)} mapping where an update was placed to
+        where it belongs now; updates from other anchors are kept in place."""
+        from ..perception.pose_graph import apply_transform
+
+        values = self._base.copy().reshape(-1)
+        for k, (a, xy, delta) in enumerate(self.journal):
+            T = transforms.get(a)
+            if T is not None and (abs(T[0]) > 1e-9 or abs(T[1]) > 1e-9 or abs(T[2]) > 1e-12):
+                xy = apply_transform(T, xy).astype(np.float32)
+                self.journal[k] = (a, xy, delta)
+            ix, iy = self.to_cell(xy)
+            ok = self.inside(ix, iy)
+            cells = np.unique(iy[ok] * self.n + ix[ok])
+            values[cells] = np.clip(values[cells] + delta, -self.cfg.free_clamp, self.cfg.clamp)
+        self.logodds = values.reshape(self.logodds.shape)
+        self.revision += 1
 
     def mark_free_disc(self, center, radius, strength=None):
         r = int(np.ceil(radius / self.cfg.resolution))
@@ -159,6 +186,7 @@ class OccupancyGrid:
             raise ValueError("Occupancy grid belongs to a different map version")
         grid = cls(map_version)
         grid.logodds[:] = np.clip(data["logodds"], -grid.cfg.free_clamp, grid.cfg.clamp)
+        grid._base = grid.logodds.copy()  # a loaded map is the replay base (its keyframes stay fixed)
         return grid
 
 

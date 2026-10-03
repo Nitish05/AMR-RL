@@ -115,6 +115,47 @@ def reloc_transitions(truth_rows, *, max_err=FALSE_RELOC_M, max_herr=FALSE_RELOC
     return out
 
 
+def _truth_at(truth_rows, t):
+    best = min(truth_rows, key=lambda r: abs(r["t"] - t))
+    return np.asarray(best["gt"], float)
+
+
+def keyframe_map_error(keyframes, truth_rows):
+    """Scoring only: the FINAL keyframe poses (after any loop closure corrected the
+    past) against the true pose at each keyframe's time, in the map frame."""
+    if not keyframes or not truth_rows:
+        return None
+    errs, herrs = [], []
+    for k in keyframes:
+        gt = _truth_at(truth_rows, k.timestamp)
+        errs.append(math.dist(k.pose[:2], gt[:2]))
+        herrs.append(abs((k.pose[2] - gt[2] + math.pi) % (2 * math.pi) - math.pi))
+    return {"keyframes": len(errs), "rmse_m": float(np.sqrt(np.mean(np.square(errs)))), "max_m": float(max(errs)),
+            "max_heading_deg": float(np.degrees(max(herrs)))}
+
+
+def score_loops(loop_log, truth_rows, *, max_err=0.1, max_herr=0.1):
+    """Scoring only: was each CLOSED loop's relative pose right? Compares the loop
+    constraint (candidate keyframe -> current keyframe) with the true relative pose."""
+    out = []
+    for e in loop_log:
+        if e.get("outcome") != "closed":
+            continue
+        a, b = _truth_at(truth_rows, e["t_candidate"]), _truth_at(truth_rows, e["t"])
+        c, s = math.cos(a[2]), math.sin(a[2])
+        true_rel = np.array([c * (b[0] - a[0]) + s * (b[1] - a[1]), -s * (b[0] - a[0]) + c * (b[1] - a[1]),
+                             (b[2] - a[2] + math.pi) % (2 * math.pi) - math.pi])
+        pc, pl = np.asarray(e["pose_candidate"]), np.asarray(e["pose_loop"])
+        c, s = math.cos(pc[2]), math.sin(pc[2])
+        est_rel = np.array([c * (pl[0] - pc[0]) + s * (pl[1] - pc[1]), -s * (pl[0] - pc[0]) + c * (pl[1] - pc[1]),
+                            (pl[2] - pc[2] + math.pi) % (2 * math.pi) - math.pi])
+        err = float(np.hypot(*(est_rel[:2] - true_rel[:2])))
+        herr = abs((est_rel[2] - true_rel[2] + math.pi) % (2 * math.pi) - math.pi)
+        out.append({"t": e["t"], "kf": e["kf"], "candidate": e["candidate"], "err_m": err, "herr_rad": herr,
+                    "false": bool(err > max_err or herr > max_herr), "correction_m": e.get("correction_m")})
+    return out
+
+
 def trajectory_metrics(truth_rows):
     rows = [r for r in truth_rows if r["est"] is not None and r["status"] == "tracking"]
     errs = [r["err"] for r in rows]

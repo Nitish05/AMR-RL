@@ -33,6 +33,7 @@ import numpy as np
 from scipy.spatial import cKDTree
 
 from .camera_model import CameraModel, wrap
+from .pose_graph import PoseGraph, apply_to_pose, apply_transform, between, correction, trajectory_distortion
 
 _POPCOUNT = np.array([bin(i).count("1") for i in range(256)], np.uint8)
 
@@ -99,6 +100,24 @@ class VSLAMConfig:
     reloc_view_travel: float = 0.10
     reloc_chain_seconds: float = 4.0   # a confirmation chain expires without a new candidate
     reloc_probation_frames: int = 15   # after acceptance: no map growth; failure -> relocalise
+    # Loop closure (docs/VSLAM.md): active when a place descriptor is attached
+    # (``PlanarVSLAM.place``). Candidates: older keyframes with a similar whole-image
+    # descriptor; verification as for relocalisation but only against the
+    # candidate's own landmarks; acceptance also needs a plausible correction for the
+    # distance travelled and a small trajectory distortion after pose-graph
+    # optimisation (ROVER-style); then keyframes, landmarks and pose are corrected.
+    loop_closure: bool = True
+    loop_min_gap_kf: int = 30
+    loop_min_gap_s: float = 30.0
+    loop_min_travel: float = 0.6       # m of path since the candidate: a revisit, not continuous tracking
+    loop_top_k: int = 3
+    loop_min_similarity: float = 0.55
+    loop_window_kf: int = 8            # candidate's landmarks: anchored within +- this many keyframes
+    loop_verify_min: int = 50          # calibrated: docs/results/loop-closure.md
+    loop_max_correction: float = 0.15  # m, plus loop_correction_per_m x path length since the candidate
+    loop_correction_per_m: float = 0.08
+    loop_distortion_max: float = 0.10  # m, RMS after rigid alignment (ROVER)
+    loop_cooldown_kf: int = 5
     motion_prior: bool = True
     consistency_window: float = 3.0
     # Fast "frozen estimate" check: commanded travel >= freeze_min_cmd within
@@ -131,6 +150,7 @@ class Keyframe:
     desc: np.ndarray
     landmark: np.ndarray  # landmark index per feature or -1
     gray: np.ndarray | None = None
+    gdesc: np.ndarray | None = None  # whole-image place descriptor (loop closure / retrieval)
 
 
 @dataclass
@@ -160,11 +180,12 @@ class Landmarks:
         self.origin = np.zeros((0, 3))  # camera centre at creation
         self.marked = np.zeros(0, bool)  # already contributed obstacle evidence
         self.created = np.zeros(0)  # timestamp of creation (-inf: loaded from a saved map)
+        self.anchor = np.zeros(0, int)  # keyframe that created it (-1: unknown); moves with it on loop closure
 
     def __len__(self):
         return int(self.alive.sum())
 
-    def add(self, pos, desc, kind, origin=None, confirmed=False, created=-np.inf):
+    def add(self, pos, desc, kind, origin=None, confirmed=False, created=-np.inf, anchor=-1):
         n = len(pos)
         if n == 0:
             return np.zeros(0, int)
@@ -180,13 +201,15 @@ class Landmarks:
         o = np.zeros((n, 3)) if origin is None else np.broadcast_to(np.asarray(origin, float), (n, 3))
         self.origin = np.vstack([self.origin, o])
         self.created = np.concatenate([self.created, np.full(n, float(created))])
+        self.anchor = np.concatenate([self.anchor, np.full(n, int(anchor))])
         return np.arange(start, start + n)
 
     def compact(self):
         keep = self.alive
         remap = -np.ones(len(keep), int)
         remap[keep] = np.arange(int(keep.sum()))
-        for name in ("pos", "desc", "kind", "visible", "found", "alive", "confirmed", "origin", "marked", "created"):
+        for name in ("pos", "desc", "kind", "visible", "found", "alive", "confirmed", "origin", "marked", "created",
+                     "anchor"):
             setattr(self, name, getattr(self, name)[keep])
         return remap
 
@@ -214,6 +237,12 @@ class PlanarVSLAM:
         self._reloc_info = {}
         self._probation = 0
         self._probation_dr = None
+        self.place = None  # whole-image place descriptor (perception/place_recognition.py) or None
+        self.loop_log = []  # every loop candidate checked (operational values; bounded)
+        self.loop_edges = []  # accepted loop constraints: (i, j, z)
+        self.on_loop_closure = None  # callback(corrections: {keyframe id: planar transform}) for map layers
+        self._loop_cooldown = 0
+        self.n_loaded_keyframes = 0  # keyframes of a loaded map stay fixed in the pose graph
         self.horizon = model.horizon_row()
         self.frames = 0
         self.last_hypothesis = None
@@ -538,7 +567,9 @@ class PlanarVSLAM:
         matched_lm = -np.ones(len(pts), int)
         matched_lm[kp_idx[inl]] = lm_idx[inl]
         kf = self._maybe_keyframe(gray, pts, desc, matched_lm, int(inl.sum()), timestamp)
-        return TrackResult(TRACKING, pose.copy(), self.position_sigma, self.heading_sigma,
+        if kf and self.place is not None and self.cfg.loop_closure:
+            self._loop_check(rgb, timestamp)
+        return TrackResult(TRACKING, self.pose.copy(), self.position_sigma, self.heading_sigma,
                            int(inl.sum()), len(lm_idx), kf, timestamp,
                            inlier_uv=pts[kp_idx[inl]])
 
@@ -640,7 +671,8 @@ class PlanarVSLAM:
         if ok.sum() < 40:
             return TrackResult(INITIALIZING, None, None, None, 0, 0, False, timestamp,
                                "insufficient_floor_texture")
-        ids = self.lm.add(world[ok], desc[ok], 0, origin=self.model.T_world_cam(pose)[:3, 3], created=timestamp)
+        ids = self.lm.add(world[ok], desc[ok], 0, origin=self.model.T_world_cam(pose)[:3, 3], created=timestamp,
+                          anchor=0)
         matched = -np.ones(len(pts), int)
         matched[np.flatnonzero(ok)] = ids
         self.keyframes.append(Keyframe(0, timestamp, pose.copy(), pts, desc, matched, gray))
@@ -688,7 +720,7 @@ class PlanarVSLAM:
                 # a different appearance (scale/viewpoint) is kept as a new observation.
                 ok[idx[same]] = False
         ids = self.lm.add(world[ok], desc[ok], 0, origin=self.model.T_world_cam(self.pose)[:3, 3],
-                          created=self._now)
+                          created=self._now, anchor=kf.id)
         kf.landmark[np.flatnonzero(ok)] = ids
         self.keyframes.append(kf)
         if self.cfg.local_ba_window >= 4 and len(self.keyframes) >= self.cfg.local_ba_window:
@@ -729,7 +761,7 @@ class PlanarVSLAM:
         ok = ((z1 > 0.1) & (z2 > 0.1) & (e1 < 2.0) & (e2 < 2.0) & (parallax > self.cfg.min_parallax_deg)
               & (X[:, 2] > -0.05) & (X[:, 2] < 2.0) & (np.linalg.norm(r1, axis=1) < 6.0))
         ids = self.lm.add(X[ok], kf.desc[ia[ok]], 1, origin=np.linalg.inv(T1)[:3, 3], confirmed=True,
-                          created=self._now)
+                          created=self._now, anchor=kf.id)
         kf.landmark[ia[ok]] = ids
         ref.landmark[ib[ok]] = ids
         return int(ok.sum())
@@ -1014,13 +1046,154 @@ class PlanarVSLAM:
             return None
         return pose, n, H
 
+    # ------------------------------------------------------------ loop closure
+    def _loop_check(self, rgb, timestamp):
+        """Describe the new keyframe; look for an earlier visit of the same place and,
+        if a candidate passes verification and the pose-graph checks, correct the map."""
+        cfg = self.cfg
+        kf = self.keyframes[-1]
+        kf.gdesc = np.asarray(self.place.describe(rgb), np.float32)
+        if self._loop_cooldown > 0:
+            self._loop_cooldown -= 1
+            return None
+        cands = [k for k in self.keyframes[:-1] if k.gdesc is not None and kf.id - k.id >= cfg.loop_min_gap_kf
+                 and timestamp - k.timestamp >= cfg.loop_min_gap_s]
+        if not cands:
+            return None
+        sims = np.array([float(kf.gdesc @ k.gdesc) for k in cands])
+        for idx in np.argsort(-sims)[:cfg.loop_top_k]:
+            if sims[idx] < cfg.loop_min_similarity:
+                break
+            entry = {"t": float(timestamp), "kf": kf.id, "candidate": cands[idx].id,
+                     "t_candidate": float(cands[idx].timestamp), "similarity": float(sims[idx])}
+            result = self._verify_loop(kf, cands[idx], entry)
+            self.loop_log.append(entry)
+            del self.loop_log[:-2000]
+            if result is not None:
+                self._loop_cooldown = cfg.loop_cooldown_kf
+                return result
+        return None
+
+    def _path_length(self, i, j):
+        ids = sorted(k.id for k in self.keyframes if i <= k.id <= j)
+        by = {k.id: k for k in self.keyframes}
+        return float(sum(np.hypot(*(by[b].pose[:2] - by[a].pose[:2])) for a, b in zip(ids[:-1], ids[1:])))
+
+    def _verify_loop(self, kf, cand, entry):
+        cfg = self.cfg
+        near = self.lm.alive & (np.abs(self.lm.anchor - cand.id) <= cfg.loop_window_kf) & (self.lm.anchor >= 0)
+        wide = self.lm.alive & (np.abs(self.lm.anchor - cand.id) <= 2 * cfg.loop_window_kf) & (self.lm.anchor >= 0)
+        found = self._global_matches(kf.pts, kf.desc, candidates=np.flatnonzero(near))
+        if found is None:
+            entry["outcome"] = "too_few_landmarks"
+            return None
+        kp, lm, uniq = found
+        hyps = self._planar_hypotheses(kf.pts, kp, lm, uniq)
+        if len(hyps) == 0:
+            entry["outcome"] = "no_hypothesis"
+            return None
+        P, uv_q = self.lm.pos[lm], kf.pts[kp]
+        scores, _ = self._score_poses(hyps, P, uv_q, kp)
+        modes = []
+        for h in np.argsort(-scores):
+            if scores[h] < 8:
+                break
+            if any(np.hypot(*(hyps[h, :2] - m[:2])) < 0.15 and abs(wrap(hyps[h, 2] - m[2])) < math.radians(10)
+                   for m in modes):
+                continue
+            modes.append(hyps[h])
+            if len(modes) >= cfg.reloc_modes:
+                break
+        checked = []
+        for m in modes:
+            _, okm = self._score_poses(m[None], P, uv_q, kp)
+            if okm[0].sum() < 6:
+                continue
+            refined, _, _ = self.optimize(m, P[okm[0]], uv_q[okm[0]])
+            v = self._verify(refined, kf.pts, kf.desc, candidates=np.flatnonzero(wide))
+            if v is not None:
+                checked.append(v)
+        if not checked:
+            entry["outcome"] = "not_verified"
+            return None
+        checked.sort(key=lambda c: -c["inliers"])
+        best = checked[0]
+        rivals = [c for c in checked[1:] if np.hypot(*(c["pose"][:2] - best["pose"][:2])) > 0.15
+                  or abs(wrap(c["pose"][2] - best["pose"][2])) > math.radians(10)]
+        second = rivals[0]["inliers"] if rivals else 0
+        jump = float(np.hypot(*(best["pose"][:2] - kf.pose[:2])))
+        travel = self._path_length(cand.id, kf.id)
+        if travel < cfg.loop_min_travel:
+            entry["outcome"] = "rejected_not_a_revisit"
+            entry["travel_m"] = travel
+            return None
+        allowed = cfg.loop_max_correction + cfg.loop_correction_per_m * travel
+        entry.update({"verified": best["inliers"], "explained": round(best["explained"], 3), "second": second,
+                      "pose_loop": [float(v) for v in best["pose"]], "pose_before": [float(v) for v in kf.pose],
+                      "pose_candidate": [float(v) for v in cand.pose],
+                      "correction_m": jump, "travel_m": travel})
+        if (best["inliers"] < cfg.loop_verify_min or best["explained"] < cfg.reloc_explained_min
+                or best["inliers"] < cfg.reloc_distinct_ratio * second):
+            entry["outcome"] = "rejected_verification"
+            return None
+        if jump > allowed:
+            entry["outcome"] = "rejected_implausible_correction"
+            return None
+        z = between(cand.pose, best["pose"])
+        return self._close_loop(kf, cand, z, entry)
+
+    def _close_loop(self, kf, cand, z, entry):
+        cfg = self.cfg
+        g = PoseGraph()
+        ordered = sorted(self.keyframes, key=lambda k: k.id)
+        for k in ordered:
+            g.add_node(k.id, k.pose, fixed=(k.id == ordered[0].id or k.id < self.n_loaded_keyframes))
+        for a, b in zip(ordered[:-1], ordered[1:]):
+            rel = between(a.pose, b.pose)
+            d = float(np.hypot(rel[0], rel[1]))
+            sx = 0.01 + 0.03 * d
+            g.add_edge(a.id, b.id, rel, (sx, sx, 0.01 + 0.02 * abs(rel[2])))
+        for i, j, zz in self.loop_edges:
+            g.add_edge(i, j, zz, (0.03, 0.03, 0.02), loop=True)
+        g.add_edge(cand.id, kf.id, z, (0.03, 0.03, 0.02), loop=True)
+        before = {k.id: k.pose.copy() for k in ordered}
+        after = g.optimize()
+        distortion = trajectory_distortion(before, after)
+        weight = g.edges[-1].weight
+        entry.update({"distortion_m": distortion, "loop_weight": weight})
+        if distortion > cfg.loop_distortion_max or weight < 0.5:
+            entry["outcome"] = "rejected_pose_graph"
+            return None
+        corrections = {i: correction(before[i], after[i]) for i in before}
+        by = {k.id: k for k in self.keyframes}
+        for i in corrections:
+            by[i].pose = after[i].copy()
+        # landmarks move with the keyframe that created them
+        for i, T in corrections.items():
+            sel = self.lm.anchor == i
+            if sel.any() and (abs(T[2]) > 1e-9 or abs(T[0]) > 1e-9 or abs(T[1]) > 1e-9):
+                self.lm.pos[sel, :2] = apply_transform(T, self.lm.pos[sel, :2])
+        T_cur = corrections[kf.id]
+        self.pose = apply_to_pose(T_cur, self.pose)
+        c, s_ = math.cos(T_cur[2]), math.sin(T_cur[2])
+        self.velocity[:2] = [c * self.velocity[0] - s_ * self.velocity[1], s_ * self.velocity[0] + c * self.velocity[1]]
+        self._motion_log.clear()  # the jump is a correction, not motion
+        self._dr = None
+        self._kp_tree = self._kp_tree_pts = None
+        self.loop_edges.append((cand.id, kf.id, z))
+        entry.update({"outcome": "closed", "pose_after": [float(v) for v in self.pose]})
+        if self.on_loop_closure is not None:
+            self.on_loop_closure(corrections, {k.id: k.timestamp for k in self.keyframes})
+        return entry
+
     # ------------------------------------------------------------ planar relocalisation
-    def _global_matches(self, pts, desc):
+    def _global_matches(self, pts, desc, candidates=None):
         """Whole-map descriptor matches with a ratio test against the best match at a
         DIFFERENT place (near-duplicate landmarks of one point are not ambiguity).
         Returns (kp, lm, unique): a keypoint ambiguous between two places yields both
-        pairs with unique=False (scored, but never used to seed a hypothesis)."""
-        alive = np.flatnonzero(self.lm.alive)
+        pairs with unique=False (scored, but never used to seed a hypothesis).
+        ``candidates``: restrict to these landmark indices (loop closure)."""
+        alive = np.flatnonzero(self.lm.alive) if candidates is None else np.asarray(candidates, int)
         if len(alive) < 50 or len(pts) < 30:
             return None
         k = self.cfg.reloc_knn
@@ -1104,11 +1277,11 @@ class PlanarVSLAM:
         ty = mm[:, 1] - (s_ * mq[:, 0] + c * mq[:, 1])
         return np.stack([tx, ty, np.arctan2(s_, c)], 1)
 
-    def _verify(self, pose, pts, desc):
+    def _verify(self, pose, pts, desc, candidates=None):
         """Guided re-match at a candidate pose (as tracking does) and how much of what
         the map predicts to be visible was found again (image cells, so duplicate
         landmarks of one point count once)."""
-        alive = np.flatnonzero(self.lm.alive)
+        alive = np.flatnonzero(self.lm.alive) if candidates is None else np.asarray(candidates, int)
         d = self.lm.pos[alive, :2] - pose[:2]
         rel = np.arctan2(d[:, 1], d[:, 0]) - pose[2]
         rel = np.arctan2(np.sin(rel), np.cos(rel))
@@ -1223,6 +1396,7 @@ class PlanarVSLAM:
         slam.lm.found[:] = data["found"]
         slam.lm.confirmed[:] = data["confirmed"]
         slam.status = RELOCALIZING
+        slam.n_loaded_keyframes = len(meta["keyframes"])
         for item in meta["keyframes"]:
             slam.keyframes.append(Keyframe(item["id"], item["t"], np.array(item["pose"]),
                                            np.zeros((0, 2)), np.zeros((0, 32), np.uint8), np.zeros(0, int)))

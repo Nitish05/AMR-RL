@@ -15,7 +15,7 @@ case "$cmd" in
     # Isolated environment for AMR-RL only (does not touch BB8-RL or Studio envs).
     python3.12 -m venv "$ROOT/.venv"
     "$ROOT/.venv/bin/python" -m pip install --upgrade pip
-    "$ROOT/.venv/bin/python" -m pip install -e ".[simulation,dev,depth]"
+    "$ROOT/.venv/bin/python" -m pip install -e ".[simulation,dev,depth,place]"
     ;;
   bench-setup)
     # Light environment for the learner testbed only (no Genesis, no torch): .venv-bench.
@@ -45,6 +45,12 @@ case "$cmd" in
     ;;
   learner-bench)
     "$ROOT/.venv-bench/bin/python" scripts/eval/learner_bench.py "$@"
+    ;;
+  fetch-place-model)
+    # Downloads the pinned MegaLoc place-recognition code (GitHub commit) and weights
+    # (MIT, ~900 MB) into the torch-hub and Hugging Face caches outside the repository.
+    # Without them the VSLAM runs without loop closure and reports so in its state.
+    "$PY" -c "from amr_rl.perception.place_recognition import MegaLocDescriptor; MegaLocDescriptor(allow_download=True); print('place model ready')"
     ;;
   fetch-depth-model)
     # Downloads the pinned Depth Anything V2 Small weights (Apache-2.0, ~100 MB) into the
@@ -76,6 +82,6 @@ case "$cmd" in
     "$PY" scripts/eval/learning.py "$@"
     ;;
   *)
-    echo "usage: scripts/amr.sh {setup|bench-setup|bench-test|learner-bench|fetch-depth-model|test|test-sim|generate-robot|app|map|eval-nav|eval-learning} [args]"
+    echo "usage: scripts/amr.sh {setup|bench-setup|bench-test|learner-bench|fetch-depth-model|fetch-place-model|test|test-sim|generate-robot|app|map|eval-nav|eval-learning} [args]"
     ;;
 esac

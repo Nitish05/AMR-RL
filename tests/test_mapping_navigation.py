@@ -408,3 +408,27 @@ def test_paths_the_planner_accepts_pass_the_navigator_corridor_check():
         assert nav.planner.traversable_xy(grid, pts).all(), f"trial {trial}: accepted path fails the corridor"
         checked += 1
     assert checked >= 15
+
+
+def test_loop_closure_replay_moves_evidence_with_its_keyframe():
+    """Occupancy evidence is journalled with the keyframe it was measured from; after
+    a loop closure it is replayed with that keyframe's correction, other evidence
+    stays put, and repeated corrections compound exactly."""
+    from amr_rl.perception.pose_graph import apply_transform
+
+    grid = OccupancyGrid("m")
+    grid.anchor = 3
+    wall = np.array([[1.01 + 0.025 * k, 0.51] for k in range(20)])  # off cell boundaries
+    for _ in range(3):
+        grid.add_hits(wall, grid.cfg.occ_hit)
+    grid.anchor = 7
+    other = np.array([[-1.0, -1.0]])
+    for _ in range(3):
+        grid.add_hits(other, grid.cfg.occ_hit)
+    T = np.array([0.0, 0.3, 0.0])  # keyframe 3 was 30 cm off in y
+    grid.replay({3: T})
+    assert grid.classify_xy(wall + np.array([0.0, 0.3]))[0] == OCCUPIED
+    assert grid.classify_xy(wall)[0] == UNKNOWN
+    assert grid.classify_xy(other)[0] == OCCUPIED
+    grid.replay({3: T})  # a second correction compounds (stored points moved, not re-quantised)
+    assert grid.classify_xy(apply_transform(T, apply_transform(T, wall)))[0] == OCCUPIED

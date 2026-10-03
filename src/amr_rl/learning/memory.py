@@ -239,6 +239,13 @@ class ExperienceMemory:
     def merges(self):
         return [dict(r) for r in self.db.execute("SELECT * FROM merges ORDER BY seq")]
 
+    def relocate_entities(self, positions: dict):
+        """Move remembered positions after a map correction (loop closure): the
+        entities did not move, the map frame under them was corrected."""
+        with self.lock, self.db:
+            for entity_id, (x, y) in positions.items():
+                self.db.execute("UPDATE entities SET x=?, y=? WHERE entity_id=?", (float(x), float(y), entity_id))
+
     def set_label(self, entity_id, label):
         with self.lock, self.db:
             self.db.execute("UPDATE entities SET label=? WHERE entity_id=?", (label, entity_id))

@@ -11,7 +11,15 @@ from pathlib import Path
 import cv2
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from common import dump, fresh_dir, operator_turn_until_tracking, provenance, trajectory_metrics  # noqa: E402
+from common import (  # noqa: E402
+    dump,
+    fresh_dir,
+    keyframe_map_error,
+    operator_turn_until_tracking,
+    provenance,
+    score_loops,
+    trajectory_metrics,
+)
 
 from amr_rl.control.supervisor import SupervisorConfig  # noqa: E402
 from amr_rl.runtime.robot import RuntimeConfig  # noqa: E402
@@ -26,11 +34,13 @@ def main():
     parser.add_argument("--seconds", type=float, default=420)
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--out", default=None)
+    parser.add_argument("--no-loop-closure", action="store_true", help="A/B: run without loop closure")
     args = parser.parse_args()
     out = Path(args.out) if args.out else fresh_dir(f"map-{args.world}")
     out.mkdir(parents=True, exist_ok=True)
     provenance(out, configs=[WORLD_DIR / f"{args.world}.yaml"], extra={"args": vars(args)})
-    cfg = RuntimeConfig(supervisor=SupervisorConfig(require_heartbeat=False), policy="explore_only", seed=args.seed)
+    cfg = RuntimeConfig(supervisor=SupervisorConfig(require_heartbeat=False), policy="explore_only", seed=args.seed,
+                        place_descriptor=None if args.no_loop_closure else "megaloc")
     # Seed k turns the configured start heading by k x 72 deg (seed 0 = configured start).
     start = list(load_world_config(args.world)["robot_start"])
     start[2] = float(start[2] + args.seed * 2 * math.pi / 5)
@@ -63,6 +73,11 @@ def main():
     result = {"map_version": meta["map_version"], "landmarks": meta["landmarks"], "reenable_interventions": reenable,
               "operator_turns": turns,
               "trajectory": trajectory_metrics(s.truth),
+              "keyframe_map_error": keyframe_map_error(s.runtime.slam.keyframes, s.truth),
+              "loop_closure": {"status": s.runtime.place_status, "closures": len(s.runtime.loop_closures),
+                               "candidates_checked": len(s.runtime.slam.loop_log),
+                               "scored": score_loops(s.runtime.slam.loop_log, s.truth),
+                               "log": s.runtime.slam.loop_log},
               "map_score": evaluator.score_map(s.world, s.runtime.grid, s.origin), "contacts": s.contacts,
               "sim_seconds": s.now,
               "origin_world": [float(v) for v in s.origin]}  # evaluation-only: world pose of the map frame

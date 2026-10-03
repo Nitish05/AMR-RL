@@ -36,6 +36,7 @@ from ..perception.near_depth import MODEL_REVISION as DEPTH_MODEL_REVISION
 from ..perception.near_depth import LazyBackend as LazyDepthBackend
 from ..perception.near_depth import MonoDepthObstacles
 from ..perception.near_depth import model_available as depth_model_available
+from ..perception.place_recognition import MEGALOC_CODE_COMMIT, MEGALOC_REPO, make_descriptor, place_model_available
 from ..perception.semantic import SemanticWorker
 from ..perception.vslam import PREDICTED, TRACKING, PlanarVSLAM, VSLAMConfig
 
@@ -61,6 +62,10 @@ class RuntimeConfig:
     # from earlier panoramas (0 = only the +-50 degree sweep). Measured off: the extra
     # in-place rotations drifted the map (arena seed 1 ATE 3.6 -> 20 cm; docs/VSLAM.md).
     explore_panorama_spacing: float = 0.0
+    # Whole-image place descriptor for loop closure ("megaloc" or None). Optional:
+    # loaded only from the local cache (scripts/amr.sh fetch-place-model); without it
+    # the VSLAM runs without loop closure and the state says so.
+    place_descriptor: str | None = "megaloc"
 
 
 class RobotRuntime:
@@ -93,6 +98,15 @@ class RobotRuntime:
                                         self.planner.cfg.footprint_radius)
                 self.guard_status = f"active ({DEPTH_MODEL_ID}@{DEPTH_MODEL_REVISION[:8]})"
         self.nav.guard = self.guard
+        self.place_status = "disabled"
+        if self.cfg.place_descriptor:
+            if not place_model_available():
+                self.place_status = "unavailable: place model not in the local cache (no loop closure)"
+            else:
+                self.slam.place = make_descriptor(self.cfg.place_descriptor)
+                self.place_status = f"active ({MEGALOC_REPO}@{MEGALOC_CODE_COMMIT[:8]}, {self.slam.place.device})"
+        self.slam.on_loop_closure = self._on_loop_closure
+        self.loop_closures = []
         self.supervisor = Supervisor(backend, self.cfg.supervisor, wall_clock=wall_clock or time.monotonic)
         self.detector = FixtureDetector(self.model)
         self.memory = ExperienceMemory(memory_path, config=self.cfg.learning)
@@ -154,6 +168,8 @@ class RobotRuntime:
         self.last_frame_record = self.archive.capture(frame.rgb, frame_index=frame.index, timestamp=frame.timestamp)
         result = self.slam.track(frame.rgb, frame.timestamp, commanded=self.last_command)
         self.last_track = result
+        # map evidence from this frame on is measured relative to the newest keyframe
+        self.grid.anchor = self.slam.keyframes[-1].id if self.slam.keyframes else -1
         status = result.status
         self.supervisor.observe_localization(status)
         if status == TRACKING and result.pose is not None:
@@ -298,6 +314,49 @@ class RobotRuntime:
 
     def exhausted_frontiers(self):
         return {k for k, v in self._frontier_visits.items() if v >= 2}
+
+    def _on_loop_closure(self, corrections, keyframe_times):
+        """The VSLAM corrected its keyframes (loop closure). Move everything placed in
+        the map frame with the keyframe it was measured from: occupancy evidence
+        (journal replay), the trajectory, look spots, and remembered entity positions
+        (by the keyframe current when last seen). Entities did not move; the map
+        frame under them was corrected."""
+        from bisect import bisect_right
+
+        from ..perception.pose_graph import apply_transform
+
+        self.grid.replay(corrections)
+        ids = sorted(keyframe_times)
+        times = [keyframe_times[i] for i in ids]
+
+        def at_time(t):
+            k = bisect_right(times, t) - 1
+            return corrections.get(ids[max(k, 0)]) if ids else None
+
+        latest = corrections.get(ids[-1]) if ids else None
+        if latest is not None:
+            if self.trajectory:
+                self.trajectory = apply_transform(latest, np.asarray(self.trajectory)).tolist()[-4000:]
+            self._look_spots = [apply_transform(latest, p[None])[0] for p in self._look_spots]
+            self._panorama_spots = [apply_transform(latest, p[None])[0] for p in self._panorama_spots]
+            if self.last_good_pose is not None:
+                from ..perception.pose_graph import apply_to_pose
+
+                self.last_good_pose = apply_to_pose(latest, self.last_good_pose)
+        moved = {}
+        for ent in self.memory.entities():
+            if ent.get("x") is None or ent.get("map_version") != self.slam.map_version:
+                continue
+            T = at_time(ent.get("last_seen") or 0.0)
+            if T is not None:
+                moved[ent["entity_id"]] = apply_transform(T, np.array([[ent["x"], ent["y"]]]))[0]
+        if moved:
+            self.memory.relocate_entities(moved)
+            self.tracker.refresh()
+        self._frontier_cache = (None, [])
+        last = self.slam.loop_log[-1] if self.slam.loop_log else {}
+        self.loop_closures.append({"t": self.now, "kf": last.get("kf"), "candidate": last.get("candidate"),
+                                   "correction_m": last.get("correction_m"), "entities_moved": len(moved)})
 
     def wants_panorama(self):
         spacing = self.cfg.explore_panorama_spacing
@@ -618,7 +677,9 @@ class RobotRuntime:
             "trajectory": self.trajectory[-600:],
             "memory": {"agent_id": self.memory.agent_id, "db": self.memory.path, **self.memory.counts()},
             "map": {**self.grid.counts(), "map_version": self.grid.map_version,
-                    "start_clearance_attested": self.cfg.start_clearance_attested if self._attested else None},
+                    "start_clearance_attested": self.cfg.start_clearance_attested if self._attested else None,
+                    "loop_closure": {"status": self.place_status, "closures": len(self.loop_closures),
+                                     "last": self.loop_closures[-1] if self.loop_closures else None}},
             "semantic": None if self.semantic is None else {"backend": self.semantic.backend.name,
                                                             **self.semantic.stats},
             "acks": [{k: v for k, v in a.items() if not k.startswith("_")} for a in self.acks[-5:]],
