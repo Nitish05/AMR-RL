@@ -84,3 +84,20 @@ def test_correction_transform_maps_old_pose_to_new():
     old, new = np.array([1.0, 2.0, 0.3]), np.array([1.2, 1.9, 0.45])
     T = correction(old, new)
     assert np.allclose(apply_to_pose(T, old), new)
+
+
+def test_loop_needs_a_consistent_second_keyframe():
+    """Temporal consistency: one verified loop does not close; a second keyframe
+    nearby that implies the same correction of the current pose does. A different
+    correction, or one too many keyframes later, does not."""
+    from amr_rl.perception.camera_model import CameraModel
+    from amr_rl.perception.vslam import PlanarVSLAM
+    from amr_rl.robot.spec import RobotSpec
+
+    slam = PlanarVSLAM(CameraModel.from_spec(RobotSpec.load()))
+    c = np.array([0.10, -0.02, 0.03])
+    assert slam._confirm_loop(100, 20, c) is None
+    assert slam._confirm_loop(101, 21, c + np.array([0.20, 0.0, 0.0])) is None  # a different correction
+    assert slam._confirm_loop(103, 22, c + np.array([0.01, 0.01, 0.005]))["kf"] == 100
+    assert slam._confirm_loop(200, 20, c) is None
+    assert slam._confirm_loop(210, 20, c) is None  # 10 keyframes later: too late

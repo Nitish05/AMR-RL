@@ -122,6 +122,13 @@ class VSLAMConfig:
     loop_correction_per_m: float = 0.08
     loop_distortion_max: float = 0.10  # m, RMS after rigid alignment (ROVER)
     loop_cooldown_kf: int = 5
+    # Temporal consistency (as ORB-SLAM's consecutive-keyframe check): a verified
+    # loop closes only when another keyframe within this many keyframes verified the
+    # same old region with the same correction of the current pose. A wrong pose from
+    # repetitive floor texture does not repeat; a true revisit does.
+    loop_confirm_window_kf: int = 6
+    loop_confirm_m: float = 0.05
+    loop_confirm_rad: float = math.radians(2)
     motion_prior: bool = True
     consistency_window: float = 3.0
     # Fast "frozen estimate" check: commanded travel >= freeze_min_cmd within
@@ -246,6 +253,7 @@ class PlanarVSLAM:
         self.loop_edges = []  # accepted loop constraints: (i, j, z)
         self.on_loop_closure = None  # callback(corrections: {keyframe id: planar transform}) for map layers
         self._loop_cooldown = 0
+        self._loop_pending = []  # verified loop hypotheses awaiting a consistent second one
         self.n_loaded_keyframes = 0  # keyframes of a loaded map stay fixed in the pose graph
         self.horizon = model.horizon_row()
         self.frames = 0
@@ -1167,8 +1175,29 @@ class PlanarVSLAM:
         if jump > allowed:
             entry["outcome"] = "rejected_implausible_correction"
             return None
+        partner = self._confirm_loop(kf.id, cand.id, between(kf.pose, best["pose"]))
+        if partner is None:
+            entry["outcome"] = "awaiting_confirmation"
+            return None
+        entry["confirmed_by_kf"] = partner["kf"]
         z = between(cand.pose, best["pose"])
         return self._close_loop(kf, cand, z, entry)
+
+    def _confirm_loop(self, kf_id, cand_id, corr):
+        """Temporal consistency: return an earlier pending hypothesis (within
+        loop_confirm_window_kf keyframes, same old region) implying the same
+        correction ``corr`` of the current pose, or store this one and return None."""
+        cfg = self.cfg
+        self._loop_pending = [p for p in self._loop_pending if 0 <= kf_id - p["kf"] <= cfg.loop_confirm_window_kf]
+        partner = next((p for p in self._loop_pending if 1 <= kf_id - p["kf"]
+                        and abs(p["candidate"] - cand_id) <= 2 * cfg.loop_window_kf
+                        and np.hypot(*(p["corr"][:2] - corr[:2])) <= cfg.loop_confirm_m
+                        and abs(wrap(p["corr"][2] - corr[2])) <= cfg.loop_confirm_rad), None)
+        if partner is None:
+            self._loop_pending.append({"kf": kf_id, "candidate": cand_id, "corr": np.asarray(corr, float)})
+            return None
+        self._loop_pending.clear()
+        return partner
 
     def _close_loop(self, kf, cand, z, entry):
         cfg = self.cfg
