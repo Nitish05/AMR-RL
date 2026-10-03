@@ -57,6 +57,10 @@ class RuntimeConfig:
     # depth model in the local cache (scripts/amr.sh fetch-depth-model); without it the
     # robot runs without this guard and reports so in its state.
     near_field_guard: bool = True
+    # Exploration: a full 360-degree look at frontier arrivals at least this far (m)
+    # from earlier panoramas (0 = only the +-50 degree sweep). Measured off: the extra
+    # in-place rotations drifted the map (arena seed 1 ATE 3.6 -> 20 cm; docs/VSLAM.md).
+    explore_panorama_spacing: float = 0.0
 
 
 class RobotRuntime:
@@ -127,6 +131,7 @@ class RobotRuntime:
         self._investigated = set()
         self._frontier_visits = {}
         self._look_spots = []  # where exploration sweeps already happened (this session)
+        self._panorama_spots = []  # where full 360-degree looks happened (this session)
         self.map_progress = 100.0  # initial exploration progress prior (cells/trip)
         self._frontier_cache = (None, [])
         self._labelled = {}
@@ -293,6 +298,17 @@ class RobotRuntime:
 
     def exhausted_frontiers(self):
         return {k for k, v in self._frontier_visits.items() if v >= 2}
+
+    def wants_panorama(self):
+        spacing = self.cfg.explore_panorama_spacing
+        if spacing <= 0 or self.pose is None:
+            return False
+        here = np.asarray(self.pose[:2], float)
+        return all(np.linalg.norm(here - p) >= spacing for p in self._panorama_spots)
+
+    def note_panorama(self):
+        if self.pose is not None:
+            self._panorama_spots.append(np.asarray(self.pose[:2], float).copy())
 
     def note_frontier_visit(self, key):
         self._frontier_visits[key] = self._frontier_visits.get(key, 0) + 1
