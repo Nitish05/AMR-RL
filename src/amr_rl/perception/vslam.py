@@ -114,7 +114,13 @@ class VSLAMConfig:
     loop_min_gap_kf: int = 30
     loop_min_gap_s: float = 30.0
     loop_min_travel: float = 0.6       # m of path since the candidate: a revisit, not continuous tracking
-    loop_top_k: int = 3
+    loop_top_k: int = 2                # most similar candidates checked every keyframe
+    # ...plus up to loop_uncertain_k more: the most similar candidates whose position
+    # relative to the current keyframe is uncertain in the pose graph (sigma >=
+    # loop_min_sigma): those are the closures that can correct real drift. Round 5:
+    # only ~7 of 94 closures fixed >= 3 cm, most were against recently tied-in regions.
+    loop_uncertain_k: int = 2
+    loop_min_sigma: float = 0.03
     loop_min_similarity: float = 0.55
     loop_window_kf: int = 8            # candidate's landmarks: anchored within +- this many keyframes
     loop_verify_min: int = 50          # calibrated: docs/results/loop-closure.md
@@ -1097,11 +1103,17 @@ class PlanarVSLAM:
         if not cands:
             return None
         sims = np.array([float(kf.gdesc @ k.gdesc) for k in cands])
-        for idx in np.argsort(-sims)[:cfg.loop_top_k]:
-            if sims[idx] < cfg.loop_min_similarity:
-                break
+        order = [i for i in np.argsort(-sims) if sims[i] >= cfg.loop_min_similarity]
+        if not order:
+            return None
+        sigma = self.relative_sigma(kf.id)
+        chosen = order[:cfg.loop_top_k]
+        chosen += [i for i in order[cfg.loop_top_k:] if sigma.get(cands[i].id, 0.0) >= cfg.loop_min_sigma][
+            :cfg.loop_uncertain_k]
+        for idx in chosen:
             entry = {"t": float(timestamp), "kf": kf.id, "candidate": cands[idx].id,
-                     "t_candidate": float(cands[idx].timestamp), "similarity": float(sims[idx])}
+                     "t_candidate": float(cands[idx].timestamp), "similarity": float(sims[idx]),
+                     "sigma_m": float(sigma.get(cands[idx].id, float("nan")))}
             result = self._verify_loop(kf, cands[idx], entry)
             self.loop_log.append(entry)
             del self.loop_log[:-2000]
@@ -1109,6 +1121,37 @@ class PlanarVSLAM:
                 self._loop_cooldown = cfg.loop_cooldown_kf
                 return result
         return None
+
+    def relative_sigma(self, source_id):
+        """Position uncertainty (m, 1-sigma) of every keyframe relative to keyframe
+        ``source_id`` along the cheapest chain of pose-graph edges: odometry between
+        consecutive keyframes ((0.01 + 0.03 d)^2 per hop, as in ``_close_loop``) and
+        accepted loop edges (0.03^2). Regions already tied in by a loop are close."""
+        import heapq
+
+        ordered = sorted(self.keyframes, key=lambda k: k.id)
+        adj = {k.id: [] for k in ordered}
+        for a, b in zip(ordered[:-1], ordered[1:]):
+            d = float(np.hypot(*(b.pose[:2] - a.pose[:2])))
+            var = (0.01 + 0.03 * d) ** 2
+            adj[a.id].append((b.id, var))
+            adj[b.id].append((a.id, var))
+        for i, j, _ in self.loop_edges:
+            if i in adj and j in adj:
+                adj[i].append((j, 0.03 ** 2))
+                adj[j].append((i, 0.03 ** 2))
+        best = {source_id: 0.0}
+        heap = [(0.0, source_id)]
+        while heap:
+            v, u = heapq.heappop(heap)
+            if v > best.get(u, np.inf):
+                continue
+            for w, var in adj.get(u, ()):
+                nv = v + var
+                if nv < best.get(w, np.inf):
+                    best[w] = nv
+                    heapq.heappush(heap, (nv, w))
+        return {i: float(np.sqrt(v)) for i, v in best.items()}
 
     def _path_length(self, i, j):
         ids = sorted(k.id for k in self.keyframes if i <= k.id <= j)

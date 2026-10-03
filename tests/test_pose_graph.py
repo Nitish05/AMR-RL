@@ -101,3 +101,19 @@ def test_loop_needs_a_consistent_second_keyframe():
     assert slam._confirm_loop(103, 22, c + np.array([0.01, 0.01, 0.005]))["kf"] == 100
     assert slam._confirm_loop(200, 20, c) is None
     assert slam._confirm_loop(210, 20, c) is None  # 10 keyframes later: too late
+
+
+def test_relative_sigma_grows_along_the_chain_and_collapses_through_a_loop():
+    from amr_rl.perception.camera_model import CameraModel
+    from amr_rl.perception.vslam import Keyframe, PlanarVSLAM
+    from amr_rl.robot.spec import RobotSpec
+
+    slam = PlanarVSLAM(CameraModel.from_spec(RobotSpec.load()))
+    for i in range(50):
+        slam.keyframes.append(Keyframe(i, float(i), np.array([0.1 * i, 0.0, 0.0]), np.zeros((0, 2)),
+                                       np.zeros((0, 32), np.uint8), np.zeros(0, int)))
+    sig = slam.relative_sigma(49)
+    assert sig[49] == 0.0 and sig[0] > sig[40] > 0.0
+    slam.loop_edges.append((2, 49, np.zeros(3)))  # keyframe 2 already tied to the current one
+    tied = slam.relative_sigma(49)
+    assert tied[2] <= 0.031 and tied[0] < sig[0]

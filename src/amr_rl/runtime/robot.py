@@ -66,6 +66,13 @@ class RuntimeConfig:
     # loaded only from the local cache (scripts/amr.sh fetch-place-model); without it
     # the VSLAM runs without loop closure and the state says so.
     place_descriptor: str | None = "megaloc"
+    # Mapping sessions (explore_only) with loop closure: when an early keyframe's
+    # position relative to the robot has become uncertain in the pose graph (sigma >=
+    # revisit_sigma), drive back to its pose and heading so a loop can close (at most
+    # once per revisit_interval). Engineered behaviour; 0 disables.
+    revisit_sigma: float = 0.08
+    revisit_interval: float = 120.0
+    revisit_early_s: float = 60.0
 
 
 def choose_recovery(*, loss_reason, last_command, nudge_retrace, turning_clearance, required_clearance, certified):
@@ -167,6 +174,8 @@ class RobotRuntime:
         self._unreachable = {}
         self._investigated = set()
         self._frontier_visits = {}
+        self._revisit_last = -np.inf
+        self._revisited = set()
         self._look_spots = []  # where exploration sweeps already happened (this session)
         self._panorama_spots = []  # where full 360-degree looks happened (this session)
         self.map_progress = 100.0  # initial exploration progress prior (cells/trip)
@@ -393,6 +402,9 @@ class RobotRuntime:
             self._panorama_spots.append(np.asarray(self.pose[:2], float).copy())
 
     def note_frontier_visit(self, key):
+        if isinstance(key, tuple) and key and key[0] == "revisit":
+            self._revisited.add(key[1])
+            self._revisit_last = self.now
         self._frontier_visits[key] = self._frontier_visits.get(key, 0) + 1
         if self.pose is not None:
             self._look_spots.append(np.asarray(self.pose[:2], float).copy())
@@ -403,6 +415,9 @@ class RobotRuntime:
         self.map_progress = 0.6 * self.map_progress + 0.4 * max(0, new_free_cells)
 
     def note_frontier_failure(self, key):
+        if isinstance(key, tuple) and key and key[0] == "revisit":
+            self._revisited.add(key[1])
+            self._revisit_last = self.now
         self._frontier_visits[key] = self._frontier_visits.get(key, 0) + 1
 
     def frontiers(self):
@@ -412,7 +427,28 @@ class RobotRuntime:
                                                         exhausted=self.exhausted_frontiers(),
                                                         keep_out=self.avoid_regions(),
                                                         visited=self._look_spots))
-        return self._frontier_cache[1]
+        revisit = self._revisit_goal()
+        return ([revisit] + self._frontier_cache[1]) if revisit else self._frontier_cache[1]
+
+    def _revisit_goal(self):
+        """An early keyframe pose to return to for loop closure (mapping sessions), or None."""
+        cfg = self.cfg
+        if (cfg.policy != "explore_only" or cfg.revisit_sigma <= 0 or self.slam.place is None or self.pose is None
+                or self.now - self._revisit_last < cfg.revisit_interval or len(self.slam.keyframes) < 2):
+            return None
+        t0 = self.slam.keyframes[0].timestamp
+        early = [k for k in self.slam.keyframes if k.timestamp - t0 <= cfg.revisit_early_s and k.gdesc is not None
+                 and k.id not in self._revisited]
+        if not early:
+            return None
+        sigma = self.slam.relative_sigma(self.slam.keyframes[-1].id)
+        for k in sorted(early, key=lambda k: -sigma.get(k.id, 0.0)):
+            if sigma.get(k.id, 0.0) < cfg.revisit_sigma:
+                break
+            if (np.hypot(*(k.pose[:2] - self.pose[:2])) >= 0.8
+                    and self.planner.traversable_xy(self.grid, k.pose[:2][None])[0]):
+                return (k.pose[:2].copy(), float(k.pose[2]), 0, ("revisit", k.id))
+        return None
 
     # ================================================================ control tick
     def tick(self, now):

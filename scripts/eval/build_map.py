@@ -35,12 +35,16 @@ def main():
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--out", default=None)
     parser.add_argument("--no-loop-closure", action="store_true", help="A/B: run without loop closure")
+    parser.add_argument("--legacy-loop-candidates", action="store_true",
+                        help="A/B: round-5 candidates (top 3 by similarity, no uncertainty slots, no revisits)")
     args = parser.parse_args()
     out = Path(args.out) if args.out else fresh_dir(f"map-{args.world}")
     out.mkdir(parents=True, exist_ok=True)
     provenance(out, configs=[WORLD_DIR / f"{args.world}.yaml"], extra={"args": vars(args)})
     cfg = RuntimeConfig(supervisor=SupervisorConfig(require_heartbeat=False), policy="explore_only", seed=args.seed,
                         place_descriptor=None if args.no_loop_closure else "megaloc")
+    if args.legacy_loop_candidates:
+        cfg.vslam.loop_top_k, cfg.vslam.loop_uncertain_k, cfg.revisit_sigma = 3, 0, 0.0
     # Seed k turns the configured start heading by k x 72 deg (seed 0 = configured start).
     start = list(load_world_config(args.world)["robot_start"])
     start[2] = float(start[2] + args.seed * 2 * math.pi / 5)
