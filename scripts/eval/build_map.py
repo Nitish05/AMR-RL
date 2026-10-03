@@ -11,7 +11,7 @@ from pathlib import Path
 import cv2
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from common import dump, fresh_dir, provenance, trajectory_metrics  # noqa: E402
+from common import dump, fresh_dir, operator_turn_until_tracking, provenance, trajectory_metrics  # noqa: E402
 
 from amr_rl.control.supervisor import SupervisorConfig  # noqa: E402
 from amr_rl.runtime.robot import RuntimeConfig  # noqa: E402
@@ -39,20 +39,29 @@ def main():
     s.control_step()
     s.enable_autonomy()
     reenable = 0
+    turns = []  # operator relocalisation turns (interventions, counted)
+    last_tracking = s.now
     while s.now < args.seconds:
         s.control_step()
         rt = s.runtime
+        if rt.slam.status == "tracking":
+            last_tracking = s.now
         if not rt.supervisor.autonomy_enabled and rt.supervisor.recovery is None and rt.slam.status == "tracking":
             reenable += 1
             if reenable > 5:
                 break
             s.enable_autonomy()
+        elif (not rt.supervisor.autonomy_enabled and rt.supervisor.recovery is None
+              and s.now - last_tracking >= 5.0 and len(turns) < 5):
+            # Bounded recovery gave up: act as the operator (as navigation/learning do).
+            operator_turn_until_tracking(s, turns, timeout=min(40.0, max(0.0, args.seconds - s.now)))
         if int(s.now * 10) % 300 == 0:
             print(f"t={s.now:.0f} map={rt.grid.counts()} loc={rt.slam.status}", flush=True)
     meta = s.runtime.save_map(out / "map")
     img, _ = s.runtime.map_image()
     cv2.imwrite(str(out / "map.png"), img[..., ::-1])
     result = {"map_version": meta["map_version"], "landmarks": meta["landmarks"], "reenable_interventions": reenable,
+              "operator_turns": turns,
               "trajectory": trajectory_metrics(s.truth),
               "map_score": evaluator.score_map(s.world, s.runtime.grid, s.origin), "contacts": s.contacts,
               "sim_seconds": s.now,

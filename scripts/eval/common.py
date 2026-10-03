@@ -81,6 +81,23 @@ def similarity_alignment(est, gt):
     return {"scale": scale, "rotation_deg": math.degrees(math.atan2(R[1, 0], R[0, 0])), "rmse_after_similarity": rmse}
 
 
+def operator_turn_until_tracking(session, log, *, w=0.4, timeout=40.0, reason="not tracking after recovery"):
+    """Evaluation operator intervention (counted in ``log``): turn the robot slowly in
+    place with manual commands until the VSLAM tracks again or ``timeout`` passes. The
+    robot itself never resumes motion after its bounded recovery gave up."""
+    rt = session.runtime
+    log.append({"t": session.now, "intervention": "manual_relocalisation_turn", "reason": reason})
+    end = session.now + timeout
+    while session.now < end and rt.slam.status != "tracking":
+        rt.command({"action": "manual", "v": 0.0, "w": w, "generation": rt.supervisor.generation})
+        session.control_step()
+    rt.command({"action": "manual", "v": 0.0, "w": 0.0, "generation": rt.supervisor.generation})
+    session.control_step()
+    log[-1]["end"] = session.now
+    log[-1]["tracking"] = rt.slam.status == "tracking"
+    return log[-1]["tracking"]
+
+
 FALSE_RELOC_M = 0.2
 FALSE_RELOC_RAD = 0.15  # 8.6 deg
 

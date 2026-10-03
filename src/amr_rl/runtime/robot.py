@@ -357,6 +357,11 @@ class RobotRuntime:
             if not ack.accepted:
                 self._cancel_activity(ack.reason)
                 v = w = 0.0
+        elif now < self.supervisor.manual_until:
+            # Operator driving: the wheels execute the operator's command, and the VSLAM
+            # must know the robot's own motion (it chains relocalisation candidates
+            # through it). Still the robot's own actuation, not an external sensor.
+            v, w = self.supervisor.manual_command
         self.last_command = (v, w)
         self._update_expression()
         return self.screen, bool(self.expression.signal_pattern)

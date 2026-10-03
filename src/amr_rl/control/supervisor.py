@@ -81,6 +81,7 @@ class Supervisor:
         self.generation = 0
         self.autonomy_enabled = False
         self.manual_until = -math.inf
+        self.manual_command = (0.0, 0.0)  # last accepted operator drive command
         self.stopped = True
         self.revoked_reason = "restart"
         self.last_heartbeat = None
@@ -188,6 +189,7 @@ class Supervisor:
                 self._bump("manual_override")
                 return Ack(False, "autonomy_revoked_resend_manual", self.generation)
             self.manual_until = now + self.config.manual_lifetime
+            self.manual_command = (float(v), float(w))
             self.stopped = False
             self.revoked_reason = None
             self.backend.command(

@@ -139,6 +139,17 @@ def test_manual_override_revokes_autonomy_and_requires_resend():
     assert ack.accepted
 
 
+def test_manual_command_is_exposed_as_the_robots_own_motion_until_it_expires_or_stop():
+    """The VSLAM chains relocalisation candidates through the robot's commanded motion;
+    an operator turn must reach it (it used to be reported as standing still)."""
+    sup, _ = make()
+    ready(sup)
+    assert sup.handle({"action": "manual", "v": 0.0, "w": 0.4, "generation": sup.generation}, now=2.0).accepted
+    assert sup.manual_command == (0.0, 0.4) and 2.0 < sup.manual_until
+    sup.stop()
+    assert sup.manual_until == -math.inf  # Stop ends it at once
+
+
 def test_frames_must_increase():
     sup, _ = make()
     sup.observe_frame(1.0)
