@@ -75,7 +75,30 @@ class VSLAMConfig:
     max_prediction_sigma: float = 0.08
     max_prediction_frames: int = 10
     reloc_min_inliers: int = 30
-    reloc_confirmations: int = 2
+    reloc_confirmations: int = 3
+    # Global relocalisation (docs/VSLAM.md). "planar2pt": floor matches lifted to the
+    # floor plane give (x, y, theta) from two correspondences (RANSAC survives the
+    # low inlier ratios that sank PnP), then the pose must be verified by guided
+    # re-matching, be clearly better than any other place, and be confirmed over a
+    # change of view that agrees with the robot's own commanded motion. "pnp" is the
+    # pre-2026-10 method, kept for A/B and rollback (with confirmations=2, no view
+    # change, no probation it reproduces the old behaviour).
+    reloc_method: str = "planar2pt"
+    reloc_knn: int = 8
+    reloc_max_hamming: int = 60
+    reloc_distinct_m: float = 0.05     # landmarks closer than this are one physical place
+    reloc_ratio: float = 0.85          # best vs best match at a different place
+    reloc_hyp_range: float = 1.2       # only near floor points seed hypotheses (IPM range error)
+    reloc_iters: int = 600
+    reloc_score_px: float = 6.0
+    reloc_modes: int = 3
+    reloc_verify_min: int = 70         # guided inliers at the verified pose (calibrated: docs/VSLAM.md)
+    reloc_explained_min: float = 0.10  # fraction of predicted-visible map cells re-found
+    reloc_distinct_ratio: float = 1.5  # best place must beat the next place by this factor
+    reloc_min_view_change: float = math.radians(20)
+    reloc_view_travel: float = 0.10
+    reloc_chain_seconds: float = 4.0   # a confirmation chain expires without a new candidate
+    reloc_probation_frames: int = 15   # after acceptance: no map growth; failure -> relocalise
     motion_prior: bool = True
     consistency_window: float = 3.0
     # Fast "frozen estimate" check: commanded travel >= freeze_min_cmd within
@@ -186,7 +209,11 @@ class PlanarVSLAM:
         self.position_sigma: float | None = None
         self.heading_sigma: float | None = None
         self.map_version = map_version or f"map-{uuid.uuid4().hex[:10]}"
-        self._reloc_candidates: list[np.ndarray] = []
+        self._reloc_candidates: list = []  # (pose, odometry pose at that frame)
+        self._reloc_odom = np.zeros(3)  # integrated commanded motion while relocalising
+        self._reloc_info = {}
+        self._probation = 0
+        self._probation_dr = None
         self.horizon = model.horizon_row()
         self.frames = 0
         self.last_hypothesis = None
@@ -396,7 +423,7 @@ class PlanarVSLAM:
         if self.status == INITIALIZING:
             return self._initialize(gray, pts, desc, timestamp)
         if self.status in (LOST, RELOCALIZING):
-            return self._relocalize(gray, pts, desc, timestamp)
+            return self._relocalize(gray, pts, desc, timestamp, commanded=commanded, dt=dt)
         # TRACKING or PREDICTED: try to (re)acquire against the local map.
         hypotheses = self._hypotheses(dt, commanded)
         self._motion_prior = None
@@ -442,6 +469,8 @@ class PlanarVSLAM:
                 result = best[1]
                 self.last_hypothesis = best[2]
                 break
+        if result is None and self._probation > 0:
+            return self._reject_in_probation(timestamp, "relocalization_rejected_in_probation")
         if result is None:
             self.failures += 1
             self.predicted_time += dt
@@ -472,7 +501,9 @@ class PlanarVSLAM:
         self.predicted_time = 0.0
         pose, inl, H, lm_idx, kp_idx, err = result
         self._frame_candidates = None
-        if not self._motion_consistent(pose, commanded, dt, timestamp):
+        if self._probation > 0 and not self._motion_consistent(pose, commanded, dt, timestamp):
+            return self._reject_in_probation(timestamp, "relocalization_rejected_in_probation")
+        if self._probation == 0 and not self._motion_consistent(pose, commanded, dt, timestamp):
             self._on_frozen(timestamp)
             self.status = LOST
             self.position_sigma = self.heading_sigma = None
@@ -485,6 +516,16 @@ class PlanarVSLAM:
             self.velocity = 0.5 * self.velocity + 0.5 * step / dt
             self.distance_travelled += float(np.hypot(*step[:2]))
         self.pose = pose
+        if self._probation > 0:
+            # A just-accepted relocalisation is not trusted to change the map until it
+            # has tracked for a while (a wrong pose would otherwise extend the map
+            # from itself and then track its own landmarks).
+            self._probation -= 1
+            self._last_quality = (int(inl.sum()), float(np.mean(err[inl])))
+            self._set_sigma(H, int(inl.sum()))
+            return TrackResult(TRACKING, pose.copy(), self.position_sigma, self.heading_sigma,
+                               int(inl.sum()), len(lm_idx), False, timestamp, "probation",
+                               inlier_uv=pts[kp_idx[inl]])
         self.lm.found[lm_idx[inl]] += 1
         centre = self.model.T_world_cam(pose)[:3, 3]
         tent = lm_idx[inl][~self.lm.confirmed[lm_idx[inl]]]
@@ -815,15 +856,22 @@ class PlanarVSLAM:
         self._frame_candidates = None
         return best
 
-    def _relocalize(self, gray, pts, desc, timestamp):
+    def _relocalize(self, gray, pts, desc, timestamp, commanded=None, dt=0.0):
+        v, w = commanded if commanded is not None else (0.0, 0.0)
+        if dt > 0:  # odometry of the robot's own commands, to chain confirmations
+            th = self._reloc_odom[2] + 0.5 * w * dt
+            self._reloc_odom = self._reloc_odom + np.array([v * dt * math.cos(th), v * dt * math.sin(th), w * dt])
         pose = None
         if self.cfg.reloc_local_first and self._dr is not None:
             pose = self._local_reacquire(pts, desc)
         if pose is None:
             pose = self.global_localize(pts, desc)
+        info = dict(self._reloc_info)
         if pose is None:
-            self._reloc_candidates.clear()
-            self._log_reloc(timestamp, "relocalization_failed")
+            if self.cfg.reloc_method == "pnp":
+                self._reloc_candidates.clear()
+            self._expire_chain(timestamp)
+            self._log_reloc(timestamp, "relocalization_failed", **info)
             return TrackResult(self.status, None, None, None, 0, 0, False, timestamp, "relocalization_failed")
         estimate, inliers, H = pose
         if self._dr is not None:
@@ -835,26 +883,76 @@ class PlanarVSLAM:
                 if (np.hypot(*(estimate[:2] - self._dr["pose"][:2])) > gate
                         or abs(wrap(estimate[2] - self._dr["pose"][2])) > gate_h):
                     self._reloc_candidates.clear()
-                    self._log_reloc(timestamp, "relocalization_disagrees_with_dead_reckoning", inliers, estimate)
+                    self._log_reloc(timestamp, "relocalization_disagrees_with_dead_reckoning", inliers, estimate, **info)
                     return TrackResult(self.status, None, None, None, inliers, inliers, False, timestamp,
                                        "relocalization_disagrees_with_dead_reckoning")
-        if self._reloc_candidates:
-            prev = self._reloc_candidates[-1]
-            if np.hypot(*(estimate[:2] - prev[:2])) > 0.12 or abs(wrap(estimate[2] - prev[2])) > 0.2:
-                self._reloc_candidates.clear()
-        self._reloc_candidates.append(estimate)
-        if len(self._reloc_candidates) < self.cfg.reloc_confirmations:
-            self._log_reloc(timestamp, "relocalization_candidate", inliers, estimate)
+        if not self._chain_accepts(estimate, timestamp):
+            self._reloc_candidates.clear()
+        self._reloc_candidates.append((estimate, self._reloc_odom.copy(), timestamp))
+        if not self._chain_complete():
+            self._log_reloc(timestamp, "relocalization_candidate", inliers, estimate, **info)
             return TrackResult(self.status, None, None, None, inliers, inliers, False, timestamp,
                                "relocalization_candidate")
         self._reloc_candidates.clear()
+        self._probation_dr = self._dr
         self._dr = None
+        self._probation = self.cfg.reloc_probation_frames
         self.pose, self.status, self.failures = estimate, TRACKING, 0
         self.velocity[:] = 0
+        self._motion_log.clear()
         self._set_sigma(H, inliers)
-        self._log_reloc(timestamp, "relocalized", inliers, estimate)
+        self._log_reloc(timestamp, "relocalized", inliers, estimate, **info)
         return TrackResult(TRACKING, estimate.copy(), self.position_sigma, self.heading_sigma, inliers,
                            inliers, False, timestamp, "relocalized")
+
+    def _relative_odom(self, a, b):
+        """Commanded motion from odometry pose a to b, expressed in a's frame."""
+        d = b[:2] - a[:2]
+        c, s_ = math.cos(a[2]), math.sin(a[2])
+        return np.array([c * d[0] + s_ * d[1], -s_ * d[0] + c * d[1], wrap(b[2] - a[2])])
+
+    def _chain_accepts(self, estimate, t):
+        """Does a new candidate continue the confirmation chain? Legacy: within 0.12 m /
+        0.2 rad of the previous candidate. Planar: the previous candidate moved by the
+        commanded motion since must land on this one."""
+        if not self._reloc_candidates:
+            return True
+        prev, odom_prev, t_prev = self._reloc_candidates[-1]
+        if self.cfg.reloc_method == "pnp":
+            return np.hypot(*(estimate[:2] - prev[:2])) <= 0.12 and abs(wrap(estimate[2] - prev[2])) <= 0.2
+        if t - t_prev > self.cfg.reloc_chain_seconds:
+            return False
+        rel = self._relative_odom(odom_prev, self._reloc_odom)
+        c, s_ = math.cos(prev[2]), math.sin(prev[2])
+        pred = np.array([prev[0] + c * rel[0] - s_ * rel[1], prev[1] + s_ * rel[0] + c * rel[1], prev[2] + rel[2]])
+        travel = float(np.hypot(*rel[:2]))
+        return (np.hypot(*(estimate[:2] - pred[:2])) <= 0.06 + 0.3 * travel
+                and abs(wrap(estimate[2] - pred[2])) <= 0.08 + 0.2 * abs(rel[2]))
+
+    def _chain_complete(self):
+        if len(self._reloc_candidates) < self.cfg.reloc_confirmations:
+            return False
+        first, last = self._reloc_candidates[0][1], self._reloc_candidates[-1][1]
+        rel = self._relative_odom(first, last)
+        # The candidates must come from clearly different views: two near-identical
+        # frames confirm an aliased match as readily as a true one.
+        rot = sum(abs(wrap(b[1][2] - a[1][2])) for a, b in zip(self._reloc_candidates[:-1], self._reloc_candidates[1:]))
+        return (self.cfg.reloc_min_view_change <= 0 or rot >= self.cfg.reloc_min_view_change
+                or float(np.hypot(*rel[:2])) >= self.cfg.reloc_view_travel)
+
+    def _expire_chain(self, t):
+        if self._reloc_candidates and t - self._reloc_candidates[-1][2] > self.cfg.reloc_chain_seconds:
+            self._reloc_candidates.clear()
+
+    def _reject_in_probation(self, timestamp, reason):
+        self._probation = 0
+        self._dr = self._probation_dr
+        self.status = RELOCALIZING
+        self.position_sigma = self.heading_sigma = None
+        self.velocity[:] = 0
+        self._motion_log.clear()
+        self._log_reloc(timestamp, reason)
+        return TrackResult(RELOCALIZING, None, None, None, 0, 0, False, timestamp, reason)
 
     def _log_reloc(self, t, outcome, inliers=0, pose=None, **extra):
         self.reloc_log.append({"t": float(t), "outcome": outcome, "inliers": int(inliers),
@@ -862,6 +960,13 @@ class PlanarVSLAM:
         del self.reloc_log[:-2000]
 
     def global_localize(self, pts, desc):
+        """Pose from the whole map, or None. Returns (pose, inliers, H)."""
+        self._reloc_info = {}
+        if self.cfg.reloc_method == "pnp":
+            return self._global_localize_pnp(pts, desc)
+        return self._global_localize_planar(pts, desc)
+
+    def _global_localize_pnp(self, pts, desc):
         alive = np.flatnonzero(self.lm.alive)
         if len(alive) < 50 or len(pts) < 30:
             return None
@@ -908,6 +1013,178 @@ class PlanarVSLAM:
         if n < self.cfg.reloc_min_inliers:
             return None
         return pose, n, H
+
+    # ------------------------------------------------------------ planar relocalisation
+    def _global_matches(self, pts, desc):
+        """Whole-map descriptor matches with a ratio test against the best match at a
+        DIFFERENT place (near-duplicate landmarks of one point are not ambiguity).
+        Returns (kp, lm, unique): a keypoint ambiguous between two places yields both
+        pairs with unique=False (scored, but never used to seed a hypothesis)."""
+        alive = np.flatnonzero(self.lm.alive)
+        if len(alive) < 50 or len(pts) < 30:
+            return None
+        k = self.cfg.reloc_knn
+        knn = self.matcher.knnMatch(desc, self.lm.desc[alive], k=k)
+        rows = [m for m in knn if len(m) == k and m[0].distance <= self.cfg.reloc_max_hamming]
+        if not rows:
+            return None
+        q = np.array([m[0].queryIdx for m in rows])
+        idx = alive[np.array([[c.trainIdx for c in m] for m in rows])]  # (Q, k)
+        dist = np.array([[c.distance for c in m] for m in rows], float)
+        P = self.lm.pos[idx]  # (Q, k, 3)
+        sep = self.cfg.reloc_distinct_m
+        away = np.linalg.norm(P - P[:, :1], axis=2) > sep  # (Q, k): a different place than the best
+        has_other = away.any(1)
+        first_other = np.argmax(away, 1)
+        other_d = np.where(has_other, dist[np.arange(len(q)), first_other], np.inf)
+        unique = dist[:, 0] < self.cfg.reloc_ratio * other_d
+        # Ambiguous between exactly two places: every comparably good candidate is at
+        # the best place or within sep of the first other place.
+        P2 = P[np.arange(len(q)), first_other]
+        close = dist < dist[:, :1] / self.cfg.reloc_ratio
+        at_second = np.linalg.norm(P - P2[:, None], axis=2) <= sep
+        two = ~unique & has_other & np.all(~close | ~away | at_second, axis=1)
+        kp = np.concatenate([q[unique], q[two], q[two]])
+        lm = np.concatenate([idx[unique, 0], idx[two, 0], idx[two][np.arange(two.sum()), first_other[two]]])
+        uniq = np.concatenate([np.ones(unique.sum(), bool), np.zeros(2 * two.sum(), bool)])
+        if len(kp) == 0:
+            return None
+        return kp, lm, uniq
+
+    def _project_batch(self, P, poses):
+        """Project world points P (M,3) for planar poses (H,3) -> uv (H,M,2), depth (H,M)."""
+        x, y, th = poses[:, 0:1], poses[:, 1:2], poses[:, 2:3]
+        c, s_ = np.cos(th), np.sin(th)
+        dx, dy, dz = P[None, :, 0] - x, P[None, :, 1] - y, np.broadcast_to(P[None, :, 2] - self.model.base_z,
+                                                                           (len(poses), len(P)))
+        pb = np.stack([c * dx + s_ * dy, -s_ * dx + c * dy, dz], -1)
+        R_cb, t_cb = self._T_cb[:3, :3], self._T_cb[:3, 3]
+        pc = pb @ R_cb.T + t_cb
+        z = pc[..., 2]
+        zs = np.where(z > 0.02, z, 0.02)
+        K = self.model.K
+        uv = np.stack([K[0, 0] * pc[..., 0] / zs + K[0, 2], K[1, 1] * pc[..., 1] / zs + K[1, 2]], -1)
+        return uv, z
+
+    def _score_poses(self, poses, P, uv_q, kp):
+        """Unique keypoints whose matched landmark reprojects within score_px, per pose."""
+        proj, z = self._project_batch(P, poses)
+        ok = (np.linalg.norm(proj - uv_q[None], axis=2) < self.cfg.reloc_score_px) & (z > 0.05)
+        scores = np.zeros(len(poses), int)
+        for h in range(len(poses)):
+            scores[h] = len(np.unique(kp[ok[h]]))
+        return scores, ok
+
+    def _planar_hypotheses(self, pts, kp, lm, uniq):
+        """RANSAC over pairs of floor correspondences (closed-form planar rigid fit)."""
+        q, ok = self._ipm(pts[kp], np.zeros(3))
+        rng_q = np.hypot(q[:, 0], q[:, 1])
+        seed = np.flatnonzero(uniq & ok & (self.lm.kind[lm] == 0) & (rng_q <= self.cfg.reloc_hyp_range))
+        if len(seed) < 2:
+            return np.zeros((0, 3))
+        i, j = np.triu_indices(len(seed), 1)
+        a, b = seed[i], seed[j]
+        lq = np.hypot(*(q[a, :2] - q[b, :2]).T)
+        lmap = np.hypot(*(self.lm.pos[lm[a], :2] - self.lm.pos[lm[b], :2]).T)
+        tol = 0.02 + 0.04 * np.maximum(rng_q[a], rng_q[b])
+        keep = (lq >= 0.12) & (np.abs(lq - lmap) <= tol) & (kp[a] != kp[b])
+        a, b = a[keep], b[keep]
+        if len(a) == 0:
+            return np.zeros((0, 3))
+        if len(a) > self.cfg.reloc_iters:
+            pick = np.random.default_rng(self.frames).choice(len(a), self.cfg.reloc_iters, replace=False)
+            a, b = a[pick], b[pick]
+        vq = q[b, :2] - q[a, :2]
+        vm = self.lm.pos[lm[b], :2] - self.lm.pos[lm[a], :2]
+        th = np.arctan2(vm[:, 1], vm[:, 0]) - np.arctan2(vq[:, 1], vq[:, 0])
+        c, s_ = np.cos(th), np.sin(th)
+        mq = 0.5 * (q[a, :2] + q[b, :2])
+        mm = 0.5 * (self.lm.pos[lm[a], :2] + self.lm.pos[lm[b], :2])
+        tx = mm[:, 0] - (c * mq[:, 0] - s_ * mq[:, 1])
+        ty = mm[:, 1] - (s_ * mq[:, 0] + c * mq[:, 1])
+        return np.stack([tx, ty, np.arctan2(s_, c)], 1)
+
+    def _verify(self, pose, pts, desc):
+        """Guided re-match at a candidate pose (as tracking does) and how much of what
+        the map predicts to be visible was found again (image cells, so duplicate
+        landmarks of one point count once)."""
+        alive = np.flatnonzero(self.lm.alive)
+        d = self.lm.pos[alive, :2] - pose[:2]
+        rel = np.arctan2(d[:, 1], d[:, 0]) - pose[2]
+        rel = np.arctan2(np.sin(rel), np.cos(rel))
+        self._frame_candidates = alive[(np.hypot(d[:, 0], d[:, 1]) < 4.0) & (np.abs(rel) < math.radians(70))]
+        saved_prior, self._motion_prior = self._motion_prior, None
+        try:
+            lm2, kp2 = self._guided(pose, pts, desc, 8.0, count_visible=False)
+            if len(lm2) < self.cfg.min_inliers:
+                return None
+            pose2, inl, H, err = self._pose_from_matches(pose, lm2, kp2, pts)
+            if H is None:
+                return None
+            # predicted-visible confirmed landmarks within 2.5 m, in 16 px image cells
+            pred = self._frame_candidates[self.lm.confirmed[self._frame_candidates]]
+            proj, z = self._project(self.lm.pos[pred], pose2)
+            dist = np.hypot(*(self.lm.pos[pred, :2] - pose2[:2]).T)
+            W, Hh = self.model.width, self.model.height
+            vis = (z > 0.05) & (dist < 2.5) & (proj[:, 0] >= 0) & (proj[:, 0] < W) & (proj[:, 1] >= 0) & (proj[:, 1] < Hh)
+            cells = {(int(u) // 16, int(v_) // 16) for u, v_ in proj[vis]}
+            found = {(int(u) // 16, int(v_) // 16) for u, v_ in pts[kp2[inl]]}
+            explained = len(cells & found) / max(1, len(cells))
+            return {"pose": pose2, "inliers": int(inl.sum()), "H": H, "explained": float(explained),
+                    "triangulated": int((self.lm.kind[lm2[inl]] == 1).sum()),
+                    "mean_px": float(np.mean(err[inl])) if inl.any() else None}
+        finally:
+            self._motion_prior = saved_prior
+            self._frame_candidates = None
+
+    def _global_localize_planar(self, pts, desc):
+        found = self._global_matches(pts, desc)
+        if found is None:
+            return None
+        kp, lm, uniq = found
+        hyps = self._planar_hypotheses(pts, kp, lm, uniq)
+        info = {"matches": int(len(kp)), "unique": int(uniq.sum()), "hypotheses": int(len(hyps))}
+        self._reloc_info = info
+        if len(hyps) == 0:
+            return None
+        P, uv_q = self.lm.pos[lm], pts[kp]
+        scores, ok = self._score_poses(hyps, P, uv_q, kp)
+        order = np.argsort(-scores)
+        modes = []
+        for h in order:
+            if scores[h] < 8:
+                break
+            if any(np.hypot(*(hyps[h, :2] - m[:2])) < 0.15 and abs(wrap(hyps[h, 2] - m[2])) < math.radians(10)
+                   for m in modes):
+                continue
+            modes.append(hyps[h])
+            if len(modes) >= self.cfg.reloc_modes:
+                break
+        checked = []
+        for m in modes:
+            _, okm = self._score_poses(m[None], P, uv_q, kp)
+            sel = okm[0]
+            if sel.sum() < 6:
+                continue
+            refined, err, _ = self.optimize(m, P[sel], uv_q[sel])
+            v = self._verify(refined, pts, desc)
+            if v is not None:
+                checked.append(v)
+        if not checked:
+            return None
+        checked.sort(key=lambda c: -c["inliers"])
+        best = checked[0]
+        # distinct places only: a second verified mode at the same place is not a rival
+        rivals = [c for c in checked[1:] if np.hypot(*(c["pose"][:2] - best["pose"][:2])) > 0.15
+                  or abs(wrap(c["pose"][2] - best["pose"][2])) > math.radians(10)]
+        second = rivals[0]["inliers"] if rivals else 0
+        info.update({"verified": best["inliers"], "explained": round(best["explained"], 3),
+                     "second": second, "triangulated": best["triangulated"]})
+        if (best["inliers"] < self.cfg.reloc_verify_min or best["explained"] < self.cfg.reloc_explained_min
+                or best["inliers"] < self.cfg.reloc_distinct_ratio * second):
+            info["rejected"] = True
+            return None
+        return best["pose"], best["inliers"], best["H"]
 
     def declare_lost(self, reason="external"):
         self.status = LOST

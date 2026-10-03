@@ -401,14 +401,19 @@ def test_any_tracking_loss_gates_relocalisation_by_dead_reckoning_including_head
     slam.status = LOST
     dr = slam._dr["pose"].copy()
     gate_h = 0.12 + 0.25 * slam._dr["rot"]
-    good = dr.copy()
     bad = dr + np.array([0.0, 0.0, gate_h + 0.05])  # right place, wrong heading
-    calls = iter([(bad, 60, np.eye(3)), (good, 60, np.eye(3)), (good, 60, np.eye(3))])
+    # Confirmation needs candidates that move with the commanded motion (here: driving
+    # 0.06 m per call, 0.12 m over the chain); all of them agree with dead reckoning.
+    step = 0.06 * np.array([math.cos(dr[2]), math.sin(dr[2]), 0.0])
+    goods = [dr + step * (k + 1) for k in range(3)]
+    calls = iter([(bad, 60, np.eye(3))] + [(g, 60, np.eye(3)) for g in goods])
     slam.global_localize = lambda pts, desc: next(calls)
-    r = slam._relocalize(None, None, None, 3.0)
+    drive = {"commanded": (0.2, 0.0), "dt": 0.3}
+    r = slam._relocalize(None, None, None, 3.0, **drive)
     assert r.status != "tracking" and r.reason == "relocalization_disagrees_with_dead_reckoning"
-    slam._relocalize(None, None, None, 3.1)
-    r = slam._relocalize(None, None, None, 3.2)
+    assert slam._relocalize(None, None, None, 3.3, **drive).status != "tracking"
+    assert slam._relocalize(None, None, None, 3.6, **drive).status != "tracking"
+    r = slam._relocalize(None, None, None, 3.9, **drive)
     assert r.status == "tracking" and slam._dr is None
 
 

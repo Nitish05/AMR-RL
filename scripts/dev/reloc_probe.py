@@ -79,7 +79,7 @@ def run_position(job):
             out = slam.global_localize(pts, desc)
             ms = 1000 * (time.time() - t0)
             verdict, e, h = judge(None if out is None else out[0], tr)
-            res["single"].append({"verdict": verdict, "err": e, "herr": h, "ms": ms})
+            res["single"].append({"verdict": verdict, "err": e, "herr": h, "ms": ms, "info": dict(slam._reloc_info)})
     # Sequence: 5 stationary frames, then the turn (command passed to the VSLAM).
     slam = PlanarVSLAM.load(map_dir, model, cfg)
     dt_turn = math.radians(step_deg) / W_TURN
@@ -90,7 +90,8 @@ def run_position(job):
         r = slam.track(frames[k], t, commanded=cmd)
         if r.status == TRACKING:
             verdict, e, h = judge(r.pose, truth[k])
-            seq = {"accepted": True, "frame": k, "deg_turned": k * step_deg, "verdict": verdict, "err": e, "herr": h}
+            seq = {"accepted": True, "frame": k, "deg_turned": k * step_deg, "verdict": verdict, "err": e, "herr": h,
+                   "log": slam.reloc_log[-4:]}
             break
     res["sequence"] = seq or {"accepted": False, "deg_turned": (len(frames) - 1) * step_deg}
     return res
