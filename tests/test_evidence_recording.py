@@ -158,3 +158,20 @@ def test_finish_recording_marks_failed_on_finalization_error(tmp_path):
     assert manifest["status"] == "failed"
     assert "finalization_error" in manifest["recording"]
     assert manifest["error"].startswith("Recording finalization failed")
+
+
+def test_reloc_transitions_flags_wrong_relocalisations():
+    import sys
+    from pathlib import Path
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts" / "eval"))
+    from common import reloc_transitions
+
+    def row(t, status, err=None, herr=None):
+        return {"t": t, "status": status, "err": err, "herr": herr}
+
+    rows = [row(0.0, "relocalizing"), row(0.1, "tracking", 0.03, 0.01), row(0.2, "tracking", 0.03, 0.01),
+            row(0.3, "lost"), row(0.4, "relocalizing"), row(0.5, "tracking", 0.82, 0.38),
+            row(0.6, "lost"), row(0.7, "tracking", 0.05, 0.2)]
+    out = reloc_transitions(rows)
+    assert [t["t"] for t in out] == [0.1, 0.5, 0.7]
+    assert [t["false"] for t in out] == [False, True, True]  # 0.82 m; then 0.2 rad > 8.6 deg

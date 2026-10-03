@@ -22,7 +22,7 @@ import numpy as np
 import yaml
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from common import dump, fresh_dir, provenance, trajectory_metrics  # noqa: E402
+from common import FALSE_RELOC_M, FALSE_RELOC_RAD, dump, fresh_dir, provenance, trajectory_metrics  # noqa: E402
 
 from amr_rl.control.supervisor import SupervisorConfig  # noqa: E402
 from amr_rl.learning.memory import LearningConfig  # noqa: E402
@@ -131,6 +131,13 @@ def run_phase(phase, *, map_dir, memory_path, run_dir, seed, world="arena", star
                 session.control_step()
             break
     record["relocalized_at"] = t_reloc
+    # Scoring only: was the pose accepted at the start right? A wrong start
+    # relocalisation puts the whole phase in a wrong frame (round 3, seed 4).
+    start_row = next((r for r in reversed(session.truth) if r["status"] == "tracking" and r["err"] is not None), None)
+    if t_reloc is not None and start_row is not None:
+        herr = abs(start_row["herr"] or 0.0)
+        record["reloc_error_at_start"] = {"err_m": start_row["err"], "herr_rad": herr}
+        record["frame_valid"] = bool(start_row["err"] <= FALSE_RELOC_M and herr <= FALSE_RELOC_RAD)
     if t_reloc is None:
         record["failed"] = "not_relocalized"
         session.save_summary()
@@ -235,7 +242,8 @@ def score(record):
         "by_fixture_action": _count([(i["fixture"], i["action"], i["observed"]) for i in outs]),
         "idle_fraction": record.get("activity_frames", {}).get("idle", 0) / max(1, sum(
             record.get("activity_frames", {}).values())),
-        "contact_episodes": len(record.get("contacts", [])),
+        "contact_frames": len(record.get("contacts", [])),  # all kinds; report.py splits intended/unintended
+        "frame_valid": record.get("frame_valid"),
         "enable_interventions": len(record.get("enable_attempts", [])) - 1,
         "operator_turns": len(record.get("operator_turns", [])),
     }

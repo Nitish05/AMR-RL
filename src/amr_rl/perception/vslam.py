@@ -200,6 +200,7 @@ class PlanarVSLAM:
         self._dr = None  # dead-reckoning gate after a loss of tracking
         self.inconsistency = None
         self.frozen_events = []
+        self.reloc_log = []  # every relocalisation outcome (operational values only; bounded)
         self._last_err = None
         self._last_quality = (0, 0.0)
         self.distance_travelled = 0.0
@@ -822,6 +823,7 @@ class PlanarVSLAM:
             pose = self.global_localize(pts, desc)
         if pose is None:
             self._reloc_candidates.clear()
+            self._log_reloc(timestamp, "relocalization_failed")
             return TrackResult(self.status, None, None, None, 0, 0, False, timestamp, "relocalization_failed")
         estimate, inliers, H = pose
         if self._dr is not None:
@@ -833,6 +835,7 @@ class PlanarVSLAM:
                 if (np.hypot(*(estimate[:2] - self._dr["pose"][:2])) > gate
                         or abs(wrap(estimate[2] - self._dr["pose"][2])) > gate_h):
                     self._reloc_candidates.clear()
+                    self._log_reloc(timestamp, "relocalization_disagrees_with_dead_reckoning", inliers, estimate)
                     return TrackResult(self.status, None, None, None, inliers, inliers, False, timestamp,
                                        "relocalization_disagrees_with_dead_reckoning")
         if self._reloc_candidates:
@@ -841,6 +844,7 @@ class PlanarVSLAM:
                 self._reloc_candidates.clear()
         self._reloc_candidates.append(estimate)
         if len(self._reloc_candidates) < self.cfg.reloc_confirmations:
+            self._log_reloc(timestamp, "relocalization_candidate", inliers, estimate)
             return TrackResult(self.status, None, None, None, inliers, inliers, False, timestamp,
                                "relocalization_candidate")
         self._reloc_candidates.clear()
@@ -848,8 +852,14 @@ class PlanarVSLAM:
         self.pose, self.status, self.failures = estimate, TRACKING, 0
         self.velocity[:] = 0
         self._set_sigma(H, inliers)
+        self._log_reloc(timestamp, "relocalized", inliers, estimate)
         return TrackResult(TRACKING, estimate.copy(), self.position_sigma, self.heading_sigma, inliers,
                            inliers, False, timestamp, "relocalized")
+
+    def _log_reloc(self, t, outcome, inliers=0, pose=None, **extra):
+        self.reloc_log.append({"t": float(t), "outcome": outcome, "inliers": int(inliers),
+                               "pose": None if pose is None else [float(v) for v in pose], **extra})
+        del self.reloc_log[:-2000]
 
     def global_localize(self, pts, desc):
         alive = np.flatnonzero(self.lm.alive)

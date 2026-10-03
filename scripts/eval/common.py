@@ -81,6 +81,23 @@ def similarity_alignment(est, gt):
     return {"scale": scale, "rotation_deg": math.degrees(math.atan2(R[1, 0], R[0, 0])), "rmse_after_similarity": rmse}
 
 
+FALSE_RELOC_M = 0.2
+FALSE_RELOC_RAD = 0.15  # 8.6 deg
+
+
+def reloc_transitions(truth_rows, *, max_err=FALSE_RELOC_M, max_herr=FALSE_RELOC_RAD):
+    """Scoring only: every lost/relocalising -> tracking transition with the true error
+    of the pose the robot accepted. ``false`` marks a relocalisation that was wrong
+    (> max_err m or > max_herr rad), i.e. the robot continued in a wrong frame."""
+    out = []
+    for prev, row in zip(truth_rows[:-1], truth_rows[1:]):
+        if prev["status"] in ("lost", "relocalizing") and row["status"] == "tracking" and row["err"] is not None:
+            herr = abs(row["herr"]) if row["herr"] is not None else 0.0
+            out.append({"t": row["t"], "err_m": float(row["err"]), "herr_rad": float(herr),
+                        "false": bool(row["err"] > max_err or herr > max_herr)})
+    return out
+
+
 def trajectory_metrics(truth_rows):
     rows = [r for r in truth_rows if r["est"] is not None and r["status"] == "tracking"]
     errs = [r["err"] for r in rows]
@@ -98,6 +115,9 @@ def trajectory_metrics(truth_rows):
         "max_heading_error_deg": max(herrs) if herrs else None,
         "similarity": similarity_alignment([r["est"][:2] for r in rows], [r["gt"][:2] for r in rows]),
     }
+    transitions = reloc_transitions(truth_rows)
+    out["reloc_transitions"] = len(transitions)
+    out["false_reloc_transitions"] = sum(t["false"] for t in transitions)
     sig = [(r["sigma"], r["err"]) for r in rows if r["sigma"]]
     if sig:
         out["sigma_coverage"] = float(np.mean([e <= s for s, e in sig]))

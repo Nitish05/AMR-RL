@@ -91,7 +91,8 @@ class Session:
                            "est": None if est is None else [float(v) for v in est],
                            "err": None if err is None else err[0], "herr": None if err is None else err[1],
                            "sigma": self.runtime.sigma, "status": self.runtime.slam.status,
-                           "activity": None if self.runtime.activity is None else self.runtime.activity.name})
+                           "activity": None if self.runtime.activity is None else self.runtime.activity.name,
+                           **_track_fields(self.runtime.last_track)})
         touching = evaluator.robot_contacts(self.world)
         if touching:
             self.contacts.append({"t": self.world.time, "with": touching,
@@ -123,6 +124,8 @@ class Session:
             "memory": self.runtime.memory.counts(),
             "supervisor_log": self.runtime.supervisor.log[-50:],
             "activities": self.runtime.interaction_log,
+            "slam_frozen_events": self.runtime.slam.frozen_events,
+            "slam_reloc_log": self.runtime.slam.reloc_log,
         }
 
     def save_summary(self, extra=None):
@@ -136,6 +139,14 @@ class Session:
 
     def close(self):
         self.runtime.close()
+
+
+def _track_fields(track):
+    """Operational tracking diagnostics stored next to the scoring truth (why a frame
+    was lost or relocalised); empty before the first frame."""
+    if track is None:
+        return {}
+    return {"reason": track.reason, "inliers": int(track.inliers), "matched": int(track.matched)}
 
 
 def _episodes(contacts, gap=0.35):
