@@ -95,6 +95,70 @@ Most of the drop in arrival comes from localisation (10 drift misses, 4 from one
 VSLAM failure). The guard's false marks are the cost to reduce next: write only
 cells near the planned path instead of everything within 1 m.
 
+## Round 6: hidden faces, the loop-closure replay and stall recovery
+
+**What happened.** In 1 of 24 round-5 navigation runs (home_a seed 1,
+box-on-route test) the robot touched the box, giving 80 contact frames.
+
+**Reconstruction** (true geometry):
+1. The guard stopped the robot facing the box at 0.345 m, and its face was confirmed
+   into the grid.
+2. The robot detoured east past the box with the box out of view (0 % in the image,
+   gap 0.18–0.20 m).
+3. It replanned toward the goal on a line passing **2.3 cm** from the box's unseen
+   south-east corner. Heading error 0.62 rad was under the 0.7 rad rotate threshold,
+   so it drove an arc at 0.19 m/s (not creep speed).
+4. The front-right chassis corner touched the box at t = 425.7 s.
+5. Pushing the 86 kg box broke tracking ("visual motion inconsistent with commands").
+6. The bounded recovery then **rotated in place against the box for 18 s**. That gave
+   68 of the 80 contact frames: its "rotate" decision used one grid lookup that did
+   not know about the box.
+
+Other detours in the same tests passed 6–13 cm from the box, all with it out of view.
+
+**A further cause.** The guard wrote its asserted cells straight into the grid's
+log-odds, outside the evidence journal that loop closure replays. The replays at
+419.3 and 422.4 s therefore erased the guard's marks on the box.
+
+**Fixes** (`7ec324e`):
+- `OccupancyGrid.raise_to` is journalled, and replay applies "add" and "max"
+  operations in order. Guard marks now survive a loop closure.
+- **Shadows.** Cells up to 0.35 m behind each confirmed face, along the camera ray
+  (5 rays per cell so the fan has no gaps), are lowered to *unknown*. The planner
+  never treats unknown as free.
+- **Recovery** (`choose_recovery`, pure and unit-tested):
+  - after a stall with a forward command: back straight off 10 cm, then wait; never
+    rotate;
+  - otherwise rotate only with turning clearance, including guard-asserted cells.
+- **Scoring:** the navigation evaluation records the true minimum footprint-to-box gap
+  per test, and the guard counters for that test.
+
+**Replay probe** (`scripts/dev/box_detour_probe.py`: the s1 map, start and goal, box
+offset sideways):
+
+| box offset | shadows off: gap (result) | shadows on: gap (result) |
+|---|---|---|
+| −0.2 m | **0.0 m, contact** | 0.285 m (unreachable) |
+| −0.1 m | 0.264 m | 0.309 m |
+| 0 (original) | 0.138 m | 0.334 m |
+| +0.1 m | 0.254 m | 0.370 m |
+| +0.2 m | 0.283 m | 0.422 m |
+
+**Navigation re-run** (4 rooms × 3 seeds, `navsafe-20261003-on-*`):
+
+| | round 5 | round 6 |
+|---|---|---|
+| contacts | 80 frames, one run | **0** |
+| box-test closest approach | detours 0.057–0.13 m | **0.165–0.472 m** (7 tests that ran) |
+| own-map goals arrived | 38/46 | 35/40 |
+| fault tests passed | 16/18 | 14/14 |
+| impossible goals rejected | 36/36 | 36/36 |
+
+**Not changed.** After a stall, the dead-reckoning gate still counts the commanded
+motion the box prevented, so it delays relocalisation by up to 20 s. Loosening it
+would also accept the frozen wrong locks the gate exists for, and the gate is not a
+contact risk.
+
 ## Rejected camera-only variants (plane-parallax floor test)
 
 Both ran the map's plane-parallax floor test every 0.3 s between the current frame

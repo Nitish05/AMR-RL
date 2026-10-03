@@ -58,7 +58,7 @@ tables with every denominator are in
 | Is it better than simple baselines? | **Not shown.** Baselines ran on seed 0 only, and seed 0 is the learned policy's failure case: it never completed an interaction with the rewarding fixture. Total valence: nearest 2.0, random 0.2, learned 0.2, fixed 0.0. On seeds 1–2 the learned policy got 0.57 and 0.54 per outcome, but with no baselines to compare. A control on the round-1 map with the same code learned normally on seed 0, so the failure depends on the map. |
 | Can it reach goals in its own map? | **38/46 (83 %)** with loop closure, 35/44 (80 %) without, in round 5 (macOS, 4 rooms × 3 seeds; drift misses 3 → 1, [details](docs/results/loop-closure.md)); 20/37 (54 %) in round 3; 5/16 in round 1. Remaining misses are mostly the robot not reaching the goal or slight drift. |
 | Does it refuse goals it cannot justify? | **Yes, 36/36.** Unknown space is never treated as free. |
-| Does it touch things? | **Once in the latest 24 navigation runs**: in one box-on-route test (round 5, home_a seed 1) the near-field guard's slow creep reached the box, tracking then broke and the recovery touched it again (open safety item; not caused by loop closure). Round 3: 0 contacts in 12 runs. Learning runs: 0 unintended contacts in rounds 3–4. |
+| Does it touch things? | **0 contacts in the latest 12 navigation runs** (round 6; closest box approach 0.165 m). Round 5 had one box contact. It came from an unseen box face the map kept free, guard marks erased by a loop-closure replay, and a recovery that rotated against the box. All three are fixed ([details](docs/results/near-field-guard.md)). Learning runs: 0 unintended contacts in rounds 3–4. |
 
 ![Valence per outcome by seed](docs/media/policy-comparison.png)
 

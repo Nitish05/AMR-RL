@@ -42,7 +42,7 @@ Done (`73da7e2`, `211d626`, `c9a7694` and the docs commit; `docs/results/loop-cl
 
 Open, in order:
 1. **Depth-guard creep contacted the evaluation box** in one navigation run (home_a
-   s1, t = 425 s). It was not caused by loop closure, but it is a safety item.
+   s1, t = 425 s). FIXED in round 6 (`7ec324e`): unseen faces, loop-closure replay erasing guard marks, rotate recovery.
 2. **Loop closure** only helps when the robot revisits a region mapped before the
    drift. Preferring the oldest matching keyframe is a candidate next step.
 3. **Relocalisation** more than ~0.3 m from keyframes still mostly fails (one start

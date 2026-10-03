@@ -213,13 +213,16 @@ same way.
 4.1 cm off. The scorer flags anything above 10 cm or 0.1 rad. The corrections they
 applied were 8 and 19 mm.
 
-**The contacts (home_a s1, box-on-route fault test).**
-- Contact began at t = 425.7 s, while the robot was still tracking on its way to the
-  operator goal. The near-field guard had stopped once and was creeping, 5 creep steps.
-- Pushing the box broke tracking at 426.9 s ("visual motion inconsistent with
-  commands"), and the bounded recovery touched it again.
-- The loop closures just before were 0–1 mm corrections. In the off run the box and
-  goal were placed differently (the maps differ), and the planner rejected that goal.
+**The contacts (home_a s1, box-on-route fault test).** The first reading here was
+wrong: it blamed the guard's creep and cleared loop closure. The full analysis in
+round 6 ([near-field-guard.md](near-field-guard.md#round-6-hidden-faces-the-loop-closure-replay-and-stall-recovery))
+found three causes:
+1. A detour at 0.19 m/s swung the chassis corner into a face of the box that the
+   camera never saw; the grid kept that space free.
+2. **Loop closure did contribute.** The depth guard wrote its obstacle marks directly
+   into the grid, outside the evidence journal, so the loop-closure replays at 419.3
+   and 422.4 s erased them.
+3. The bounded recovery rotated in place against the box for 18 s.
 
-This is attributed to the guard's creep behaviour, not to loop closure, and is
-recorded as an open safety item.
+All three are fixed in `7ec324e`. The navigation re-run had 0 contacts and a closest
+box approach of 0.165 m.
