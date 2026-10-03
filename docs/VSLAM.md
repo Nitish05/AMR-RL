@@ -30,10 +30,34 @@ enters the pipeline (`tests/test_privilege_boundary.py`).
   dead-reckoned from the robot's own commands and reported as `predicted`.
   Ordinary navigation holds still on predicted poses; only the bounded nudge
   primitive may continue. Beyond those bounds the status is `lost`.
-* **Relocalization:** global descriptor matching against the whole map +
-  PnP-RANSAC (iterative, SQPnP fallback — EPnP is degenerate on the mostly
-  coplanar floor landmarks), accepted only if the solution is upright at the
-  known base height and repeats on two consecutive frames.
+* **Relocalization** (round 4, `reloc_method="planar2pt"`; results in
+  [results/relocalisation.md](results/relocalisation.md)):
+  1. *Matching:* whole-map descriptor matches with a ratio test against the best
+     match at a *different place*. Landmarks within 5 cm are one physical point;
+     the map holds a median of 26 near-duplicates per point. A keypoint ambiguous
+     between two places is scored but never seeds a hypothesis.
+  2. *Hypotheses:* floor keypoints within 1.2 m are lifted to the floor plane. The
+     floor-plane range error grows from 3 cm at 1 m to 15 cm at 2.2 m. Two matches
+     whose lengths agree give (x, y, θ) in closed form. Each hypothesis is scored by
+     pixel reprojection over all matches, clustered into modes and refined.
+  3. *Verification:* guided re-matching at the top modes, as tracking does, must
+     find at least 70 inliers. The threshold was calibrated on half the probe
+     positions at 1.5× the strongest alias and checked on the other half and on
+     home_a. A sufficient fraction of the map cells predicted to be visible must be
+     re-found, and the best place must beat the next distinct place by 1.5×.
+  4. *Confirmation:* 3 candidates that follow the robot's own commanded motion and
+     span at least 20° or 0.10 m. Identical views no longer confirm an alias.
+     Operator turns are passed to the VSLAM as commanded motion.
+  5. *Probation:* for 15 frames after acceptance the map does not grow, and a
+     failure returns to relocalising. A wrong pose cannot build its own map and
+     then track it.
+
+  The pre-2026-10 method was whole-map matching followed by PnP-RANSAC (iterative,
+  SQPnP fallback) and 2 consecutive frames. It is kept as `reloc_method="pnp"`.
+  RANSAC that draws 5–6 points from coplanar floor landmarks collapses below about
+  30 % correct matches. Global match precision is at best about 38 %, so the old
+  method accepted aliases: in round 3, 65 of 143 transitions were false, and seed 4
+  started 0.82 m off.
 * **Persistence:** `save()`/`load()` write landmarks + keyframe poses with the
   map version and calibration id; a map built with a different calibration is
   refused. A loaded map starts in `relocalizing`.
@@ -81,10 +105,20 @@ target; wheel odometry fusion is a proposed extension (ledger), not used here.
 ### Known limitations
 
 No loop closure or pose-graph optimisation: drift accumulates (≈1–2 % of path in
-most runs; a slow heading bias can reach 10–15 cm in 300 s). A wrong
-relocalisation (accepted with 30–60 inliers but 10–20 cm off) is the dominant
-large-error mode, and the robot cannot relocalise while standing still facing an
-unmatched view after bounded recovery gives up (it then waits for the operator). Landmarks are not removed when
+most runs; a slow heading bias can reach 10–15 cm in 300 s, and one round-4 arena
+build drifted to 12 cm ATE without losing tracking). Wrong relocalisation was the
+dominant large-error mode until round 4. With the planar method there were:
+- 1 wrong acceptance in 69 probe turns (arena and the held-out home_a), and that
+  one is the map's own local rotation showing through, not an alias;
+- 0 false transitions in 13 build relocalisations;
+- 0 false transitions in 15 start relocalisations.
+
+The new method still has limits:
+- Where the map itself is locally rotated, a correct match inherits that rotation
+  (one probe position: −10.6° against a map that is −6° off there).
+- Relocalisation needs motion: the robot does not relocalise while standing still.
+- Positions more than about 0.3 m from any keyframe mostly do not relocalise. On each
+  round-4 arena map, one of the five learning start poses fails this way. Landmarks are not removed when
 the world changes. Fast rotations close to textureless surfaces degrade tracking.
 
 ## 2. Map reconstruction and traversability (`mapping/occupancy.py`)
@@ -148,5 +182,8 @@ frontier (a frontier that rings the known area would otherwise have its centroid
 in free space); the goal is a traversable
 cell with ≥ 0.45 m clearance (turning in place close to a wall is a degenerate
 view for monocular tracking) facing the frontier; on arrival the robot sweeps
-±50°. Exploration value is scaled by recent map growth per trip (engineered
+±50°. An optional full 360° panorama at frontiers spaced at least
+`explore_panorama_spacing` apart was measured in round 4 and left off. Its extra
+in-place rotation drifted the maps: arena seed 1 reached 20 cm ATE with no tracking
+loss. Exploration value is scaled by recent map growth per trip (engineered
 progress signal), so it fades when trips stop producing new free space.

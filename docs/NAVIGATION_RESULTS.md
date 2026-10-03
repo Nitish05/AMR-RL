@@ -24,6 +24,37 @@ arrival meant within 0.25 m. The evaluator has always used **0.15 m**
 (`ARRIVAL_TOLERANCE` in `scripts/eval/navigation.py`), so every published arrival
 count was scored at 0.15 m. Only the description was wrong.
 
+## Round 4 (macOS arm64): planner/corridor A/B
+
+All runs on this machine, 4 rooms × seeds 0–2, `--map-seconds 300`, one process per
+room and variant. Evidence: `work/evidence/navigation-20261002-2237-<variant>-<room>`;
+reports `navigation-20261002-2237-<variant>-report.md`. The Linux round-3 numbers
+below are not directly comparable: different platform, and the map builds differ.
+
+| variant | own-map goals arrived | impossible goals rejected | contacts |
+|---|---|---|---|
+| `07f8ae0`: before the planner/corridor fix | 28/37 | 36/36 | 0 |
+| `85898e6`: fix with denser (quarter-cell) sampling | 22/41 | 36/36 | 0 |
+| `07f8ae0` + fix at the original half-cell sampling (current) | 23/37 | 36/36 | 0 |
+
+**What 5714aac did.** It made the planner's shortcut test and the navigator's
+corridor check use the same sample points. That fixed the round-3 learning bug where
+the robot held for the rest of the run next to the aversive fixture. It also made
+the shortcut test denser, which changed path shapes. The denser variant missed more
+goals, mostly "navigator says arrived, robot more than 0.15 m off": 14 vs 7.
+
+**The current variant.** It keeps the shared samples at the original spacing, so
+planned paths are identical to `07f8ae0`. 33 of its 37 sampled goals are at the
+same positions as `07f8ae0`'s.
+
+**On those 33 paired goals the two variants are even: 24 vs 23 arrivals.** The
+total difference comes almost entirely from one run, home_a seed 2. Its
+exploration diverged, so it sampled different goals, and 4 of them were missed
+through localisation drift.
+
+**Not yet measured:** navigation with the round-4 relocalisation
+([results/relocalisation.md](results/relocalisation.md)).
+
 ## Round 3: near-field depth guard (current code)
 
 Round 3 is round 2 plus the monocular-depth near-field guard

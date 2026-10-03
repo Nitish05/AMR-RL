@@ -24,6 +24,14 @@ Evidence: `work/evidence/learning-20260930-154854`; control run
 
 ## Summary (round 3, 2026-10-02)
 
+> **Correction (found in round 4):** seed 4's start relocalisation was wrong. It
+> started 0.82 m / 22° off, so every seed-4 phase below ran in a wrong frame, and
+> its results are invalid. That explains its "None" fixture identity. Across the
+> round-3 runs, 65 of 143 relocalisations were false; seeds 0 and 1 started
+> correctly. Scored retroactively with `scripts/eval/common.reloc_transitions`.
+> The relocalisation was replaced in round 4
+> ([results/relocalisation.md](results/relocalisation.md)).
+
 First run on macOS arm64 (local; rounds 1–2 ran on Linux x86-64), with the
 nudge-reach fix, the depth guard, the noise-aware `moved` rule and two fixes
 found by this run. All 5 arena start poses, every experiment on every seed
