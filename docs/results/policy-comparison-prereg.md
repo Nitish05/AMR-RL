@@ -68,3 +68,14 @@ The project may say "the learned policy chooses better than baseline X" only if
 difference is > 0. Otherwise the result is reported as a tie or a loss.
 
 With at most 15 cells per comparison, no significance claims are made.
+
+## Addendum (before running): map choice
+
+Three arena maps were built with the round-4 code (`map-arena-20261003-nopano-s{0,1,2}`;
+panoramas off, planar relocalisation, counted operator turns). Each relocalises 4 of
+the 5 start poses correctly in the `no_memory` check (12/15 overall, 0 wrong), so the
+plan's 5/5 criterion is not met by any map.
+
+The suite uses **`map-arena-20261003-nopano-s2`**: ATE 2.5 cm, coverage 0.57, 1 deep
+false-free cell; 115 of 4200 frames lost while building. On this map start 1 does not
+relocalise; its phases are expected to be excluded as `not_relocalized`.
