@@ -63,9 +63,25 @@ def parse_overrides(items):
     return out
 
 
+_PLACE = {}
+
+
+def _place(name):
+    if not name:
+        return None
+    if name not in _PLACE:  # one model per worker process
+        from amr_rl.perception.place_recognition import make_descriptor
+
+        _PLACE[name] = make_descriptor(name)
+    return _PLACE[name]
+
+
 def run_position(job):
     capture, map_dir, pos, overrides, single, step_deg = job
     model = CameraModel.from_spec(RobotSpec.load())
+    overrides = dict(overrides)
+    place_name = overrides.pop("place", None)  # e.g. place=megaloc: retrieval-first relocalisation
+    place = _place(place_name)
     cfg = VSLAMConfig(**overrides)
     frames = [cv2.imread(str(Path(capture) / f["file"]))[..., ::-1].copy() for f in pos["frames"]]
     truth = [f["map"] for f in pos["frames"]]
@@ -73,15 +89,17 @@ def run_position(job):
            "kf_distance": pos["kf_distance"], "single": [], "sequence": None}
     if single:
         slam = PlanarVSLAM.load(map_dir, model, cfg)
+        slam.place = place
         for rgb, tr in zip(frames, truth):
             _, pts, desc = slam.features(rgb)
             t0 = time.time()
-            out = slam.global_localize(pts, desc)
+            out = slam.global_localize(pts, desc, rgb=rgb)
             ms = 1000 * (time.time() - t0)
             verdict, e, h = judge(None if out is None else out[0], tr)
             res["single"].append({"verdict": verdict, "err": e, "herr": h, "ms": ms, "info": dict(slam._reloc_info)})
     # Sequence: 5 stationary frames, then the turn (command passed to the VSLAM).
     slam = PlanarVSLAM.load(map_dir, model, cfg)
+    slam.place = place
     dt_turn = math.radians(step_deg) / W_TURN
     t, seq = 0.0, None
     order = [(0, (0.0, 0.0), 0.1)] * 5 + [(k, (0.0, W_TURN), dt_turn) for k in range(1, len(frames))]

@@ -106,7 +106,7 @@ def test_planar_relocalisation_is_deterministic(model):
 
 def chained(slam, poses, commanded, dt, t0=0.0):
     calls = iter([(p, 120, np.eye(3)) for p in poses])
-    slam.global_localize = lambda pts, desc: next(calls)
+    slam.global_localize = lambda pts, desc, rgb=None: next(calls)
     out = []
     for k in range(len(poses)):
         out.append(slam._relocalize(None, None, None, t0 + dt * (k + 1), commanded=commanded, dt=dt))
@@ -153,3 +153,23 @@ def test_failure_during_probation_returns_to_relocalising_without_map_growth(mod
 def test_legacy_method_remains_selectable(model):
     slam = map_slam(model, *synthetic_map(model, np.random.default_rng(7)), reloc_method="pnp")
     assert slam.global_localize(np.zeros((0, 2)), np.zeros((0, 32), np.uint8)) is None
+
+
+def test_map_schema_v2_round_trips_anchors_and_place_descriptors(model, tmp_path):
+    from amr_rl.perception.vslam import Keyframe
+
+    slam = map_slam(model, *synthetic_map(model, np.random.default_rng(8)))
+    slam.lm.anchor[:] = np.arange(len(slam.lm.anchor)) % 3
+    for i in range(3):
+        kf = Keyframe(i, float(i), np.array([0.1 * i, 0.0, 0.0]), np.zeros((0, 2)), np.zeros((0, 32), np.uint8),
+                      np.zeros(0, int))
+        kf.gdesc = np.random.default_rng(i).normal(size=16).astype(np.float32)
+        kf.gdesc /= np.linalg.norm(kf.gdesc)
+        slam.keyframes.append(kf)
+    slam.place = type("P", (), {"name": "test"})()
+    meta = slam.save(tmp_path)
+    assert meta["schema"] == "amr_rl.vslam-map.v2" and meta["place_descriptor"] == "test"
+    back = PlanarVSLAM.load(tmp_path, model)
+    assert np.array_equal(back.lm.anchor, slam.lm.anchor)
+    assert all(np.allclose(a.gdesc, b.gdesc, atol=1e-3) for a, b in zip(slam.keyframes, back.keyframes))
+    assert back.n_loaded_keyframes == 3

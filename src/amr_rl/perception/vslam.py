@@ -100,6 +100,10 @@ class VSLAMConfig:
     reloc_view_travel: float = 0.10
     reloc_chain_seconds: float = 4.0   # a confirmation chain expires without a new candidate
     reloc_probation_frames: int = 15   # after acceptance: no map growth; failure -> relocalise
+    # Retrieval first: with place descriptors (v2 maps), match against the landmarks of
+    # the most similar keyframes before the whole map (higher match precision).
+    reloc_retrieval: bool = True
+    reloc_retrieval_k: int = 5
     # Loop closure (docs/VSLAM.md): active when a place descriptor is attached
     # (``PlanarVSLAM.place``). Candidates: older keyframes with a similar whole-image
     # descriptor; verification as for relocalisation but only against the
@@ -452,7 +456,7 @@ class PlanarVSLAM:
         if self.status == INITIALIZING:
             return self._initialize(gray, pts, desc, timestamp)
         if self.status in (LOST, RELOCALIZING):
-            return self._relocalize(gray, pts, desc, timestamp, commanded=commanded, dt=dt)
+            return self._relocalize(gray, pts, desc, timestamp, commanded=commanded, dt=dt, rgb=rgb)
         # TRACKING or PREDICTED: try to (re)acquire against the local map.
         hypotheses = self._hypotheses(dt, commanded)
         self._motion_prior = None
@@ -888,7 +892,7 @@ class PlanarVSLAM:
         self._frame_candidates = None
         return best
 
-    def _relocalize(self, gray, pts, desc, timestamp, commanded=None, dt=0.0):
+    def _relocalize(self, gray, pts, desc, timestamp, commanded=None, dt=0.0, rgb=None):
         v, w = commanded if commanded is not None else (0.0, 0.0)
         if dt > 0:  # odometry of the robot's own commands, to chain confirmations
             th = self._reloc_odom[2] + 0.5 * w * dt
@@ -897,7 +901,7 @@ class PlanarVSLAM:
         if self.cfg.reloc_local_first and self._dr is not None:
             pose = self._local_reacquire(pts, desc)
         if pose is None:
-            pose = self.global_localize(pts, desc)
+            pose = self.global_localize(pts, desc, rgb=rgb)
         info = dict(self._reloc_info)
         if pose is None:
             if self.cfg.reloc_method == "pnp":
@@ -991,12 +995,36 @@ class PlanarVSLAM:
                                "pose": None if pose is None else [float(v) for v in pose], **extra})
         del self.reloc_log[:-2000]
 
-    def global_localize(self, pts, desc):
-        """Pose from the whole map, or None. Returns (pose, inliers, H)."""
+    def global_localize(self, pts, desc, rgb=None):
+        """Pose from the map, or None. Returns (pose, inliers, H). With a place
+        descriptor and described keyframes, the landmarks of the most similar
+        keyframes are tried first, then the whole map."""
         self._reloc_info = {}
         if self.cfg.reloc_method == "pnp":
             return self._global_localize_pnp(pts, desc)
+        subset = self._retrieved_landmarks(rgb)
+        if subset is not None:
+            out = self._global_localize_planar(pts, desc, candidates=subset)
+            if out is not None:
+                self._reloc_info["retrieval"] = True
+                return out
         return self._global_localize_planar(pts, desc)
+
+    def _retrieved_landmarks(self, rgb):
+        if (rgb is None or self.place is None or not self.cfg.reloc_retrieval
+                or not any(k.gdesc is not None for k in self.keyframes)):
+            return None
+        q = np.asarray(self.place.describe(rgb), np.float32)
+        kfs = [k for k in self.keyframes if k.gdesc is not None]
+        sims = np.array([float(q @ k.gdesc) for k in kfs])
+        top = [kfs[i].id for i in np.argsort(-sims)[:self.cfg.reloc_retrieval_k] if sims[i] >= self.cfg.loop_min_similarity]
+        if not top:
+            return None
+        w = self.cfg.loop_window_kf
+        sel = self.lm.alive & (self.lm.anchor >= 0) & np.any(
+            np.abs(self.lm.anchor[:, None] - np.array(top)[None]) <= w, axis=1)
+        idx = np.flatnonzero(sel)
+        return idx if len(idx) >= 50 else None
 
     def _global_localize_pnp(self, pts, desc):
         alive = np.flatnonzero(self.lm.alive)
@@ -1310,8 +1338,8 @@ class PlanarVSLAM:
             self._motion_prior = saved_prior
             self._frame_candidates = None
 
-    def _global_localize_planar(self, pts, desc):
-        found = self._global_matches(pts, desc)
+    def _global_localize_planar(self, pts, desc, candidates=None):
+        found = self._global_matches(pts, desc, candidates=candidates)
         if found is None:
             return None
         kp, lm, uniq = found
@@ -1371,9 +1399,14 @@ class PlanarVSLAM:
         alive = self.lm.alive
         np.savez_compressed(directory / "landmarks.npz", pos=self.lm.pos[alive], desc=self.lm.desc[alive],
                             kind=self.lm.kind[alive], visible=self.lm.visible[alive], found=self.lm.found[alive],
-                            confirmed=self.lm.confirmed[alive])
+                            confirmed=self.lm.confirmed[alive], anchor=self.lm.anchor[alive])
+        described = [kf for kf in self.keyframes if kf.gdesc is not None]
+        if described:  # v2: place descriptors for keyframe retrieval (relocalisation, loop closure)
+            np.savez_compressed(directory / "keyframes.npz", ids=np.array([kf.id for kf in described]),
+                                gdesc=np.stack([kf.gdesc for kf in described]).astype(np.float16))
         meta = {
-            "schema": "amr_rl.vslam-map.v1",
+            "schema": "amr_rl.vslam-map.v2",
+            "place_descriptor": getattr(self.place, "name", None) if described else None,
             "map_version": self.map_version,
             "calibration_version": self.model.version,
             "landmarks": int(alive.sum()),
@@ -1395,11 +1428,19 @@ class PlanarVSLAM:
         slam.lm.visible[:] = data["visible"]
         slam.lm.found[:] = data["found"]
         slam.lm.confirmed[:] = data["confirmed"]
+        if "anchor" in data:  # v2
+            slam.lm.anchor[:] = data["anchor"]
         slam.status = RELOCALIZING
         slam.n_loaded_keyframes = len(meta["keyframes"])
         for item in meta["keyframes"]:
             slam.keyframes.append(Keyframe(item["id"], item["t"], np.array(item["pose"]),
                                            np.zeros((0, 2)), np.zeros((0, 32), np.uint8), np.zeros(0, int)))
+        if (directory / "keyframes.npz").exists():
+            kd = np.load(directory / "keyframes.npz")
+            by = {kf.id: kf for kf in slam.keyframes}
+            for i, g in zip(kd["ids"], kd["gdesc"]):
+                if int(i) in by:
+                    by[int(i)].gdesc = g.astype(np.float32)
         return slam
 
     def snapshot(self):

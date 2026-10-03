@@ -22,7 +22,7 @@ from pathlib import Path
 import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from common import dump, fresh_dir, provenance, trajectory_metrics  # noqa: E402
+from common import dump, fresh_dir, provenance, score_loops, trajectory_metrics  # noqa: E402
 
 from amr_rl.control.supervisor import SupervisorConfig  # noqa: E402
 from amr_rl.runtime.robot import RuntimeConfig  # noqa: E402
@@ -218,14 +218,15 @@ def fault_test(session, log, seed, fault, *, blackout=None, obstacle=False, min_
     return record
 
 
-def evaluate_world(name, out_root, map_seconds, seed):
+def evaluate_world(name, out_root, map_seconds, seed, loop_closure=True):
     """Seed 0 uses the configured start; seed k turns the start heading by k x 72 deg
     (same position, so the start stays valid in every room)."""
     run_dir = out_root / (name if seed == 0 else f"{name}-s{seed}")
     cfg = load_world_config(name)
     start = list(cfg["robot_start"])
     start[2] = float(start[2] + seed * 2 * math.pi / 5)
-    config = RuntimeConfig(supervisor=SupervisorConfig(require_heartbeat=False), policy="explore_only", seed=seed)
+    config = RuntimeConfig(supervisor=SupervisorConfig(require_heartbeat=False), policy="explore_only", seed=seed,
+                           place_descriptor="megaloc" if loop_closure else None)
     session = Session(name, run_dir=run_dir, memory_path=run_dir / "throwaway-memory.sqlite", config=config,
                       seed=seed, inspection=False, world_overrides={"robot_start": start})
     log = []
@@ -284,6 +285,8 @@ def evaluate_world(name, out_root, map_seconds, seed):
         "final_trajectory": trajectory_metrics(session.truth),
         "timing": "lockstep simulation (physics paused during perception)",
         "guard_status": session.runtime.guard_status,
+        "loop_closure": {"status": session.runtime.place_status, "closures": len(session.runtime.loop_closures),
+                         "scored": score_loops(session.runtime.slam.loop_log, session.truth)},
         "guard": None if session.runtime.guard is None else {
             **session.runtime.guard.stats,
             **evaluator.score_guard(session.world, session.runtime.grid, session.origin,
@@ -348,6 +351,7 @@ def main():
     parser.add_argument("--map-seconds", type=float, default=240.0)
     parser.add_argument("--seeds", nargs="+", type=int, default=[0])
     parser.add_argument("--out", default=None)
+    parser.add_argument("--no-loop-closure", action="store_true", help="A/B: run without loop closure")
     args = parser.parse_args()
     out = Path(args.out) if args.out else fresh_dir("navigation")
     out.mkdir(parents=True, exist_ok=True)
@@ -361,7 +365,7 @@ def main():
             print(f"== {name} seed {seed}", flush=True)
             results = [r for r in results if not (r.get("world") == name and r.get("seed", 0) == seed)]
             try:
-                results.append(evaluate_world(name, out, args.map_seconds, seed))
+                results.append(evaluate_world(name, out, args.map_seconds, seed, not args.no_loop_closure))
             except Exception as error:  # retain failed runs in the denominator
                 import traceback
 
