@@ -106,7 +106,7 @@ def test_planar_relocalisation_is_deterministic(model):
 
 def chained(slam, poses, commanded, dt, t0=0.0):
     calls = iter([(p, 120, np.eye(3)) for p in poses])
-    slam.global_localize = lambda pts, desc, rgb=None: next(calls)
+    slam.global_localize = lambda pts, desc, rgb=None, pool=False: next(calls)
     out = []
     for k in range(len(poses)):
         out.append(slam._relocalize(None, None, None, t0 + dt * (k + 1), commanded=commanded, dt=dt))
@@ -173,3 +173,31 @@ def test_map_schema_v2_round_trips_anchors_and_place_descriptors(model, tmp_path
     assert np.array_equal(back.lm.anchor, slam.lm.anchor)
     assert all(np.allclose(a.gdesc, b.gdesc, atol=1e-3) for a, b in zip(slam.keyframes, back.keyframes))
     assert back.n_loaded_keyframes == 3
+
+
+def test_pooling_the_turn_finds_a_pose_no_single_frame_supports(model):
+    """Far from the map's keyframes a frame rarely holds two correct floor matches;
+    floor seeds pooled over the turn (moved by the commanded rotation) do."""
+    rng = np.random.default_rng(9)
+    pos, desc, kind = synthetic_map(model, rng, n_wall=0)
+    truth = np.array([0.1, -0.3, 0.4])
+    slam = map_slam(model, pos, desc, kind)
+    step = math.radians(4)
+    hyps_single, hyps_pooled = [], None
+    for k in range(5):
+        pose = truth + np.array([0.0, 0.0, step * k])
+        pts, d = frame_from(model, pose, pos, desc, rng, inlier_ratio=0.02, n_correct=1, max_range=1.1)
+        found = slam._global_matches(pts, d)
+        kp, lm, uniq = found
+        slam._reloc_odom = np.array([0.0, 0.0, step * k])
+        single = slam._planar_hypotheses(pts, kp, lm, uniq)  # this frame alone
+        hyps_single.append(single)
+        hyps_pooled = slam._planar_hypotheses(pts, kp, lm, uniq, pool=True)
+        last_pose = pose
+
+    def near(h, p):
+        return np.any((np.hypot(h[:, 0] - p[0], h[:, 1] - p[1]) < 0.03)
+                      & (np.abs(np.arctan2(np.sin(h[:, 2] - p[2]), np.cos(h[:, 2] - p[2]))) < math.radians(1.5)))
+
+    assert not any(len(h) and near(h, truth + np.array([0, 0, step * k])) for k, h in enumerate(hyps_single))
+    assert len(hyps_pooled) and near(hyps_pooled, last_pose)

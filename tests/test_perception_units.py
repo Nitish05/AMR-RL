@@ -407,7 +407,7 @@ def test_any_tracking_loss_gates_relocalisation_by_dead_reckoning_including_head
     step = 0.06 * np.array([math.cos(dr[2]), math.sin(dr[2]), 0.0])
     goods = [dr + step * (k + 1) for k in range(3)]
     calls = iter([(bad, 60, np.eye(3))] + [(g, 60, np.eye(3)) for g in goods])
-    slam.global_localize = lambda pts, desc, rgb=None: next(calls)
+    slam.global_localize = lambda pts, desc, rgb=None, pool=False: next(calls)
     drive = {"commanded": (0.2, 0.0), "dt": 0.3}
     r = slam._relocalize(None, None, None, 3.0, **drive)
     assert r.status != "tracking" and r.reason == "relocalization_disagrees_with_dead_reckoning"

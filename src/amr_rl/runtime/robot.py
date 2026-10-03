@@ -24,6 +24,7 @@ from ..expression.policy import expression_from
 from ..expression.screen import render as render_face
 from ..learning.identity import EntityTracker
 from ..learning.memory import ExperienceMemory, LearningConfig
+from ..mapping.occupancy import FREE as FREE_CLASS
 from ..mapping.occupancy import OCCUPIED, FloorEvidenceMapper, OccupancyGrid
 from ..mapping.render import render_map
 from ..navigation.navigator import Navigator
@@ -73,6 +74,12 @@ class RuntimeConfig:
     revisit_sigma: float = 0.08
     revisit_interval: float = 120.0
     revisit_early_s: float = 60.0
+    # Coverage pass (mapping sessions): once frontiers run out, or when ``coverage_mode``
+    # is set, visit free-space lattice points (this spacing, m) farther than
+    # coverage_min_kf_dist from every keyframe and make a full survey turn there, so
+    # the map has keyframes to relocalise against everywhere. 0 disables.
+    coverage_lattice: float = 0.35
+    coverage_min_kf_dist: float = 0.3
 
 
 def choose_recovery(*, loss_reason, last_command, nudge_retrace, turning_clearance, required_clearance, certified):
@@ -176,6 +183,7 @@ class RobotRuntime:
         self._frontier_visits = {}
         self._revisit_last = -np.inf
         self._revisited = set()
+        self.coverage_mode = False  # set by a mapping session to finish with the coverage pass
         self._look_spots = []  # where exploration sweeps already happened (this session)
         self._panorama_spots = []  # where full 360-degree looks happened (this session)
         self.map_progress = 100.0  # initial exploration progress prior (cells/trip)
@@ -428,7 +436,37 @@ class RobotRuntime:
                                                         keep_out=self.avoid_regions(),
                                                         visited=self._look_spots))
         revisit = self._revisit_goal()
-        return ([revisit] + self._frontier_cache[1]) if revisit else self._frontier_cache[1]
+        goals = self._frontier_cache[1]
+        if self.cfg.policy == "explore_only" and self.cfg.coverage_lattice > 0 and (self.coverage_mode or not goals):
+            goals = self._coverage_goals() or goals
+        return ([revisit] + goals) if revisit else goals
+
+    def _coverage_goals(self, max_goals=6):
+        """Certified free lattice points far from every keyframe, nearest first."""
+        if self.pose is None or not self.slam.keyframes:
+            return []
+        step = self.cfg.coverage_lattice
+        free = np.argwhere(self.grid.classes() == FREE_CLASS)
+        if len(free) == 0:
+            return []
+        xy = self.grid.to_xy(free[:, 1], free[:, 0])
+        lattice = np.unique(np.round(xy / step) * step, axis=0)
+        lattice = lattice[self.planner.traversable_xy(self.grid, lattice)]
+        if len(lattice) == 0:
+            return []
+        kf = np.array([k.pose[:2] for k in self.slam.keyframes])
+        far = np.min(np.linalg.norm(lattice[:, None, :] - kf[None], axis=2), axis=1) > self.cfg.coverage_min_kf_dist
+        exhausted = self.exhausted_frontiers()
+        out = []
+        for p in lattice[far][np.argsort(np.linalg.norm(lattice[far] - self.pose[:2], axis=1))]:
+            key = ("cover", round(float(p[0]), 2), round(float(p[1]), 2))
+            if key in exhausted or key in self._frontier_visits:
+                continue
+            heading = float(np.arctan2(p[1] - self.pose[1], p[0] - self.pose[0]))
+            out.append((p.copy(), heading, 0, key))
+            if len(out) >= max_goals:
+                break
+        return out
 
     def _revisit_goal(self):
         """An early keyframe pose to return to for loop closure (mapping sessions), or None."""

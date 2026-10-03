@@ -35,6 +35,10 @@ def main():
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--out", default=None)
     parser.add_argument("--no-loop-closure", action="store_true", help="A/B: run without loop closure")
+    parser.add_argument("--coverage-seconds", type=float, default=0.0,
+                        help="finish with the coverage pass for this many seconds (survey turns far from keyframes)")
+    parser.add_argument("--loop-shadow", action="store_true",
+                        help="evaluation: detect and verify loops but only record them (paired scoring)")
     parser.add_argument("--legacy-loop-candidates", action="store_true",
                         help="A/B: round-5 candidates (top 3 by similarity, no uncertainty slots, no revisits)")
     args = parser.parse_args()
@@ -43,6 +47,8 @@ def main():
     provenance(out, configs=[WORLD_DIR / f"{args.world}.yaml"], extra={"args": vars(args)})
     cfg = RuntimeConfig(supervisor=SupervisorConfig(require_heartbeat=False), policy="explore_only", seed=args.seed,
                         place_descriptor=None if args.no_loop_closure else "megaloc")
+    if args.loop_shadow:  # log more candidates; revisits change the trajectory, so off
+        cfg.vslam.loop_shadow, cfg.vslam.loop_top_k, cfg.vslam.loop_uncertain_k, cfg.revisit_sigma = True, 3, 3, 0.0
     if args.legacy_loop_candidates:
         cfg.vslam.loop_top_k, cfg.vslam.loop_uncertain_k, cfg.revisit_sigma = 3, 0, 0.0
     # Seed k turns the configured start heading by k x 72 deg (seed 0 = configured start).
@@ -58,6 +64,7 @@ def main():
     while s.now < args.seconds:
         s.control_step()
         rt = s.runtime
+        rt.coverage_mode = args.coverage_seconds > 0 and s.now >= args.seconds - args.coverage_seconds
         if rt.slam.status == "tracking":
             last_tracking = s.now
         if not rt.supervisor.autonomy_enabled and rt.supervisor.recovery is None and rt.slam.status == "tracking":

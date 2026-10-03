@@ -199,7 +199,8 @@ class Explore(Activity):
                 self.survey = Survey(angle=math.radians(140), rate=0.45)
                 self.survey.rate = 0.45
                 self._sweep = [math.radians(50), -math.radians(100), math.radians(50)]
-                if getattr(rt, "wants_panorama", lambda: False)():
+                coverage = isinstance(self.key, tuple) and bool(self.key) and self.key[0] == "cover"
+                if coverage or getattr(rt, "wants_panorama", lambda: False)():
                     self._sweep = [2 * math.pi]  # full look: keyframes facing every way
                     rt.note_panorama()
                 self._sweep_i = 0

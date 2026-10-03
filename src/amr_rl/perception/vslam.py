@@ -104,6 +104,10 @@ class VSLAMConfig:
     # the most similar keyframes before the whole map (higher match precision).
     reloc_retrieval: bool = True
     reloc_retrieval_k: int = 5
+    # Pool floor seeds over the last few frames of the relocalisation turn (moved into
+    # the current frame by the robot's own commanded motion): far from the map's
+    # keyframes a single frame rarely holds two correct floor matches. 0 disables.
+    reloc_pool_frames: int = 5
     # Loop closure (docs/VSLAM.md): active when a place descriptor is attached
     # (``PlanarVSLAM.place``). Candidates: older keyframes with a similar whole-image
     # descriptor; verification as for relocalisation but only against the
@@ -135,6 +139,11 @@ class VSLAMConfig:
     loop_confirm_window_kf: int = 6
     loop_confirm_m: float = 0.05
     loop_confirm_rad: float = math.radians(2)
+    # Evaluation: detect, verify, confirm and check loops exactly as live, but record
+    # the accepted constraints (shadow_edges) instead of correcting the map. The same
+    # trajectory can then be scored with and without them (paired; live A/B runs
+    # diverge after the first closure).
+    loop_shadow: bool = False
     motion_prior: bool = True
     consistency_window: float = 3.0
     # Fast "frozen estimate" check: commanded travel >= freeze_min_cmd within
@@ -260,6 +269,8 @@ class PlanarVSLAM:
         self.on_loop_closure = None  # callback(corrections: {keyframe id: planar transform}) for map layers
         self._loop_cooldown = 0
         self._loop_pending = []  # verified loop hypotheses awaiting a consistent second one
+        self._reloc_pool = []  # [(odometry pose, floor points (n,2) robot frame, landmark ids, ranges)]
+        self.shadow_edges = []  # loop_shadow: accepted constraints not applied (i, j, z)
         self.n_loaded_keyframes = 0  # keyframes of a loaded map stay fixed in the pose graph
         self.horizon = model.horizon_row()
         self.frames = 0
@@ -915,7 +926,7 @@ class PlanarVSLAM:
         if self.cfg.reloc_local_first and self._dr is not None:
             pose = self._local_reacquire(pts, desc)
         if pose is None:
-            pose = self.global_localize(pts, desc, rgb=rgb)
+            pose = self.global_localize(pts, desc, rgb=rgb, pool=True)
         info = dict(self._reloc_info)
         if pose is None:
             if self.cfg.reloc_method == "pnp":
@@ -944,6 +955,7 @@ class PlanarVSLAM:
             return TrackResult(self.status, None, None, None, inliers, inliers, False, timestamp,
                                "relocalization_candidate")
         self._reloc_candidates.clear()
+        self._reloc_pool.clear()
         self._probation_dr = self._dr
         self._dr = None
         self._probation = self.cfg.reloc_probation_frames
@@ -1009,7 +1021,7 @@ class PlanarVSLAM:
                                "pose": None if pose is None else [float(v) for v in pose], **extra})
         del self.reloc_log[:-2000]
 
-    def global_localize(self, pts, desc, rgb=None):
+    def global_localize(self, pts, desc, rgb=None, pool=False):
         """Pose from the map, or None. Returns (pose, inliers, H). With a place
         descriptor and described keyframes, the landmarks of the most similar
         keyframes are tried first, then the whole map."""
@@ -1022,7 +1034,7 @@ class PlanarVSLAM:
             if out is not None:
                 self._reloc_info["retrieval"] = True
                 return out
-        return self._global_localize_planar(pts, desc)
+        return self._global_localize_planar(pts, desc, pool=pool)
 
     def _retrieved_landmarks(self, rgb):
         if (rgb is None or self.place is None or not self.cfg.reloc_retrieval
@@ -1110,8 +1122,9 @@ class PlanarVSLAM:
         chosen = order[:cfg.loop_top_k]
         chosen += [i for i in order[cfg.loop_top_k:] if sigma.get(cands[i].id, 0.0) >= cfg.loop_min_sigma][
             :cfg.loop_uncertain_k]
+        rank = {i: r for r, i in enumerate(order)}
         for idx in chosen:
-            entry = {"t": float(timestamp), "kf": kf.id, "candidate": cands[idx].id,
+            entry = {"t": float(timestamp), "kf": kf.id, "candidate": cands[idx].id, "rank": rank[idx],
                      "t_candidate": float(cands[idx].timestamp), "similarity": float(sims[idx]),
                      "sigma_m": float(sigma.get(cands[idx].id, float("nan")))}
             result = self._verify_loop(kf, cands[idx], entry)
@@ -1136,7 +1149,7 @@ class PlanarVSLAM:
             var = (0.01 + 0.03 * d) ** 2
             adj[a.id].append((b.id, var))
             adj[b.id].append((a.id, var))
-        for i, j, _ in self.loop_edges:
+        for i, j, _ in self.loop_edges + self.shadow_edges:
             if i in adj and j in adj:
                 adj[i].append((j, 0.03 ** 2))
                 adj[j].append((i, 0.03 ** 2))
@@ -1253,7 +1266,7 @@ class PlanarVSLAM:
             d = float(np.hypot(rel[0], rel[1]))
             sx = 0.01 + 0.03 * d
             g.add_edge(a.id, b.id, rel, (sx, sx, 0.01 + 0.02 * abs(rel[2])))
-        for i, j, zz in self.loop_edges:
+        for i, j, zz in self.loop_edges + self.shadow_edges:
             g.add_edge(i, j, zz, (0.03, 0.03, 0.02), loop=True)
         g.add_edge(cand.id, kf.id, z, (0.03, 0.03, 0.02), loop=True)
         before = {k.id: k.pose.copy() for k in ordered}
@@ -1264,6 +1277,10 @@ class PlanarVSLAM:
         if distortion > cfg.loop_distortion_max or weight < 0.5:
             entry["outcome"] = "rejected_pose_graph"
             return None
+        if cfg.loop_shadow:
+            self.shadow_edges.append((cand.id, kf.id, z))
+            entry.update({"outcome": "shadow_closed", "z": [float(v) for v in z]})
+            return entry
         corrections = {i: correction(before[i], after[i]) for i in before}
         by = {k.id: k for k in self.keyframes}
         for i in corrections:
@@ -1348,25 +1365,39 @@ class PlanarVSLAM:
             scores[h] = len(np.unique(kp[ok[h]]))
         return scores, ok
 
-    def _planar_hypotheses(self, pts, kp, lm, uniq):
-        """RANSAC over pairs of floor correspondences (closed-form planar rigid fit)."""
+    def _planar_hypotheses(self, pts, kp, lm, uniq, pool=False):
+        """RANSAC over pairs of floor correspondences (closed-form planar rigid fit).
+        ``pool``: also use floor seeds of the last frames of a relocalisation turn,
+        moved into the current robot frame by the commanded motion since."""
         q, ok = self._ipm(pts[kp], np.zeros(3))
         rng_q = np.hypot(q[:, 0], q[:, 1])
-        seed = np.flatnonzero(uniq & ok & (self.lm.kind[lm] == 0) & (rng_q <= self.cfg.reloc_hyp_range))
-        if len(seed) < 2:
+        sel = uniq & ok & (self.lm.kind[lm] == 0) & (rng_q <= self.cfg.reloc_hyp_range)
+        Q, L, R, tag = q[sel, :2], lm[sel], rng_q[sel], [(0, int(k)) for k in kp[sel]]
+        if pool and self.cfg.reloc_pool_frames > 0:
+            odom = self._reloc_odom.copy()
+            for f, (o, qq, ll, rr) in enumerate(self._reloc_pool, start=1):
+                rel = between(odom, o)  # the earlier robot frame expressed in the current one
+                c0, s0 = math.cos(rel[2]), math.sin(rel[2])
+                moved = np.column_stack([c0 * qq[:, 0] - s0 * qq[:, 1] + rel[0], s0 * qq[:, 0] + c0 * qq[:, 1] + rel[1]])
+                Q, L, R = np.vstack([Q, moved]), np.r_[L, ll], np.r_[R, rr]
+                tag += [(f, k) for k in range(len(qq))]
+            self._reloc_pool.append((odom, q[sel, :2].copy(), lm[sel].copy(), rng_q[sel].copy()))
+            del self._reloc_pool[:-self.cfg.reloc_pool_frames]
+        if len(Q) < 2:
             return np.zeros((0, 3))
-        i, j = np.triu_indices(len(seed), 1)
-        a, b = seed[i], seed[j]
-        lq = np.hypot(*(q[a, :2] - q[b, :2]).T)
-        lmap = np.hypot(*(self.lm.pos[lm[a], :2] - self.lm.pos[lm[b], :2]).T)
-        tol = 0.02 + 0.04 * np.maximum(rng_q[a], rng_q[b])
-        keep = (lq >= 0.12) & (np.abs(lq - lmap) <= tol) & (kp[a] != kp[b])
-        a, b = a[keep], b[keep]
+        i, j = np.triu_indices(len(Q), 1)
+        lq = np.hypot(*(Q[i] - Q[j]).T)
+        lmap = np.hypot(*(self.lm.pos[L[i], :2] - self.lm.pos[L[j], :2]).T)
+        tol = 0.02 + 0.04 * np.maximum(R[i], R[j])
+        same = np.array([tag[x] == tag[y] for x, y in zip(i, j)], bool) if len(i) else np.zeros(0, bool)
+        keep = (lq >= 0.12) & (np.abs(lq - lmap) <= tol) & ~same & (L[i] != L[j])
+        a, b = i[keep], j[keep]
         if len(a) == 0:
             return np.zeros((0, 3))
         if len(a) > self.cfg.reloc_iters:
             pick = np.random.default_rng(self.frames).choice(len(a), self.cfg.reloc_iters, replace=False)
             a, b = a[pick], b[pick]
+        q, lm = np.column_stack([Q, np.zeros(len(Q))]), L
         vq = q[b, :2] - q[a, :2]
         vm = self.lm.pos[lm[b], :2] - self.lm.pos[lm[a], :2]
         th = np.arctan2(vm[:, 1], vm[:, 0]) - np.arctan2(vq[:, 1], vq[:, 0])
@@ -1410,12 +1441,12 @@ class PlanarVSLAM:
             self._motion_prior = saved_prior
             self._frame_candidates = None
 
-    def _global_localize_planar(self, pts, desc, candidates=None):
+    def _global_localize_planar(self, pts, desc, candidates=None, pool=False):
         found = self._global_matches(pts, desc, candidates=candidates)
         if found is None:
             return None
         kp, lm, uniq = found
-        hyps = self._planar_hypotheses(pts, kp, lm, uniq)
+        hyps = self._planar_hypotheses(pts, kp, lm, uniq, pool=pool)
         info = {"matches": int(len(kp)), "unique": int(uniq.sum()), "hypotheses": int(len(hyps))}
         self._reloc_info = info
         if len(hyps) == 0:
