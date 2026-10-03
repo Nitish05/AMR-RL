@@ -13,7 +13,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "eval"))
-from common import trajectory_metrics  # noqa: E402
+from common import operator_turn_until_tracking, trajectory_metrics  # noqa: E402
 
 from amr_rl.control.supervisor import SupervisorConfig  # noqa: E402
 from amr_rl.perception.vslam import VSLAMConfig  # noqa: E402
@@ -22,18 +22,27 @@ from amr_rl.sim import evaluator  # noqa: E402
 from amr_rl.sim.harness import Session  # noqa: E402
 from amr_rl.sim.world import load_world_config  # noqa: E402
 
+# The pre-2026-10 global relocalisation (PnP-RANSAC, 2 confirmations, no view change,
+# no probation); the variants below were benchmarked with it.
+LEGACY_RELOC = {"reloc_method": "pnp", "reloc_confirmations": 2, "reloc_min_view_change": 0.0,
+                "reloc_probation_frames": 0}
+
 VARIANTS = {
-    "old": VSLAMConfig(static_hypothesis_when_moving=True, command_consistency_score=False),
-    "new": VSLAMConfig(static_hypothesis_when_moving=False, command_consistency_score=True),
-    "cmdscore": VSLAMConfig(static_hypothesis_when_moving=True, command_consistency_score=True),
+    "planar": VSLAMConfig(),  # current defaults (planar relocalisation)
+    "pnp": VSLAMConfig(**LEGACY_RELOC),  # current defaults with the legacy relocalisation
+    "old": VSLAMConfig(static_hypothesis_when_moving=True, command_consistency_score=False, **LEGACY_RELOC),
+    "new": VSLAMConfig(static_hypothesis_when_moving=False, command_consistency_score=True, **LEGACY_RELOC),
+    "cmdscore": VSLAMConfig(static_hypothesis_when_moving=True, command_consistency_score=True, **LEGACY_RELOC),
     "reloc": VSLAMConfig(static_hypothesis_when_moving=True, command_consistency_score=False,
-                         reloc_min_inliers=60, reloc_confirmations=3),
+                         reloc_min_inliers=60, reloc_confirmations=3, reloc_method="pnp",
+                         reloc_min_view_change=0.0, reloc_probation_frames=0),
     "pre": VSLAMConfig(static_hypothesis_when_moving=True, command_consistency_score=False,
-                       freeze_check=False, purge_on_loss=False, dr_gate=False),
+                       freeze_check=False, purge_on_loss=False, dr_gate=False, **LEGACY_RELOC),
     "local": VSLAMConfig(static_hypothesis_when_moving=True, command_consistency_score=False,
-                         reloc_local_first=True),
+                         reloc_local_first=True, **LEGACY_RELOC),
     "cmdreloc": VSLAMConfig(static_hypothesis_when_moving=True, command_consistency_score=True,
-                            reloc_min_inliers=60, reloc_confirmations=3),
+                            reloc_min_inliers=60, reloc_confirmations=3, reloc_method="pnp",
+                            reloc_min_view_change=0.0, reloc_probation_frames=0),
 }
 
 ap = argparse.ArgumentParser()
@@ -56,18 +65,25 @@ for scen in a.scenarios:
                 world_overrides={"robot_start": start})
     s.control_step()
     s.enable_autonomy()
-    reenable = 0
+    reenable, turns, last_tracking = 0, [], s.now
     while s.now < a.seconds:
         s.control_step()
         rt = s.runtime
+        if rt.slam.status == "tracking":
+            last_tracking = s.now
         if not rt.supervisor.autonomy_enabled and rt.supervisor.recovery is None and rt.slam.status == "tracking":
             reenable += 1
             s.enable_autonomy()
+        elif (not rt.supervisor.autonomy_enabled and rt.supervisor.recovery is None
+              and s.now - last_tracking >= 5.0 and len(turns) < 5):
+            operator_turn_until_tracking(s, turns, timeout=min(40.0, max(0.0, a.seconds - s.now)))
     t = trajectory_metrics(s.truth)
     res = {"variant": a.variant, "world": world, "seed": seed, "ate": t["ate_rmse_m"], "max": t["max_position_error_m"],
            "heading_max": t["max_heading_error_deg"], "lost": t["lost_frames"], "path": t["true_path_length_m"],
            "reenable": reenable, "coverage": evaluator.score_map(s.world, s.runtime.grid, s.origin)["free_coverage"],
-           "frozen_events": len(s.runtime.slam.frozen_events), "contacts": len(s.contacts)}
+           "frozen_events": len(s.runtime.slam.frozen_events), "contacts": len(s.contacts),
+           "reloc_transitions": t["reloc_transitions"], "false_reloc_transitions": t["false_reloc_transitions"],
+           "operator_turns": len(turns)}
     print(json.dumps(res), flush=True)
     with open(out / "results.jsonl", "a") as f:
         f.write(json.dumps(res) + "\n")

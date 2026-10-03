@@ -182,13 +182,15 @@ class Planner:
 
     @staticmethod
     def segment_samples(grid, a, b):
-        """Points checked along a straight segment (both ends included, quarter-cell
-        spacing). The planner's shortcut test and the navigator's per-step corridor
-        test use these SAME points: with different samplers a one-cell sliver at the
-        edge of the clearance band could pass one test and fail the other, and the
-        robot then held forever on a path the planner kept re-issuing."""
+        """Points checked along a straight segment (both ends included, about half-cell
+        spacing: the planner's original shortcut sampling, so paths are unchanged).
+        The planner's shortcut test and the navigator's per-step corridor test use
+        these SAME points: with different samplers a one-cell sliver at the edge of
+        the clearance band could pass one test and fail the other, and the robot then
+        held forever on a path the planner kept re-issuing. (A denser quarter-cell
+        spacing changed path shapes and was measured worse: docs/NAVIGATION_RESULTS.md.)"""
         a, b = np.asarray(a, float), np.asarray(b, float)
-        steps = max(2, int(math.ceil(np.linalg.norm(b - a) / (grid.cfg.resolution / 4))) + 1)
+        steps = max(2, int(np.linalg.norm(b - a) / (grid.cfg.resolution / 2)))
         return np.linspace(a, b, steps)
 
     def segment_clear(self, grid, a, b):
