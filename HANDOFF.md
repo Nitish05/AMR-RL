@@ -18,6 +18,39 @@ Project rules are in `AGENTS.md` (read it first). Results with denominators are 
   Expect first-run bugs. Fix them, keep `scripts/amr.sh test` green, then commit.
 
 
+## Update: round 5 (2026-10-03): loop closure
+
+Done (`73da7e2`, `211d626`, `c9a7694` and the docs commit; `docs/results/loop-closure.md`):
+* **Research choice:**
+  - MegaLoc place descriptors (2025, MIT; pinned, local cache,
+    `scripts/amr.sh fetch-place-model`). In our arena they reach recall@1 0.91,
+    against 0.14 for ORB bag-of-words.
+  - Verification: planar two-point RANSAC against the candidate keyframe's own
+    landmarks, plus two-keyframe consistency.
+  - Back-end: SE(2) pose graph with GNC-Cauchy loop edges, and a ROVER (2026) style
+    distortion check.
+  - Correction of keyframes, landmarks, occupancy (evidence journal replay) and
+    entities.
+* **Validation:**
+  - With the rules fixed beforehand: 20 closures, 0 false.
+  - Big map-error drops where an early region is revisited; neutral otherwise.
+  - Navigation: own-map goals 35/44 → 38/46, drift misses 3 → 1.
+  - The first version without confirmation had 5 false closures in 44; it is kept in
+    the record.
+* **Map schema v2** (anchors + keyframe descriptors). Retrieval-first relocalisation
+  gave a small gain (0.15–0.3 m bin 8/11 → 10/11).
+
+Open, in order:
+1. **Depth-guard creep contacted the evaluation box** in one navigation run (home_a
+   s1, t = 425 s). It was not caused by loop closure, but it is a safety item.
+2. **Loop closure** only helps when the robot revisits a region mapped before the
+   drift. Preferring the oldest matching keyframe is a candidate next step.
+3. **Relocalisation** more than ~0.3 m from keyframes still mostly fails (one start
+   per map).
+4. **The learning suite** (restart, reversal, inert, noisy) has not been re-run on
+   round-4/5 code.
+5. **Perception swap** in simulation.
+
 ## Update: round 4 (2026-10-03): open items worked through
 
 Done (`7c301c5` .. `0bf21dc` and this commit; results in `docs/results/`):

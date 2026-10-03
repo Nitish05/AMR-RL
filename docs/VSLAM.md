@@ -58,9 +58,29 @@ enters the pipeline (`tests/test_privilege_boundary.py`).
   30 % correct matches. Global match precision is at best about 38 %, so the old
   method accepted aliases: in round 3, 65 of 143 transitions were false, and seed 4
   started 0.82 m off.
+* **Loop closure** (round 5; [results/loop-closure.md](results/loop-closure.md)):
+  1. Each new keyframe gets a MegaLoc place descriptor. MegaLoc is MIT-licensed;
+     its code and weights are pinned and loaded from local caches only.
+  2. Candidates are older keyframes that are similar (cosine ≥ 0.55), at least 30
+     keyframes and 30 s back, and at least 0.6 m of path back.
+  3. Each candidate is verified with the planar two-point RANSAC and guided
+     verification, against the candidate keyframe's *own* landmarks. Landmarks
+     carry the keyframe that created them. It needs ≥ 50 inliers, and a correction
+     plausible for the path length.
+  4. A second keyframe within 6 must confirm the same correction.
+  5. The loop is added to an SE(2) keyframe pose graph (Gauss–Newton with
+     GNC-annealed Cauchy weights on loop edges). It is accepted only if the
+     trajectory distortion after rigid alignment is small (ROVER) and the loop keeps
+     its robust weight.
+  6. Keyframes, landmarks (with their anchor keyframe) and the current pose are
+     corrected. The runtime replays the occupancy evidence journal and moves the
+     trajectory and remembered entities.
 * **Persistence:** `save()`/`load()` write landmarks + keyframe poses with the
   map version and calibration id; a map built with a different calibration is
-  refused. A loaded map starts in `relocalizing`.
+  refused. A loaded map starts in `relocalizing`. Schema v2 also stores landmark
+  anchors and keyframe place descriptors. Relocalisation then tries the landmarks of
+  the most similar keyframes first, and loaded keyframes can be loop-closure
+  candidates while staying fixed in the pose graph.
 
 ### Monocular metric scale
 
@@ -104,7 +124,8 @@ target; wheel odometry fusion is a proposed extension (ledger), not used here.
 
 ### Known limitations
 
-No loop closure or pose-graph optimisation: drift accumulates (≈1–2 % of path in
+Loop closure corrects drift only when the robot revisits a region mapped before the drift. Revisits of
+already-drifted regions give correct but useless closures, so drift otherwise still accumulates (≈1–2 % of path in
 most runs; a slow heading bias can reach 10–15 cm in 300 s, and one round-4 arena
 build drifted to 12 cm ATE without losing tracking). Wrong relocalisation was the
 dominant large-error mode until round 4. With the planar method there were:

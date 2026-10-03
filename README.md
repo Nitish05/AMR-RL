@@ -56,9 +56,9 @@ tables with every denominator are in
 | Does it avoid what hurt it? | **Yes, 14/14 learned runs.** It saw the red panel once per run and never went back to that fixture or to a duplicate of it. (In round 1 a duplicate identity was re-targeted; duplicates are now merged.) |
 | Does it adapt when the rules change? | **Yes, 4/4 informative runs.** Three failed tries of the old option, then it found the new one 100–300 s after the swap. The 2 seed-0 runs are uninformative because seed 0 never learned the old option. |
 | Is it better than simple baselines? | **Not shown.** Baselines ran on seed 0 only, and seed 0 is the learned policy's failure case: it never completed an interaction with the rewarding fixture. Total valence: nearest 2.0, random 0.2, learned 0.2, fixed 0.0. On seeds 1–2 the learned policy got 0.57 and 0.54 per outcome, but with no baselines to compare. A control on the round-1 map with the same code learned normally on seed 0, so the failure depends on the map. |
-| Can it reach goals in its own map? | **20/37 (54 %)** in the latest run with the depth guard; 22/32 (69 %) in round 2; 5/16 in round 1. Most misses are localisation drift (the robot thinks it arrived but is 16–76 cm off); 3 of 17 may come from the guard's false obstacle marks. In 2 of 12 runs the robot was not localised when goals began. |
+| Can it reach goals in its own map? | **38/46 (83 %)** with loop closure, 35/44 (80 %) without, in round 5 (macOS, 4 rooms × 3 seeds; drift misses 3 → 1, [details](docs/results/loop-closure.md)); 20/37 (54 %) in round 3; 5/16 in round 1. Remaining misses are mostly the robot not reaching the goal or slight drift. |
 | Does it refuse goals it cannot justify? | **Yes, 36/36.** Unknown space is never treated as free. |
-| Does it touch things? | **No contacts in the latest 12 navigation runs**, including all 5 box-on-route tests that ran (round 2: 4 of 5 ended in contact). A monocular depth model now stops the robot for objects its map doesn't know about ([details](docs/results/near-field-guard.md)). In learning runs: 0 unintended contacts (round 1: 7; learning not yet re-run with the guard). |
+| Does it touch things? | **Once in the latest 24 navigation runs**: in one box-on-route test (round 5, home_a seed 1) the near-field guard's slow creep reached the box, tracking then broke and the recovery touched it again (open safety item; not caused by loop closure). Round 3: 0 contacts in 12 runs. Learning runs: 0 unintended contacts in rounds 3–4. |
 
 ![Valence per outcome by seed](docs/media/policy-comparison.png)
 
@@ -355,7 +355,9 @@ git clone https://github.com/Nitish05/AMR-RL.git && cd AMR-RL
 scripts/amr.sh setup                    # isolated .venv: genesis-world 1.3.2, torch, transformers, opencv, ...
 scripts/amr.sh fetch-depth-model        # optional: depth model for the near-field guard (~100 MB, Apache-2.0,
                                         # into the Hugging Face cache, not the repo); without it the guard is off
-scripts/amr.sh test                     # 256 tests + ruff + UI script checks (fast, no simulation)
+scripts/amr.sh fetch-place-model        # optional: MegaLoc place model for loop closure (~900 MB, MIT, into the
+                                        # torch-hub / Hugging Face caches); without it there is no loop closure
+scripts/amr.sh test                     # unit tests + ruff + UI script checks (fast, no simulation)
 RUN_GENESIS=1 scripts/amr.sh test-sim   # real Genesis checks: body, wheels, camera, screen, fixtures
 
 # Operator console (loopback only). Autonomy starts DISABLED; press "Enable autonomy".
