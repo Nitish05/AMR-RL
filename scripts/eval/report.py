@@ -13,6 +13,8 @@ import argparse
 import json
 from pathlib import Path
 
+import numpy as np
+
 from amr_rl.learning.memory import LearningConfig
 
 LEARNING_VALENCE = LearningConfig().valence  # the engineered table the runtime uses
@@ -246,6 +248,12 @@ def learning(ldirs) -> str:
     seeds = sorted({r[1] for r in runs})
     lines.append(f"Seeds: {seeds}. Seed k starts at a different pose (scripts/eval/learning.py ARENA_STARTS) and "
                  "must relocalise against the saved map before any authority is granted.")
+    if any(r[0].startswith("suite-") for r in runs):
+        lines += ["", "### Pre-registered policy comparison (docs/results/policy-comparison-prereg.md)", "",
+                  policy_suite(runs), ""]
+        runs = [r for r in runs if not r[0].startswith("suite-")]
+        if not runs:
+            return "\n".join(lines)
     lines += ["", "### Restart persistence and opposite histories", "", restart_table(runs), ""]
     lines += ["### Policy comparison (standard rules)", "", policy_table(runs), ""]
     lines += ["### Consequence changes and settling", "", reversal_table(runs), ""]
@@ -365,6 +373,50 @@ def policy_table(runs):
         "\n\n`true panel valence` is scored from the world's own events (evaluation only); the roller's rolling "
         "is physics and appears only in perceived valence. Total valence at fixed time is capped for the learned "
         "policy by its engineered need (it idles once satisfied); baselines never idle.")
+
+
+def policy_suite(runs, tie=1.0):
+    """Pre-registered comparison: true panel valence at 480 s per (rule permutation x
+    start) cell; drive-clamped learned vs each baseline as win/tie/loss (tie within
+    ``tie``); exclusions (wrong or failed start relocalisation) listed."""
+    cells, excluded = {}, []
+    for base, seed, result, _ in runs:
+        if not base.startswith("suite-"):
+            continue
+        _, perm, pol = base.split("-", 2)
+        p = result["phases"][0]
+        if p.get("failed") or p.get("frame_valid") is False:
+            excluded.append(f"{perm}/{pol}/start {seed}: "
+                            f"{p.get('failed') or 'wrong start relocalisation ' + str(p.get('reloc_error_at_start'))}")
+            continue
+        events = p.get("world_events") or []
+        sc = p.get("score") or {}
+        cells.setdefault((perm, seed), {})[pol] = {
+            "true": sum(true_panel_valence(e) for e in events),
+            "red": sum(e.get("response") == "red" for e in events),
+            "wasted": sum(e.get("response") == "suppressed_raised" for e in events),
+            "attempts": len(p.get("interactions") or []), "perceived": sc.get("total_valence"),
+            "idle": sc.get("idle_fraction")}
+    pols = ["clamped", "learned", "random", "nearest", "fixed"]
+    rows = []
+    for (perm, seed), c in sorted(cells.items()):
+        rows.append([perm, seed] + [c[q]["true"] if q in c else "—" for q in pols]
+                    + ["; ".join(f"{q} {c[q]['red']}/{c[q]['wasted']}" for q in pols if q in c)])
+    out = [table(["rules", "start", *[f"{q} (true panel valence)" for q in pols], "red panels / wasted signals"],
+                 rows), ""]
+    verdict = []
+    for b in ("random", "nearest", "fixed"):
+        diffs = [c["clamped"]["true"] - c[b]["true"] for c in cells.values() if "clamped" in c and b in c]
+        w = sum(d > tie for d in diffs)
+        t_ = sum(abs(d) <= tie for d in diffs)
+        lo = sum(d < -tie for d in diffs)
+        med = float(np.median(diffs)) if diffs else None
+        claim = bool(diffs) and w >= 2 * len(diffs) / 3 and med is not None and med > 0
+        verdict.append([b, len(diffs), w, t_, lo, med, "yes" if claim else "no"])
+    out += [table(["clamped learned vs", "valid cells", "wins", "ties", "losses", "median difference",
+                   "decision rule met"], verdict), ""]
+    out.append("Excluded phases: " + ("; ".join(excluded) if excluded else "none"))
+    return "\n".join(out)
 
 
 def reversal_table(runs):
