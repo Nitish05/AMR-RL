@@ -18,6 +18,34 @@ Project rules are in `AGENTS.md` (read it first). Results with denominators are 
   Expect first-run bugs. Fix them, keep `scripts/amr.sh test` green, then commit.
 
 
+## Update: round 4 (2026-10-03): open items worked through
+
+Done (`7c301c5` .. `0bf21dc` and this commit; results in `docs/results/`):
+* **Relocalisation:** planar two-point RANSAC with verification, view-change
+  confirmation and probation (`vslam.py`, `reloc_method="planar2pt"`; legacy as
+  `"pnp"`). The round-3 seed-4 start was wrong (0.82 m), so that seed's results are
+  invalid. Probe tools: `scripts/dev/reloc_capture.py`, `scripts/dev/reloc_probe.py`.
+* **Operator turns** reach the VSLAM as commanded motion. `build_map.py` and
+  `slam_bench.py` get a counted operator turn after recovery gives up.
+* **Avoid give-up:** after 3 failed retreats it holds with a backoff. A retreat must
+  actually leave the radius to count as success.
+* **Navigation:** the planner/corridor shared samples are back at the original
+  spacing. Same-machine A/B shows no regression.
+* **Pre-registered policy comparison:** the decision rule was met against random,
+  nearest and fixed (`docs/results/policy-comparison.md`).
+* **Frontier panoramas:** measured and left off (they drifted the map).
+
+Open, in order:
+1. **Relocalisation range.** Positions more than ~0.3 m from any keyframe mostly do
+   not relocalise; one learning start per map fails. Next step: keyframe retrieval
+   (map schema v2).
+2. **Tracking drift.** Map builds vary from 2.5 to 12 cm ATE, and the most common
+   missed navigation goal is "says arrived, 0.15 m+ off". There is no loop closure.
+3. **The rest of the learning suite** (restart, reversal, inert, noisy) has not been
+   re-run on round-4 code.
+4. **The agreed plan:** swap in real perception inside the simulation (a detector,
+   and a VLM for outcomes).
+
 ## Update: first local session (macOS arm64), 2026-10-02
 
 Done (commits `c416ccd` .. this one):

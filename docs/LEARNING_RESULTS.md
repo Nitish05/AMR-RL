@@ -25,8 +25,10 @@ Evidence: `work/evidence/learning-20260930-154854`; control run
 ## Round 4 (2026-10-03): pre-registered policy comparison
 
 [results/policy-comparison.md](results/policy-comparison.md). These are 75 phases on
-`map-arena-20261003-nopano-s2`, with the round-4 relocalisation (every valid start
-relocalised correctly, 0 false) and the avoid give-up. In 12 valid cells the
+`map-arena-20261003-nopano-s2`, with the round-4 relocalisation. All 60 valid starts relocalised correctly (worst error
+2.5 cm). 1 of 219 relocalisations during the runs was false: the robot was already
+tracking 0.63 m / 17° off before that loss, and dead reckoning from that wrong pose
+gated the relocalisation. and the avoid give-up. In 12 valid cells the
 drive-clamped learned policy beat random, nearest-first and fixed-order baselines
 on true panel valence: 12/12, 11/12 and 11/12 wins. The deployed policy did too:
 12/12, 11/12 and 11/12. The pre-registered decision rule is met. The rest of the

@@ -85,6 +85,17 @@ so the primary table includes those cells. Without them:
 
 The decision rule is met either way.
 
+## Relocalisation during the suite
+
+- **Starts:** all 60 valid starts relocalised correctly (worst error 2.5 cm).
+- **During the runs:** 1 of 219 relocalisations was false (`suite-swapped-random`,
+  start 0, t = 391 s). The robot was already tracking 0.63 m / 17° off before that
+  loss. The relocalisation was gated by dead reckoning from that wrong pose, so it
+  re-acquired near it.
+
+This is a tracking-drift failure, not a relocalisation alias. It is still a wrong
+frame for the rest of that run, which was a baseline phase.
+
 ## Limits
 
 - One arena, one map, fixed fixture positions.
