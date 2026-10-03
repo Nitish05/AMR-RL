@@ -88,7 +88,9 @@ def main():
               "loop_closure": {"status": s.runtime.place_status, "closures": len(s.runtime.loop_closures),
                                "candidates_checked": len(s.runtime.slam.loop_log),
                                "scored": score_loops(s.runtime.slam.loop_log, s.truth),
-                               "log": s.runtime.slam.loop_log},
+                               "log": s.runtime.slam.loop_log,
+                               "covis_edges": [[int(a), int(b), [float(v) for v in z], int(n)]
+                                               for a, b, z, n in s.runtime.slam.covis_edges]},
               "map_score": evaluator.score_map(s.world, s.runtime.grid, s.origin), "contacts": s.contacts,
               "sim_seconds": s.now,
               "origin_world": [float(v) for v in s.origin]}  # evaluation-only: world pose of the map frame

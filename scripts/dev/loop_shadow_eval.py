@@ -37,7 +37,7 @@ RULES = {
 }
 
 
-def optimise(kfs, edges):
+def optimise(kfs, edges, covis=()):
     g = PoseGraph()
     ordered = sorted(kfs, key=lambda k: k["id"])
     for k in ordered:
@@ -48,6 +48,9 @@ def optimise(kfs, edges):
         g.add_edge(a["id"], b["id"], rel, (sx, sx, 0.01 + 0.02 * abs(rel[2])))
     for e in edges:
         g.add_edge(e["candidate"], e["kf"], np.array(e["z"]), (0.03, 0.03, 0.02), loop=True)
+    for a, b, z, _ in covis:
+        if a in g.poses and b in g.poses:
+            g.add_edge(a, b, np.array(z), (0.02, 0.02, 0.01))
     return g.optimize() if edges else {k["id"]: np.array(k["pose"]) for k in ordered}
 
 
@@ -68,10 +71,11 @@ def main():
         truth = [json.loads(line) for line in open(d / "session" / "trajectory_scoring.jsonl")]
         log = json.loads((d / "result.json").read_text())["loop_closure"]["log"]
         shadow = [e for e in log if e.get("outcome") == "shadow_closed"]
+        covis = json.loads((d / "result.json").read_text())["loop_closure"].get("covis_edges", [])
         row = {"run": d.name, "keyframes": len(kfs), "constraints": len(shadow)}
         for name, rule in RULES.items():
             edges = [e for e in shadow if rule(e)]
-            rmse, mx = score(kfs, optimise(kfs, edges), truth)
+            rmse, mx = score(kfs, optimise(kfs, edges, covis), truth)
             row[name] = {"edges": len(edges), "rmse_m": rmse, "max_m": mx}
         rows.append(row)
         print(f"{d.name:28s} constraints {len(shadow):3d} | " + " | ".join(

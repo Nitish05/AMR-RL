@@ -144,6 +144,13 @@ class VSLAMConfig:
     # trajectory can then be scored with and without them (paired; live A/B runs
     # diverge after the first closure).
     loop_shadow: bool = False
+    # Covisibility edges (ORB-SLAM's essential graph): a keyframe tracked against
+    # landmarks created by an older keyframe is already anchored to it. Without these
+    # edges the pose graph treats consecutive keyframes as a free odometry chain and
+    # drags keyframes that had re-anchored to the old map along with a loop correction
+    # (shadow evaluation: correct loops made 6/12 maps worse, e.g. 5.8 -> 23 cm).
+    covis_min_shared: int = 30
+    covis_max_per_kf: int = 3
     motion_prior: bool = True
     consistency_window: float = 3.0
     # Fast "frozen estimate" check: commanded travel >= freeze_min_cmd within
@@ -271,6 +278,7 @@ class PlanarVSLAM:
         self._loop_pending = []  # verified loop hypotheses awaiting a consistent second one
         self._reloc_pool = []  # [(odometry pose, floor points (n,2) robot frame, landmark ids, ranges)]
         self.shadow_edges = []  # loop_shadow: accepted constraints not applied (i, j, z)
+        self.covis_edges = []  # (older anchor keyframe, keyframe, z, shared landmarks)
         self.n_loaded_keyframes = 0  # keyframes of a loaded map stay fixed in the pose graph
         self.horizon = model.horizon_row()
         self.frames = 0
@@ -751,6 +759,7 @@ class PlanarVSLAM:
         ids = self.lm.add(world[ok], desc[ok], 0, origin=self.model.T_world_cam(self.pose)[:3, 3],
                           created=self._now, anchor=kf.id)
         kf.landmark[np.flatnonzero(ok)] = ids
+        self._note_covisibility(kf, matched_lm)
         self.keyframes.append(kf)
         if self.cfg.local_ba_window >= 4 and len(self.keyframes) >= self.cfg.local_ba_window:
             self._local_ba()
@@ -1135,6 +1144,23 @@ class PlanarVSLAM:
                 return result
         return None
 
+    def _note_covisibility(self, kf, matched_lm):
+        """Edges to the older keyframes whose landmarks this keyframe was tracked on."""
+        cfg = self.cfg
+        lm = matched_lm[matched_lm >= 0]
+        if len(lm) == 0:
+            return
+        anchors = self.lm.anchor[lm]
+        anchors = anchors[(anchors >= 0) & (anchors < kf.id - 1)]
+        if len(anchors) == 0:
+            return
+        ids, counts = np.unique(anchors, return_counts=True)
+        by = {k.id: k for k in self.keyframes}
+        for i in np.argsort(-counts)[:cfg.covis_max_per_kf]:
+            a, n = int(ids[i]), int(counts[i])
+            if n >= cfg.covis_min_shared and a in by:
+                self.covis_edges.append((a, kf.id, between(by[a].pose, kf.pose), n))
+
     def relative_sigma(self, source_id):
         """Position uncertainty (m, 1-sigma) of every keyframe relative to keyframe
         ``source_id`` along the cheapest chain of pose-graph edges: odometry between
@@ -1153,6 +1179,10 @@ class PlanarVSLAM:
             if i in adj and j in adj:
                 adj[i].append((j, 0.03 ** 2))
                 adj[j].append((i, 0.03 ** 2))
+        for i, j, _, _ in self.covis_edges:
+            if i in adj and j in adj:
+                adj[i].append((j, 0.02 ** 2))
+                adj[j].append((i, 0.02 ** 2))
         best = {source_id: 0.0}
         heap = [(0.0, source_id)]
         while heap:
@@ -1268,6 +1298,9 @@ class PlanarVSLAM:
             g.add_edge(a.id, b.id, rel, (sx, sx, 0.01 + 0.02 * abs(rel[2])))
         for i, j, zz in self.loop_edges + self.shadow_edges:
             g.add_edge(i, j, zz, (0.03, 0.03, 0.02), loop=True)
+        for i, j, zz, _ in self.covis_edges:
+            if i in g.poses and j in g.poses:
+                g.add_edge(i, j, zz, (0.02, 0.02, 0.01))
         g.add_edge(cand.id, kf.id, z, (0.03, 0.03, 0.02), loop=True)
         before = {k.id: k.pose.copy() for k in ordered}
         after = g.optimize()

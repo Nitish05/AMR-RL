@@ -117,3 +117,31 @@ def test_relative_sigma_grows_along_the_chain_and_collapses_through_a_loop():
     slam.loop_edges.append((2, 49, np.zeros(3)))  # keyframe 2 already tied to the current one
     tied = slam.relative_sigma(49)
     assert tied[2] <= 0.031 and tied[0] < sig[0]
+
+
+def test_covisibility_keeps_reanchored_keyframes_in_place_under_a_loop_correction():
+    """Shadow evaluation finding: keyframes that tracking had re-anchored to the old
+    map (implicitly corrected) were dragged by a loop correction pushed through the
+    odometry chain. A covisibility edge to the old keyframe holds them."""
+    n = 60
+    truth = [np.array([0.05 * i, 0.0, 0.0]) for i in range(n)]
+    est = [t.copy() for t in truth]
+    for i in range(20, 41):  # drift accumulates over keyframes 20-40...
+        est[i] = truth[i] + np.array([0.0, 0.01 * (i - 19), 0.0])
+    # ...then tracking re-anchors on the old map: 41+ are correct again
+
+    def solve(with_covis):
+        g = PoseGraph()
+        for i, p in enumerate(est):
+            g.add_node(i, p, fixed=(i == 0))
+        for i in range(n - 1):
+            g.add_edge(i, i + 1, between(est[i], est[i + 1]), (0.01, 0.01, 0.01))
+        g.add_edge(19, 40, between(truth[19], truth[40]), (0.02, 0.02, 0.01), loop=True)  # a correct loop
+        if with_covis:
+            for i in range(41, n):
+                g.add_edge(5, i, between(est[5], est[i]), (0.02, 0.02, 0.01))
+        out = g.optimize()
+        return max(float(np.hypot(*(out[i][:2] - truth[i][:2]))) for i in range(41, n))
+
+    assert solve(False) > 0.1  # the re-anchored tail is pushed off by the correction
+    assert solve(True) < 0.03
