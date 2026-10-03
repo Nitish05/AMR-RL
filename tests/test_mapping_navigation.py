@@ -432,3 +432,40 @@ def test_loop_closure_replay_moves_evidence_with_its_keyframe():
     assert grid.classify_xy(other)[0] == OCCUPIED
     grid.replay({3: T})  # a second correction compounds (stored points moved, not re-quantised)
     assert grid.classify_xy(apply_transform(T, apply_transform(T, wall)))[0] == OCCUPIED
+
+
+def test_depth_guard_marks_space_behind_a_seen_face_not_free():
+    """Round 5 contact: the camera saw only the box's near face; the map kept the
+    space behind it free, and a detour swung the chassis corner into it. Cells up to
+    shadow_depth behind a confirmed face (along the camera ray) become unknown;
+    floor beside the face and well beyond it stays free."""
+    grid = grid_with_free([(-2.0, -1.0, 2.0, 1.0)])
+    nav, guard, det = _guarded(grid)
+    pose = np.array([-1.0, 0.0, 0.0])
+    det.points = _box_points(0.42, 0.46, -0.15, 0.15)  # a thin face 0.42 m ahead: all the camera sees
+    guard.maybe_detect(0.1, pose, RGB)
+    guard.maybe_detect(0.4, pose, RGB)
+    face_x = -1.0 + 0.44
+    assert grid.classify_xy(np.array([[face_x, 0.0]]))[0] == OCCUPIED
+    behind = np.array([[face_x + 0.15, 0.0], [face_x + 0.28, 0.05]])
+    assert not (grid.classify_xy(behind) == FREE).any()  # hidden extent: not certified
+    assert grid.classify_xy(np.array([[face_x + 0.6, 0.0]]))[0] == FREE  # beyond shadow_depth
+    assert grid.classify_xy(np.array([[face_x + 0.15, 0.6]]))[0] == FREE  # beside the face
+    assert guard.stats["shadow_cells"] > 0
+
+
+def test_guard_marks_survive_a_loop_closure_replay():
+    """The guard used to write log-odds directly, outside the evidence journal, so a
+    loop-closure replay erased asserted obstacles (round 5: replays 2-5 s before the
+    box contact)."""
+    grid = grid_with_free([(-2.0, -1.0, 2.0, 1.0)])
+    nav, guard, det = _guarded(grid)
+    pose = np.array([-1.0, 0.0, 0.0])
+    det.points = _box_points(0.42, 0.46, -0.15, 0.15)
+    guard.maybe_detect(0.1, pose, RGB)
+    guard.maybe_detect(0.4, pose, RGB)
+    face = np.array([[-1.0 + 0.44, 0.0]])
+    assert grid.classify_xy(face)[0] == OCCUPIED
+    grid.replay({})  # a loop closure that moved nothing
+    assert grid.classify_xy(face)[0] == OCCUPIED
+    assert not (grid.classify_xy(np.array([[-1.0 + 0.6, 0.0]])) == FREE).any()  # shadow kept too

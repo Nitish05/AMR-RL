@@ -167,3 +167,26 @@ def test_drive_command_contract_and_wheel_conversion():
     assert wheels.left == pytest.approx(5.0) and wheels.right == pytest.approx(5.0)
     turn = body_to_wheels(0.0, 1.0, wheel_radius=0.05, track=0.27, limits=limits)
     assert turn.left == pytest.approx(-turn.right) and turn.right > 0
+
+
+def test_recovery_after_a_suspected_contact_backs_off_and_never_rotates():
+    """Round 5: tracking was lost while the robot pressed on a box it could not see,
+    and the rotate recovery swept the chassis into it for 18 s."""
+    from amr_rl.runtime.robot import choose_recovery
+
+    common = {"nudge_retrace": None, "turning_clearance": 1.0, "required_clearance": 0.28, "certified": True}
+    stall = choose_recovery(loss_reason="visual_motion_inconsistent_with_commands", last_command=(0.19, 0.0), **common)
+    assert stall["kind"] == "back_off" and stall["remaining"] <= 0.10
+    other = choose_recovery(loss_reason="tracking_failed", last_command=(0.19, 0.0), **common)
+    assert other["kind"] == "rotate"
+
+
+def test_rotate_recovery_needs_turning_clearance_not_just_a_free_cell():
+    from amr_rl.runtime.robot import choose_recovery
+
+    tight = choose_recovery(loss_reason="tracking_failed", last_command=(0.0, 0.3), nudge_retrace=None,
+                            turning_clearance=0.20, required_clearance=0.28, certified=True)
+    assert tight["kind"] == "wait"
+    nudge = choose_recovery(loss_reason="visual_motion_inconsistent_with_commands", last_command=(0.05, 0.0),
+                            nudge_retrace=0.12, turning_clearance=1.0, required_clearance=0.28, certified=True)
+    assert nudge["kind"] == "retrace"  # a nudge's verified approach is still retraced

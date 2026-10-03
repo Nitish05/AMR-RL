@@ -74,10 +74,28 @@ def send_goal(session, world_xy, map_xy=None):
     return dict(rt.acks[-1]), map_xy
 
 
-def run_goal(session, goal, log, timeout=75.0, blackout=None):
+def footprint_gap(spec, pose, box_xy, box_size):
+    """Scoring only: true distance from the robot's chassis rectangle to an axis-aligned
+    box (0 when they touch or overlap). Sampled on the chassis outline (1 cm)."""
+    length, width = spec.chassis["length"], spec.overall_width
+    rear = spec.chassis["length"] / 2 + spec.chassis["axle_offset_x"]
+    xs = np.arange(-rear, length - rear + 1e-9, 0.01)
+    ys = np.arange(-width / 2, width / 2 + 1e-9, 0.01)
+    outline = np.vstack([np.column_stack([xs, np.full_like(xs, -width / 2)]), np.column_stack([xs, np.full_like(xs, width / 2)]),
+                         np.column_stack([np.full_like(ys, -rear), ys]), np.column_stack([np.full_like(ys, length - rear), ys])])
+    c, s = np.cos(pose[2]), np.sin(pose[2])
+    world = np.column_stack([pose[0] + c * outline[:, 0] - s * outline[:, 1], pose[1] + s * outline[:, 0] + c * outline[:, 1]])
+    half = np.asarray(box_size[:2], float) / 2
+    q = np.maximum(np.abs(world - np.asarray(box_xy, float)[None]) - half[None], 0.0)
+    return float(np.min(np.linalg.norm(q, axis=1)))
+
+
+def run_goal(session, goal, log, timeout=75.0, blackout=None, obstacle=None):
     rt = session.runtime
     start_contacts = len(session.contacts)
     t0 = session.now
+    guard_before = dict(rt.guard.stats) if rt.guard is not None else None
+    min_gap = None
     if goal.get("map_xy") is not None:  # operator clicked a point on the robot's own map
         goal = dict(goal, xy=[float(v) for v in evaluator.map_to_world(session.origin, goal["map_xy"])])
     record = {"goal": goal["name"], "expect": goal["expect"], "world_xy": goal["xy"], "t_start": t0}
@@ -95,6 +113,10 @@ def run_goal(session, goal, log, timeout=75.0, blackout=None):
     end = session.now + timeout
     while session.now < end:
         session.control_step()
+        if obstacle is not None:
+            gap = footprint_gap(rt.spec, evaluator.true_pose(session.world), obstacle[0], obstacle[1])
+            if min_gap is None or gap < min_gap[0]:
+                min_gap = (gap, session.now)
         act = rt.activity
         if rt.supervisor.recovery is not None:
             record.setdefault("recovery_seen", True)
@@ -129,6 +151,10 @@ def run_goal(session, goal, log, timeout=75.0, blackout=None):
         float(np.hypot(*(evaluator.to_map_frame(session.origin, truth)[:2] - rt.pose[:2]))),
         "result": "arrived" if dist <= ARRIVAL_TOLERANCE else "not_arrived",
     })
+    if min_gap is not None:
+        record["min_obstacle_gap_m"], record["min_obstacle_gap_t"] = min_gap
+    if guard_before is not None:
+        record["guard_during_goal"] = {k: rt.guard.stats[k] - guard_before.get(k, 0) for k in rt.guard.stats}
     return record
 
 
@@ -209,7 +235,8 @@ def fault_test(session, log, seed, fault, *, blackout=None, obstacle=False, min_
         session.world.place_evaluation_obstacle(placed)
         for _ in range(3):
             session.control_step()
-    record = run_goal(session, b_goal, log, blackout=blackout)
+    record = run_goal(session, b_goal, log, blackout=blackout,
+                      obstacle=None if placed is None else (placed, session.world.evaluation_obstacle_size))
     record["fault"] = fault
     record["start"] = {k: start.get(k) for k in ("result", "true_final_distance", "duration")}
     if obstacle:
@@ -339,7 +366,8 @@ def summarise(results):
             "moved_obstacle": None if r["moved_obstacle_goal"] is None else {
                 "result": r["moved_obstacle_goal"]["result"], "status": r["moved_obstacle_goal"].get("navigation_status"),
                 "reason": r["moved_obstacle_goal"].get("navigation_reason") or r["moved_obstacle_goal"].get("reason"),
-                "obstacle_contact": r["moved_obstacle_goal"].get("obstacle_contact")},
+                "obstacle_contact": r["moved_obstacle_goal"].get("obstacle_contact"),
+                "min_obstacle_gap_m": r["moved_obstacle_goal"].get("min_obstacle_gap_m")},
             "interventions": sum("intervention" in e for e in r["interventions"]),
         })
     return rows

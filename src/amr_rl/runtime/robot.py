@@ -68,6 +68,28 @@ class RuntimeConfig:
     place_descriptor: str | None = "megaloc"
 
 
+def choose_recovery(*, loss_reason, last_command, nudge_retrace, turning_clearance, required_clearance, certified):
+    """Bounded recovery after localisation was lost (pure; unit-tested).
+
+    * a nudge in progress: retrace its straight approach;
+    * vision disagreed with a forward command (``visual_motion_inconsistent_with_
+      commands``): the robot may be pressing on something it cannot see, so back
+      straight off by 10 cm along the path just driven and wait. Never rotate: round 5
+      rotated in place against a box for 18 s;
+    * otherwise rotate in place only if the last good pose was certified free AND
+      nothing occupied (map or guard-asserted) lies within the turning circle;
+    * else wait for the operator.
+    """
+    if nudge_retrace is not None:
+        return {"kind": "retrace", "remaining": min(nudge_retrace + 0.02, 0.45)}
+    v = last_command[0] if last_command else 0.0
+    if loss_reason == "visual_motion_inconsistent_with_commands" and v > 0.02:
+        return {"kind": "back_off", "remaining": 0.10}
+    if certified and turning_clearance is not None and turning_clearance >= required_clearance:
+        return {"kind": "rotate"}
+    return {"kind": "wait"}
+
+
 class RobotRuntime:
     def __init__(self, spec, backend, *, memory_path, run_dir, config: RuntimeConfig | None = None,
                  wall_clock=None, map_dir=None):
@@ -95,7 +117,8 @@ class RobotRuntime:
                 self.guard_status = "unavailable: depth model not in the local cache"
             else:
                 self.guard = DepthGuard(MonoDepthObstacles(self.model, backend=LazyDepthBackend()), self.grid,
-                                        self.planner.cfg.footprint_radius)
+                                        self.planner.cfg.footprint_radius,
+                                        camera_x=float(self.model.T_base_cam[0, 3]))
                 self.guard_status = f"active ({DEPTH_MODEL_ID}@{DEPTH_MODEL_REVISION[:8]})"
         self.nav.guard = self.guard
         self.place_status = "disabled"
@@ -442,19 +465,22 @@ class RobotRuntime:
         return self.screen, bool(self.expression.signal_pattern)
 
     def _plan_recovery(self):
-        """Choose a bounded recovery that only moves through space known to be clear:
-        retrace a nudge's straight approach, or rotate in place if the last certified
-        pose had full footprint clearance; otherwise wait for the operator."""
+        """Choose a bounded recovery that only moves through space known to be clear
+        (see ``choose_recovery``)."""
         act = self.activity
         pose = self.last_good_pose
+        retrace = None
         if act is not None and getattr(act, "action", None) == "nudge" and act.phase in ("acting", "retreating"):
             start = act.act_start_pose if act.act_start_pose is not None else pose
             if pose is not None and start is not None:
-                dist = float(np.hypot(*(np.asarray(pose[:2]) - np.asarray(start[:2]))))
-                return {"kind": "retrace", "remaining": min(dist + 0.02, 0.45)}
-        if pose is not None and self.planner.traversable_xy(self.grid, np.asarray(pose[:2])[None])[0]:
-            return {"kind": "rotate"}
-        return {"kind": "wait"}
+                retrace = float(np.hypot(*(np.asarray(pose[:2]) - np.asarray(start[:2]))))
+        clearance = None if pose is None else float(self.planner.obstacle_clearance_xy(
+            self.grid, np.asarray(pose[:2])[None])[0])
+        return choose_recovery(
+            loss_reason=None if self.last_track is None else self.last_track.reason,
+            last_command=self.last_command, nudge_retrace=retrace,
+            turning_clearance=clearance, required_clearance=self.planner.cfg.footprint_radius + self.nav.cfg.turn_margin,
+            certified=pose is not None and bool(self.planner.traversable_xy(self.grid, np.asarray(pose[:2])[None])[0]))
 
     def _recovery_step(self, now):
         plan = self.recovery_plan
@@ -464,6 +490,11 @@ class RobotRuntime:
                 return -0.08, 0.0
             plan["kind"] = "rotate" if self.last_good_pose is not None and self.planner.traversable_xy(
                 self.grid, np.asarray(self.last_good_pose[:2])[None])[0] else "wait"
+            return 0.0, 0.0
+        if plan["kind"] == "back_off":  # suspected contact: straight back the way it came, then wait
+            if self.supervisor.recovery.reverse < plan["remaining"]:
+                return -0.06, 0.0
+            plan["kind"] = "wait"
             return 0.0, 0.0
         if plan["kind"] == "rotate":
             return 0.0, 0.35

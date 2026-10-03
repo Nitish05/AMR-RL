@@ -65,7 +65,7 @@ class OccupancyGrid:
         # After a loop closure the grid is rebuilt from ``_base`` by replaying the
         # journal with each anchor's correction (points kept exactly, not re-quantised).
         self.anchor = -1
-        self.journal = []  # (anchor, xy float32 (k, 2), delta)
+        self.journal = []  # (anchor, xy float32 (k, 2), value, op): op "add" (delta) or "max" (raise to level)
         self._base = self.logodds.copy()
 
     # -------------------------------------------------------------- indexing
@@ -93,9 +93,30 @@ class OccupancyGrid:
             return 0
         values = self.logodds.reshape(-1)
         values[cells] = np.clip(values[cells] + delta, -self.cfg.free_clamp, self.cfg.clamp)
-        self.journal.append((self.anchor, self.to_xy(cells % self.n, cells // self.n).astype(np.float32), float(delta)))
+        self.journal.append((self.anchor, self.to_xy(cells % self.n, cells // self.n).astype(np.float32), float(delta),
+                             "add"))
         self.revision += 1
         return len(cells)
+
+    def raise_to(self, xy, level):
+        """Raise cells to at least ``level`` (asserted obstacles, shadowed space).
+        Journalled like ``add_hits`` so a loop-closure replay keeps it. Returns the
+        number of cells that changed."""
+        if len(xy) == 0:
+            return 0
+        ix, iy = self.to_cell(np.asarray(xy, float))
+        ok = self.inside(ix, iy)
+        cells = np.unique(iy[ok] * self.n + ix[ok])
+        if len(cells) == 0:
+            return 0
+        values = self.logodds.reshape(-1)
+        changed = int((values[cells] < level).sum())
+        values[cells] = np.maximum(values[cells], level)
+        self.journal.append((self.anchor, self.to_xy(cells % self.n, cells // self.n).astype(np.float32), float(level),
+                             "max"))
+        if changed:
+            self.revision += 1
+        return changed
 
     def replay(self, transforms):
         """Rebuild the evidence after a loop closure. ``transforms``: {anchor keyframe
@@ -104,15 +125,18 @@ class OccupancyGrid:
         from ..perception.pose_graph import apply_transform
 
         values = self._base.copy().reshape(-1)
-        for k, (a, xy, delta) in enumerate(self.journal):
+        for k, (a, xy, value, op) in enumerate(self.journal):
             T = transforms.get(a)
             if T is not None and (abs(T[0]) > 1e-9 or abs(T[1]) > 1e-9 or abs(T[2]) > 1e-12):
                 xy = apply_transform(T, xy).astype(np.float32)
-                self.journal[k] = (a, xy, delta)
+                self.journal[k] = (a, xy, value, op)
             ix, iy = self.to_cell(xy)
             ok = self.inside(ix, iy)
             cells = np.unique(iy[ok] * self.n + ix[ok])
-            values[cells] = np.clip(values[cells] + delta, -self.cfg.free_clamp, self.cfg.clamp)
+            if op == "max":
+                values[cells] = np.maximum(values[cells], value)
+            else:
+                values[cells] = np.clip(values[cells] + value, -self.cfg.free_clamp, self.cfg.clamp)
         self.logodds = values.reshape(self.logodds.shape)
         self.revision += 1
 

@@ -47,19 +47,26 @@ class GuardConfig:
     assert_level: float = 1.5    # log-odds written into confirmed obstacle cells
     assert_range: float = 1.0    # m; only points this close are written
     hold_timeout: float = 4.0    # s
+    # The camera sees only the face of an obstacle; the map must not keep the space
+    # behind it (never observed) as free floor. Round 5: a detour swung the chassis
+    # corner into the unseen side of the evaluation box. Cells up to this far behind
+    # each confirmed face, along the camera ray, are lowered to "unknown" (never free).
+    shadow_depth: float = 0.35   # m (0 = off)
     observe_only: bool = False   # evaluation: detect and record, change nothing
 
 
 class DepthGuard:
-    def __init__(self, detector, grid, footprint_radius, config: GuardConfig | None = None):
+    def __init__(self, detector, grid, footprint_radius, config: GuardConfig | None = None, camera_x: float = 0.0):
         self.detector = detector
         self.grid = grid
         self.radius = float(footprint_radius)
         self.cfg = config or GuardConfig()
+        self.camera_x = float(camera_x)  # camera ahead of base_link along the heading (m)
+        self.shadow_log = []
         self.path_ahead = np.zeros((0, 2))
         self.last_frame = -np.inf
         self.stats = {"frames": 0, "stops": 0, "asserted_cells": 0, "assert_events": 0, "creep_steps": 0,
-                      "hold_timeouts": 0}
+                      "hold_timeouts": 0, "shadow_cells": 0}
         self.asserted_log = []
         self.recent = []
         self.free_run = None
@@ -90,7 +97,7 @@ class DepthGuard:
         self.free_run = self._free_run(world, here)
         self.free_run_t = now
         if not self.cfg.observe_only:
-            self._confirm_and_assert(now, world, here)
+            self._confirm_and_assert(now, world, here, heading=float(pose[2]))
         return {"points": len(pts), "free_run": self.free_run}
 
     def _free_run(self, world, here):
@@ -110,7 +117,7 @@ class DepthGuard:
         first = np.flatnonzero(hits >= self.cfg.min_points)
         return float(along[first[0]]) if len(first) else None
 
-    def _confirm_and_assert(self, now, world, here):
+    def _confirm_and_assert(self, now, world, here, heading=0.0):
         cells = set()
         if len(world):
             near = np.linalg.norm(world - here[None], axis=1) <= self.cfg.assert_range
@@ -129,14 +136,41 @@ class DepthGuard:
             return
         xs = np.array([c[0] for c in confirmed])
         ys = np.array([c[1] for c in confirmed])
-        before = self.grid.logodds[ys, xs].copy()
-        self.grid.logodds[ys, xs] = np.maximum(before, self.cfg.assert_level)
-        changed = int((before < self.cfg.assert_level).sum())
+        centres = self.grid.to_xy(xs, ys)
+        changed = self.grid.raise_to(centres, self.cfg.assert_level)  # journalled: survives loop-closure replay
         if changed:
-            self.grid.revision += 1
             self.stats["asserted_cells"] += changed
             self.stats["assert_events"] += 1
-            self.asserted_log.append((float(now), self.grid.to_xy(xs, ys).tolist()))
+            self.asserted_log.append((float(now), centres.tolist()))
+        if self.cfg.shadow_depth > 0:
+            cam = np.asarray(here, float) + self.camera_x * np.array([np.cos(heading), np.sin(heading)])
+            shadow = self._shadow(cam, centres)
+            if len(shadow):
+                n = self.grid.raise_to(shadow, 0.0)  # unknown: the planner never treats it as free
+                if n:
+                    self.stats["shadow_cells"] += n
+                    self.shadow_log.append((float(now), shadow.tolist()))
+
+    def _shadow(self, cam, centres):
+        """Cell-centre samples behind each confirmed face cell, along the ray from the
+        camera, up to ``shadow_depth`` (excluding the face cells themselves)."""
+        res = self.grid.cfg.resolution
+        d = centres - cam[None]
+        n = np.linalg.norm(d, axis=1, keepdims=True)
+        u = d / np.maximum(n, 1e-6)
+        side = np.stack([-u[:, 1], u[:, 0]], 1)
+        # rays through 5 points across each face cell, so neighbouring cells' shadows
+        # overlap and the diverging fan has no gaps
+        starts = (centres[:, None, :] + side[:, None, :] * (np.array([-0.5, -0.25, 0.0, 0.25, 0.5]) * res)[None, :, None])
+        dirs = starts - cam[None, None, :]
+        dirs = dirs / np.maximum(np.linalg.norm(dirs, axis=2, keepdims=True), 1e-6)
+        steps = np.arange(res / 4, self.cfg.shadow_depth + 1e-9, res / 4)
+        pts = (starts[:, :, None, :] + dirs[:, :, None, :] * steps[None, None, :, None]).reshape(-1, 2)
+        ix, iy = self.grid.to_cell(pts)
+        fx, fy = self.grid.to_cell(centres)
+        face = set(zip(fx.tolist(), fy.tolist()))
+        keep = np.array([(a, b) not in face for a, b in zip(ix.tolist(), iy.tolist())], bool)
+        return pts[keep] if len(pts) else pts
 
     # ------------------------------------------------------------ decisions
     def speed_limit(self, now):
