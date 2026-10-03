@@ -85,7 +85,7 @@ def run_position(job):
     dt_turn = math.radians(step_deg) / W_TURN
     t, seq = 0.0, None
     order = [(0, (0.0, 0.0), 0.1)] * 5 + [(k, (0.0, W_TURN), dt_turn) for k in range(1, len(frames))]
-    for n, (k, cmd, dt) in enumerate(order):
+    for k, cmd, dt in order:
         t += dt
         r = slam.track(frames[k], t, commanded=cmd)
         if r.status == TRACKING:
