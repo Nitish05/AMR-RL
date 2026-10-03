@@ -17,6 +17,35 @@ case "$cmd" in
     "$ROOT/.venv/bin/python" -m pip install --upgrade pip
     "$ROOT/.venv/bin/python" -m pip install -e ".[simulation,dev,depth]"
     ;;
+  bench-setup)
+    # Light environment for the learner testbed only (no Genesis, no torch): .venv-bench.
+    # Uses uv if installed (it fetches Python 3.12 itself), else a Homebrew/system Python >= 3.10.
+    VENV="$ROOT/.venv-bench"
+    PKGS="numpy scipy opencv-python-headless pyyaml pytest ruff"
+    if command -v uv >/dev/null 2>&1; then
+      uv venv --python 3.12 "$VENV"
+      uv pip install --python "$VENV/bin/python" $PKGS
+    else
+      for cand in python3.12 python3.13 python3.11 python3.10 python3; do
+        if command -v "$cand" >/dev/null 2>&1 && "$cand" -c 'import sys; sys.exit(0 if sys.version_info >= (3, 10) else 1)'; then
+          "$cand" -m venv "$VENV"; break
+        fi
+      done
+      if [[ ! -x "$VENV/bin/python" ]]; then
+        echo "Need Python >= 3.10. Install uv (https://docs.astral.sh/uv/) or: brew install python@3.12" >&2; exit 1
+      fi
+      "$VENV/bin/python" -m pip install --upgrade pip
+      "$VENV/bin/python" -m pip install $PKGS
+    fi
+    "$VENV/bin/python" -c "import numpy, cv2, yaml; print('bench environment ready:', numpy.__version__, cv2.__version__)"
+    ;;
+  bench-test)
+    "$ROOT/.venv-bench/bin/python" -m pytest -q -p no:cacheprovider -m "not genesis" \
+      tests/test_learner_bench.py tests/test_learning_memory.py tests/test_perception_units.py "$@"
+    ;;
+  learner-bench)
+    "$ROOT/.venv-bench/bin/python" scripts/eval/learner_bench.py "$@"
+    ;;
   fetch-depth-model)
     # Downloads the pinned Depth Anything V2 Small weights (Apache-2.0, ~100 MB) into the
     # Hugging Face cache outside the repository. Without them the near-field guard is off.
@@ -47,6 +76,6 @@ case "$cmd" in
     "$PY" scripts/eval/learning.py "$@"
     ;;
   *)
-    echo "usage: scripts/amr.sh {setup|fetch-depth-model|test|test-sim|generate-robot|app|map|eval-nav|eval-learning} [args]"
+    echo "usage: scripts/amr.sh {setup|bench-setup|bench-test|learner-bench|fetch-depth-model|test|test-sim|generate-robot|app|map|eval-nav|eval-learning} [args]"
     ;;
 esac
