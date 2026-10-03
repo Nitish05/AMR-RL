@@ -3,7 +3,9 @@
 Only pixel-derived detections enter here. The classifier returns ``None``
 (ambiguous -> nothing is learned) unless the evidence is consistent:
 
-* ``moved``: the target's appearance is seen >= 0.15 m from where it was, or its
+* ``moved``: the target's appearance is seen >= 0.15 m from where it was AND that
+  displacement is significant against the position scatter measured in the same
+  before/after frames (noisy positions alone must not look like motion), or its
   former place is in view after the action and no longer contains it;
 * ``attach:<colour>``: a new attachment colour appears on the target;
 * ``none``: the target is seen in place with its prior attachment state.
@@ -17,6 +19,24 @@ from collections import Counter
 import numpy as np
 
 MOVE_THRESHOLD = 0.15
+# Engineered: a displacement must exceed this many standard errors of the
+# before/after median difference (2-D, ~1 % false alarms for Gaussian scatter).
+MOVE_SIGNIFICANCE = 3.0
+
+
+def displacement_threshold(before_xy: np.ndarray, after_xy: np.ndarray) -> float:
+    """Smallest displacement distinguishable from the measured position scatter.
+
+    The per-axis scatter is estimated robustly from pairwise differences within
+    each window (median |xi - xj| = 0.954 sigma for Gaussian scatter; deviations
+    about a 3-frame median would include a zero by construction and read low);
+    1.25 is the efficiency penalty of a median against a mean. Nothing here is
+    learned."""
+    diffs = [np.abs(w[i] - w[j]) for w in (before_xy, after_xy)
+             for i in range(len(w)) for j in range(i + 1, len(w))]
+    sigma = float(np.median(np.concatenate(diffs))) / 0.954 if diffs else 0.0
+    se = 1.25 * sigma * math.sqrt(1.0 / len(before_xy) + 1.0 / len(after_xy))
+    return max(MOVE_THRESHOLD, MOVE_SIGNIFICANCE * se)
 
 
 def majority(tokens, fraction=2 / 3):
@@ -36,12 +56,14 @@ def classify(before: list[dict], after: list[dict], *, place_in_view_after: int 
     context = majority([b["token"] for b in before])
     if context is None:
         return None, "unstable_before_state"
-    p0 = np.median(np.array([b["position"] for b in before]), axis=0)
+    before_xy = np.array([b["position"] for b in before], float)
+    p0 = np.median(before_xy, axis=0)
     if len(after) >= min_frames:
-        positions = np.array([a["position"] for a in after])
+        positions = np.array([a["position"] for a in after], float)
         p1 = np.median(positions, axis=0)
-        if math.dist(p0, p1) >= MOVE_THRESHOLD:
-            return "moved", f"displaced {math.dist(p0, p1):.2f} m"
+        shift, needed = math.dist(p0, p1), displacement_threshold(before_xy, positions)
+        if shift >= needed:
+            return "moved", f"displaced {shift:.2f} m (needed {needed:.2f} m)"
         tokens = [a["token"] for a in after]
         # A new attachment that persists for >= min_frames consecutive frames counts,
         # even if it later disappears (transient responses are still responses).

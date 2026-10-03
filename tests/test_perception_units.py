@@ -9,7 +9,7 @@ import pytest
 
 from amr_rl.learning.identity import EntityTracker
 from amr_rl.learning.memory import ExperienceMemory
-from amr_rl.learning.outcomes import classify
+from amr_rl.learning.outcomes import classify, displacement_threshold
 from amr_rl.perception.camera_model import CameraModel
 from amr_rl.perception.entities import Detection, FixtureDetector, hue_name
 from amr_rl.perception.semantic import SemanticWorker
@@ -111,6 +111,26 @@ def test_outcome_classification():
     assert classify(before, [], place_in_view_after=3)[0] == "moved"
     flicker = [dict(o, token=t) for o, t in zip(obs("x", (1, 1), 6), ["attach:none", "attach:blue"] * 3)]
     assert classify(before, flicker)[0] is None
+
+
+def test_moved_requires_displacement_beyond_measured_position_scatter():
+    rng = np.random.default_rng(0)
+
+    def noisy(xy, n, sigma, t0=0.0):
+        return [{"token": "attach:none", "position": list(np.asarray(xy) + rng.normal(0, sigma, 2)),
+                 "frame_sha256": "0" * 64, "t": t0 + 0.2 * i} for i in range(n)]
+
+    # A stationary object seen with 10 cm position noise: never "moved".
+    false_moves = sum(classify(noisy((1, 1), 3, 0.10), noisy((1, 1), 12, 0.10, 5))[0] == "moved"
+                      for _ in range(200))
+    assert false_moves <= 6  # ~30 % with the bare 0.15 m threshold
+    # The same 0.18 m shift is a move when positions are precise, not when they scatter.
+    assert classify(obs("attach:none", (1, 1)), obs("attach:none", (1.18, 1)))[0] == "moved"
+    before = np.array([o["position"] for o in noisy((1, 1), 3, 0.10)])
+    after = np.array([o["position"] for o in noisy((1.18, 1), 12, 0.10, 5)])
+    assert displacement_threshold(before, after) > 0.18
+    # A large move is still seen through the noise.
+    assert classify(noisy((1, 1), 6, 0.10), noisy((1.6, 1), 12, 0.10, 5))[0] == "moved"
 
 
 def test_context_already_raised_is_not_a_new_response():

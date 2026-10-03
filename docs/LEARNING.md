@@ -45,7 +45,8 @@ Robot actions (physically plausible for wheels + camera + screen):
    the identified target (the visible state becomes the *context*) and record
    the **prediction** P(outcome | entity, action, context) → **act** → **observe**
    for 2.5 s.
-5. **Outcome** (`learning/outcomes.py`): `moved` (displaced ≥ 15 cm, or former
+5. **Outcome** (`learning/outcomes.py`): `moved` (displaced ≥ 15 cm and ≥ 3
+   standard errors of the position scatter measured in the same frames, or former
    place in view and empty), `attach:<colour>` (a new attachment persisting ≥ 3
    frames), `none`; anything unstable or unobserved → ambiguous, nothing learned.
 6. **Receipt → memory:** the receipt (event id, entity id + identity evidence,

@@ -94,6 +94,7 @@ class RobotConfig:
     signal_reach: float = 1.2        # fixtures respond to a signal within this range
     nudge_reach: float = 0.75        # a nudge touches only if the true object is this close
     idle_seconds: float = 5.0
+    before_frames: int = 3           # pre-action frames kept once the target is confirmed (>= 3)
 
 
 @dataclass
@@ -457,7 +458,8 @@ class Episode:
         row = {"t": self.now, "entity_id": eid, "action": action, "status": None, "true_object": None,
                "true_outcome": None, "observed": None, "true_valence": 0.0}
         # confirm the target in fresh images (as the Engage activity does)
-        before, true_index, end = [], None, self.now + 3.0
+        before, true_index, end, confirmed = [], None, self.now + 3.0, None
+        want = max(3, self.cfg.robot.before_frames)
         while self.now < end:
             target = self.memory.resolve(eid)
             for item in self._frame():
@@ -467,10 +469,15 @@ class Episode:
                     before.append({"token": det.state_token, "position": list(det.position),
                                    "frame_sha256": f"f{self.perception.frame}", "t": self.now})
                     true_index = det._true
-            if len(before) >= 3 and before[-1]["t"] - before[0]["t"] >= 0.2 and \
+            if confirmed is None and len(before) >= 3 and before[-1]["t"] - before[0]["t"] >= 0.2 and \
                     len({b["token"] for b in before[-3:]}) == 1:
-                before = before[-3:]
+                confirmed = before[-1]["token"]
+            # once confirmed, keep frames showing the confirmed state (more frames -> a
+            # better pre-action position estimate), up to ``before_frames``
+            if confirmed is not None and sum(b["token"] == confirmed for b in before) >= want:
                 break
+        if confirmed is not None:
+            before = [b for b in before if b["token"] == confirmed][-want:]
         else:
             row["status"] = "aborted"
             self.rt.note_unreachable(eid, self.now)
@@ -597,6 +604,10 @@ class Episode:
             "aversive": sum(aversive_by_object.values()),
             "aversive_repeats": sum(max(0, n - 1) for n in aversive_by_object.values()),
             "label_accuracy": len(correct) / len(done) if done else None,
+            "false_moved": sum(e["observed"] == "moved" and e["true_outcome"] != "moved" for e in done),
+            "moved_recall": (sum(e["observed"] == "moved" for e in done if e["true_outcome"] == "moved")
+                             / max(1, sum(e["true_outcome"] == "moved" for e in done))
+                             if any(e["true_outcome"] == "moved" for e in done) else None),
             "entities": len(ents), "true_objects": len(self.world.objects),
             "objects_identified": objects_with_entity, "impure_entities": impure,
             "merges": self.memory.counts()["merges"],

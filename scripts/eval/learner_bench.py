@@ -35,24 +35,32 @@ ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "src"))
 sys.path.insert(0, str(ROOT / "scripts" / "eval"))
 
-from amr_rl.sim.learner_bench import NOISE_PRESETS, Episode, EpisodeConfig, SyntheticWorld, WorldConfig  # noqa: E402
+from amr_rl.sim.learner_bench import (  # noqa: E402
+    NOISE_PRESETS,
+    Episode,
+    EpisodeConfig,
+    RobotConfig,
+    SyntheticWorld,
+    WorldConfig,
+)
 
 EXPERIMENTS = ("standard", "reversal", "inert", "restart")
 BASELINES = ("random", "nearest", "fixed")
 
 
 def run_job(job):
-    exp, noise_name, policy, seed, quick = job
+    exp, noise_name, policy, seed, quick, before_frames = job
     t0 = time.time()
     noise = NOISE_PRESETS[noise_name]
+    robot = RobotConfig(before_frames=before_frames)
     scale = 0.4 if quick else 1.0
     try:
         if exp == "standard":
-            cfg = EpisodeConfig(seconds=900 * scale, policy=policy, seed=seed, noise=noise)
+            cfg = EpisodeConfig(seconds=900 * scale, policy=policy, seed=seed, noise=noise, robot=robot)
             ep = Episode(cfg).run()
             row = ep.summary()
         elif exp == "inert":
-            cfg = EpisodeConfig(seconds=900 * scale, policy=policy, seed=seed, noise=noise,
+            cfg = EpisodeConfig(seconds=900 * scale, policy=policy, seed=seed, noise=noise, robot=robot,
                                 world=WorldConfig(world="inert"))
             ep = Episode(cfg).run()
             row = ep.summary()
@@ -61,7 +69,7 @@ def run_job(job):
             row["outcomes_second_half"] = sum(e["status"] == "outcome" and e["t"] >= half for e in ep.events)
         elif exp == "reversal":
             switch = 500 * scale
-            cfg = EpisodeConfig(seconds=1200 * scale, policy=policy, seed=seed, noise=noise,
+            cfg = EpisodeConfig(seconds=1200 * scale, policy=policy, seed=seed, noise=noise, robot=robot,
                                 world=WorldConfig(switch_at=switch))
             world = SyntheticWorld(cfg.world, np.random.default_rng(seed + 1))
             old = {o.index for o in world.objects if o.rules["signal"][0] == "attach:yellow"}
@@ -86,7 +94,7 @@ def run_job(job):
         elif exp == "restart":
             with tempfile.TemporaryDirectory() as tmp:
                 path = str(Path(tmp) / "memory.sqlite")
-                cfg = EpisodeConfig(seconds=600 * scale, policy=policy, seed=seed, noise=noise)
+                cfg = EpisodeConfig(seconds=600 * scale, policy=policy, seed=seed, noise=noise, robot=robot)
                 train = Episode(cfg, path).run()
                 row = {f"train_{k}": v for k, v in train.summary().items()}
                 world = train.world
@@ -163,6 +171,7 @@ def report(rows, out: Path, args):
     noises = [n for n in NOISE_PRESETS if any(r["noise"] == n for r in rows)]
     lines = ["# Learner testbed results", "",
              f"Seeds per cell: {args.seeds}{' (quick: durations x0.4)' if args.quick else ''}. "
+             f"Pre-action frames kept: {args.before_frames}. "
              "Mean ± 95 % CI over seeds. Failed episodes: "
              f"{sum(r['status'] != 'ok' for r in rows)} of {len(rows)}.", "",
              "Perception noise presets (per frame unless noted):", "",
@@ -181,8 +190,9 @@ def report(rows, out: Path, args):
     lines += ["", "## Standard world: learned policy vs baselines", "",
               "True valence is scored from what really happened (not from what the robot perceived).", "",
               "| noise | policy | n | true valence / attempt | total true valence | rewards | aversive | "
-              "aversive repeats | label accuracy | top belief is truly best | entities / objects | impure entities |",
-              "|---|---|---|---|---|---|---|---|---|---|---|---|"]
+              "aversive repeats | label accuracy | false 'moved' | real moves seen | top belief is truly best | "
+              "entities / objects | impure entities |",
+              "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|"]
     for n in noises:
         for p in ("learned",) + BASELINES:
             c = cell("standard", n, p)
@@ -192,7 +202,8 @@ def report(rows, out: Path, args):
                 f"| {n} | {p} | {len(c)} | {_mean_ci([r['true_valence_per_attempt'] for r in c])} | "
                 f"{_mean_ci([r['true_valence'] for r in c])} | {_mean_ci([r['rewards'] for r in c])} | "
                 f"{_mean_ci([r['aversive'] for r in c])} | {_mean_ci([r['aversive_repeats'] for r in c])} | "
-                f"{_mean_ci([r['label_accuracy'] for r in c])} | {_frac([r['top_belief_is_best'] for r in c])} | "
+                f"{_mean_ci([r['label_accuracy'] for r in c])} | {_mean_ci([r.get('false_moved') for r in c])} | "
+                f"{_mean_ci([r.get('moved_recall') for r in c])} | {_frac([r['top_belief_is_best'] for r in c])} | "
                 f"{_mean_ci([r['entities'] for r in c])} / {c[0]['true_objects']} | "
                 f"{_mean_ci([r['impure_entities'] for r in c])} |")
     lines += ["", "## Rule reversal (learned)", "",
@@ -243,6 +254,8 @@ def main():
     ap.add_argument("--experiments", nargs="+", default=list(EXPERIMENTS))
     ap.add_argument("--workers", type=int, default=max(1, (os.cpu_count() or 2) - 1))
     ap.add_argument("--quick", action="store_true", help="shorter episodes (smoke test)")
+    ap.add_argument("--before-frames", type=int, default=3,
+                    help="pre-action frames kept for the outcome classifier (runtime default 3)")
     ap.add_argument("--out", default=None)
     args = ap.parse_args()
     stamp = time.strftime("%Y%m%d-%H%M%S")
@@ -260,7 +273,7 @@ def main():
         for noise in args.noise:
             for policy in policies:
                 for seed in range(args.seeds):
-                    jobs.append((exp, noise, policy, seed, args.quick))
+                    jobs.append((exp, noise, policy, seed, args.quick, args.before_frames))
     print(f"{len(jobs)} episodes on {args.workers} workers -> {out}", flush=True)
     rows = []
     t0 = time.time()
