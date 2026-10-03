@@ -92,7 +92,11 @@ confirmed state (within the existing 3 s confirmation window). Evidence:
 Most differences against 3 frames are within the CI. The direction is better at
 medium/high, flat at clean/low. Adopting it means changing the confirmation phase
 of the runtime `Engage` activity (`behavior/activities.py`), which needs a
-`scripts/amr.sh test-sim` run. It has not been made.
+`scripts/amr.sh test-sim` run. It has not been made, and in Genesis it would not
+matter yet: in 512 receipts from the round-3 learning suite the detector's per-axis
+position scatter was 0.0 cm (median; max 3.2 cm), so the noise-aware threshold never
+left its 0.15 m floor and real moves (0.21–0.59 m) were all seen. Revisit when the
+noisier open-vocabulary detector is swapped in.
 
 ## What remains
 

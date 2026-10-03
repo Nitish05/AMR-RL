@@ -22,6 +22,65 @@ Evidence: `work/evidence/learning-20260930-154854`; control run
 `work/evidence/learning-control-oldmap`. Regenerate:
 `python scripts/eval/report.py --learning work/evidence/learning-20260930-154854 --out <file>`.
 
+## Summary (round 3, 2026-10-02)
+
+First run on macOS arm64 (local; rounds 1–2 ran on Linux x86-64), with the
+nudge-reach fix, the depth guard, the noise-aware `moved` rule and two fixes
+found by this run. All 5 arena start poses, every experiment on every seed
+(round 2 ran baselines/inert/noisy on seed 0 only). 65 phases, 0 crashes.
+Evidence: `work/evidence/learning-20261002-mac2-s{0..4}`, report
+`work/evidence/learning-20261002-mac2-report.md`, map
+`map-arena-20261002-mac-s1` (best of three seeds, see its `NOTE.md`: ATE 3.6 cm,
+coverage 52 %, 5 deep false-free cells, 4 operator re-enables while mapping).
+
+* **Seeds 2 and 3 never relocalised** (start poses (−0.45, −0.45, π) and
+  (0.45, 0.3, −π/2)): every phase failed `not_relocalized` despite a 30 s operator
+  turn. Results below are seeds **0, 1, 4**. Seeds 3–4 were added after seed 2
+  failed. Relocalisation from viewpoints the map did not cover is a navigation
+  limit, now measured: 2 of 5 start poses.
+* **Restart persistence: 6/6** first decisions after restart targeted the learned
+  option (history_a → bloom/signal, history_b → stone/signal, seeds 0, 1, 4).
+  **Carried out on that fixture in 3/6.** Seed 0 history_b first completed roller,
+  seed 4 history_a first completed grump, and seed 4 history_b completed nothing (its
+  learned identity was not matched to any fixture within 0.5 m by the evaluator).
+  Why the first two diverged was not analysed.
+* **Reversal: 6/6 adapted** (early and late swap, seeds 0, 1, 4); the new option
+  was found 85–328 s after the swap.
+* **Aversion held:** at most one red panel per learned run. The nearest-first
+  baseline on seed 0 took 31 red panels (total valence −29.8).
+* **Policy vs baselines: still not shown on total valence.** Seeds 1 and 4 start
+  next to bloom; fixed and nearest signal it non-stop (76 and 57 outcomes, total
+  valence 38.0 and 29.0) while the learned policy idles once its engineered
+  stimulation need is met (idle 0.21 / 0.48; total valence 6.0 / 9.0). Valence per
+  outcome: learned 0.32 / 0.46 / 0.69 (seeds 0 / 1 / 4), fixed 0.60 / 0.50 / 0.51,
+  nearest −0.47 / 0.50 / 0.51, random 0.09 / 0.20 / 0.23. Total valence rewards
+  repetition the learned policy is designed not to do. A comparison at equal
+  interaction budgets is needed before claiming either way.
+* **Settling:** inert world outcomes per half 3 → 3, 6 → 2, 3 → 0 (seeds 0, 1, 4).
+  On seed 0, 2 useful outcomes are the roller rolling (physics, not a rule).
+* **Contacts: 0 unintended** contact episodes in all 39 informative phases. Intended
+  nudge contacts now occur (0–6 per phase); before the nudge-reach fix nudges
+  stopped short and never touched. The per-phase console line `contact_episodes`
+  counts contact *frames* of all kinds; use the report's intended/unintended split.
+
+Bugs found and fixed by this run:
+
+1. **Segfault on macOS arm64** (every mapping run): `gs.init()` leaves
+   flush-to-zero on; SciPy's balanced `cKDTree` build then recursed until the stack
+   overflowed. `vslam.kd_tree` uses sliding-midpoint splits (`07f8ae0`).
+2. **Robot held next to the aversive fixture for the rest of the run** (all seed-0
+   learned phases in the first pass, `learning-20261002-mac-s*`, superseded): the
+   planner's shortcut test and the navigator's corridor test sampled path segments
+   differently. A one-cell sliver at the edge of the clearance band passed one test
+   and failed the other, 41 `avoid` attempts in a row (`5714aac`). The forced
+   `avoid` still has no give-up rule if a retreat is genuinely impossible (open).
+
+The noise-aware `moved` rule (`0b8f9ea`) is inert here. In 512 Genesis receipts
+the detector's per-axis position scatter was 0.0 cm (median; max 3.2 cm), the
+threshold never rose above the 0.15 m floor, and real moves measured 0.21–0.59 m.
+Keeping 6 pre-action frames (testbed option) is therefore not adopted until the
+noisier open-vocabulary detector arrives.
+
 ## Summary (round 2)
 
 * **Restart persistence: 5/5.** In every run where training produced a liked
