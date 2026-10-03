@@ -13,7 +13,9 @@ import argparse
 import json
 from pathlib import Path
 
-VALENCE = {"attach:yellow": 1.0, "moved": 0.6, "none": 0.0, "attach:red": -1.0}
+from amr_rl.learning.memory import LearningConfig
+
+LEARNING_VALENCE = LearningConfig().valence  # the engineered table the runtime uses
 
 
 def fmt(v, nd=3):
@@ -35,11 +37,14 @@ def run_label(r):
     return r["world"] if not r.get("seed") else f'{r["world"]} s{r["seed"]}'
 
 
-def navigation(nav_dir: Path) -> str:
-    results = json.loads((nav_dir / "partial.json").read_text())
+def navigation(nav_dirs) -> str:
+    nav_dirs = [nav_dirs] if isinstance(nav_dirs, Path) else list(nav_dirs)
+    results = []
+    for d in nav_dirs:  # one process per world/seed writes its own dir; merge them
+        results += json.loads((d / "partial.json").read_text())
     for r in results:
         r["world_label"] = run_label(r)
-    lines = [f"Evidence: `{nav_dir.relative_to(nav_dir.parents[2])}`", ""]
+    lines = ["Evidence: " + ", ".join(f"`{d.relative_to(d.parents[2])}`" for d in nav_dirs), ""]
     failed = [run_label(r) for r in results if r.get("failed")]
     ok = [r for r in results if not r.get("failed")]
     lines.append(f"Runs: {len(results)}; crashed runs: {len(failed)} {failed or ''}")
@@ -313,19 +318,53 @@ def restart_table(runs):
                   "history_b rewards stone/signal.")
 
 
+def true_panel_valence(event):
+    """Evaluator-scored valence of what a fixture really did (engineered table). Signals
+    into an already raised panel do nothing; the roller rolling is physics, not a
+    world event, so it is not counted here (it is in the perceived valence)."""
+    response = event.get("response")
+    if response in (None, "none", "suppressed_raised"):
+        return 0.0
+    return LEARNING_VALENCE.get(f"attach:{response}", 0.0)
+
+
 def policy_table(runs):
-    rows = []
+    """Policy comparison. Total valence at fixed time mostly reflects the engineered
+    need (the learned policy idles once satisfied) and which fixture is near the
+    start; per-attempt and first-N columns compare choices at equal budgets."""
+    phases = []
     for base, seed, result, _ in runs:
-        if base not in ("history_a", "baseline_random", "baseline_nearest", "baseline_fixed"):
+        if base not in ("history_a", "baseline_random", "baseline_nearest", "baseline_fixed", "learned_clamped"):
             continue
         p = result["phases"][0]
+        if p.get("failed"):
+            continue
+        name = {"history_a": "learned"}.get(base, base.replace("baseline_", ""))
+        phases.append((name, seed, p))
+    budget = {}
+    for _, seed, p in phases:
+        n = len(p.get("interactions") or [])
+        budget[seed] = n if seed not in budget else min(budget[seed], n)
+    rows = []
+    for name, seed, p in phases:
         sc = p.get("score") or {}
-        n = sc.get("outcomes_learned") or 0
-        rows.append(["learned" if base == "history_a" else base.replace("baseline_", ""), seed, n,
-                     sc.get("useful_outcomes"), sc.get("aversive_outcomes"), sc.get("total_valence"),
-                     (sc.get("total_valence") or 0) / max(1, n), sc.get("idle_fraction")])
-    return table(["policy", "seed", "outcomes", "useful", "aversive", "total valence", "valence / outcome",
-                  "idle frac"], rows)
+        inter = sorted(p.get("interactions") or [], key=lambda i: i["t"])
+        events = p.get("world_events") or []
+        true_total = sum(true_panel_valence(e) for e in events)
+        n_att = len(inter)
+        first_n = sum(i["valence"] or 0 for i in inter[:budget[seed]])
+        valid = p.get("frame_valid")
+        rows.append([name, seed, "not recorded" if valid is None else "yes" if valid else "NO (wrong start)",
+                     n_att, sc.get("outcomes_learned"), sc.get("total_valence"),
+                     (sc.get("total_valence") or 0) / max(1, n_att), budget[seed], first_n, true_total,
+                     sum(e.get("response") == "red" for e in events),
+                     sum(e.get("response") == "suppressed_raised" for e in events), sc.get("idle_fraction")])
+    return table(["policy", "seed", "start frame valid", "attempts", "outcomes", "perceived valence",
+                  "perceived valence / attempt", "N (min attempts)", "perceived valence, first N attempts",
+                  "true panel valence", "true red panels", "signals into a raised panel", "idle frac"], rows) + (
+        "\n\n`true panel valence` is scored from the world's own events (evaluation only); the roller's rolling "
+        "is physics and appears only in perceived valence. Total valence at fixed time is capped for the learned "
+        "policy by its engineered need (it idles once satisfied); baselines never idle.")
 
 
 def reversal_table(runs):
@@ -407,13 +446,13 @@ def settling(name, p):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--nav")
+    ap.add_argument("--nav", nargs="+", help="navigation evidence dir(s); several are merged")
     ap.add_argument("--learning", nargs="*")
     ap.add_argument("--out", required=True)
     a = ap.parse_args()
     parts = []
     if a.nav:
-        parts += ["## Navigation", "", navigation(Path(a.nav).resolve())]
+        parts += ["## Navigation", "", navigation([Path(d).resolve() for d in a.nav])]
     if a.learning:
         parts += ["", "## Learning", "", learning([Path(d).resolve() for d in a.learning])]
     Path(a.out).write_text("\n".join(parts) + "\n")

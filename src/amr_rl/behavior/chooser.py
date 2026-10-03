@@ -178,7 +178,8 @@ class ActivityChooser:
                 p_top = max(pred["probabilities"].items(), key=lambda kv: kv[1])
                 out.append({
                     "activity": "engage" if eid in visible_ids else "revisit",
-                    "entity_id": eid, "action": action, "value": value, "expected_value": ev,
+                    "entity_id": eid, "created": ent.get("created"), "action": action, "value": value,
+                    "expected_value": ev,
                     "information_value": info, "cost": cost, "xy": xy, "context": context,
                     "basis": (f"{int(pred['evidence']['all_contexts'] + 0.5)} weighted outcomes; "
                               f"P({p_top[0]})={p_top[1]:.2f}; need {need:.2f}; probes {state['probes']}"),
@@ -229,7 +230,8 @@ class ActivityChooser:
             pose = np.asarray(rt.pose[:2])
             return min(interactive, key=lambda c: (float(np.linalg.norm(c["xy"] - pose)), c["action"]))
         if self.policy == "fixed":
-            ordered = sorted(interactive, key=lambda c: (c["entity_id"], c["action"]))
+            # First-seen order (entity ids are random; sorting by them was not reproducible)
+            ordered = sorted(interactive, key=lambda c: (c.get("created") or 0.0, c["entity_id"], c["action"]))
             return ordered[0]
         raise ValueError(f"Unknown policy {self.policy}")
 

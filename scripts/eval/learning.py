@@ -63,7 +63,6 @@ EXPERIMENTS = {
     "baseline_random": [{"label": "train", "consequences": "standard", "seconds": 480, "policy": "random"}],
     "baseline_nearest": [{"label": "train", "consequences": "standard", "seconds": 480, "policy": "nearest"}],
     "baseline_fixed": [{"label": "train", "consequences": "standard", "seconds": 480, "policy": "fixed"}],
-    "learned_standard": [{"label": "train", "consequences": "standard", "seconds": 480}],
 }
 
 
