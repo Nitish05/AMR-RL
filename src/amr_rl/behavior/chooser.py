@@ -252,7 +252,8 @@ class ActivityChooser:
         elif kind == "investigate":
             act = Investigate(choice["entity_id"], choice["xy"], choice["basis"])
         elif kind == "avoid":
-            act = Avoid(choice["entity_id"], choice["xy"], choice["basis"], hold_until=choice.get("hold_until"))
+            act = Avoid(choice["entity_id"], choice["xy"], choice["basis"], hold_until=choice.get("hold_until"),
+                        radius=self.cfg.avoid_radius)
             self._last_avoid = act
         else:
             decision = {k: choice[k] for k in ("activity", "value", "expected_value", "information_value", "cost",

@@ -264,11 +264,12 @@ class Investigate(Activity):
 class Avoid(Activity):
     name = "avoid"
 
-    def __init__(self, entity_id, entity_xy, reason="", hold_until=None):
+    def __init__(self, entity_id, entity_xy, reason="", hold_until=None, radius=0.75):
         super().__init__(entity_id, reason or "keeping distance from a disliked entity")
         self.entity_xy = np.asarray(entity_xy, float)
         self.goto = None
         self.hold_until = hold_until  # retreats kept failing: hold still (never approach)
+        self.radius = radius  # the retreat only succeeds if it ends outside this distance
 
     def step(self, rt, now):
         if self.hold_until is not None:
@@ -283,8 +284,12 @@ class Avoid(Activity):
             # Retreat poses 0.8-1.3 m from the entity, preferring the away direction;
             # never the far side (that path would pass the entity).
             deltas = [0.0] + [sgn * math.radians(d) for d in (30, 60, 90, 120) for sgn in (1, -1)]
+            here = float(np.linalg.norm(away))
+            # A retreat goal must be clearly farther than the robot is now: one within the
+            # navigator's arrival tolerance "arrives" at once without moving.
+            dists = [d for d in (1.1, 0.95, 1.3, 0.8) if d >= max(self.radius, here) + 0.3] or [1.3]
             for delta in deltas:
-                for dist in (1.1, 0.95, 1.3, 0.8):
+                for dist in dists:
                     p = self.entity_xy + dist * np.array([math.cos(ang + delta), math.sin(ang + delta)])
                     if rt.planner.traversable_xy(rt.grid, p[None])[0]:
                         goal = p
@@ -298,7 +303,10 @@ class Avoid(Activity):
         self.phase = "retreating"
         v, w = self.goto.step(rt, now)
         if self.goto.status == "arrived":
-            self.finish("completed")
+            if np.linalg.norm(np.asarray(rt.pose[:2]) - self.entity_xy) >= self.radius:
+                self.finish("completed")
+            else:  # "arrived" but still within the radius: counts towards giving up
+                self.finish("navigation_failed", reason="retreat ended inside the avoid radius")
         elif self.goto.status in ("rejected", "failed"):
             self.finish("navigation_failed", reason=self.goto.reason)
         return v, w

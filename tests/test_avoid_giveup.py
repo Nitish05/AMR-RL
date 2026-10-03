@@ -86,3 +86,33 @@ def test_hold_mode_finishes_as_held():
     assert act.step(None, 4.0) == (0.0, 0.0) and not act.done
     act.step(None, 5.0)
     assert act.done and act.result["status"] == "held"
+
+
+class _InstantArrival:
+    """A navigator that reports arrival at once without moving (a goal within its
+    arrival tolerance)."""
+
+    status, reason = "idle", ""
+
+    def set_goal(self, grid, pose, goal, **kw):
+        self.goal, self.status = np.asarray(goal, float), "arrived"
+        return True
+
+    def step(self, grid, pose, sigma, now):
+        return 0.0, 0.0
+
+
+def test_a_retreat_that_does_not_leave_the_radius_is_not_a_success():
+    """Regression (policy suite, start 4): just inside the radius (0.74 m) the nearest
+    retreat pose was within the arrival tolerance, so avoid 'completed' every tick
+    without moving, which reset the give-up count: 2000 avoid decisions in 200 s."""
+    rt = cornered_runtime(dist=0.74)
+    rt.planner = SimpleNamespace(traversable_xy=lambda grid, p: np.ones(len(p), bool))
+    rt.nav, rt.sigma, rt.loc_status = _InstantArrival(), 0.01, "tracking"
+    rt.avoid_regions = lambda: []
+    started, results = run(rt, 120.0)
+    assert len(started) <= 10  # gives up into holds instead of looping every tick
+    assert all(r["status"] != "completed" for _, r in results)
+    act = Avoid("ent-red", np.array([0.74, 0.0]), radius=0.75)
+    act.step(rt, 3.0)
+    assert np.linalg.norm(act.goto.goal - np.array([0.74, 0.0])) >= 1.04  # goal clearly farther out
