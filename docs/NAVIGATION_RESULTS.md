@@ -52,8 +52,23 @@ total difference comes almost entirely from one run, home_a seed 2. Its
 exploration diverged, so it sampled different goals, and 4 of them were missed
 through localisation drift.
 
-**Not yet measured:** navigation with the round-4 relocalisation
-([results/relocalisation.md](results/relocalisation.md)).
+**Round-4 code as a whole** (`6219155`: the above plus the planar relocalisation,
+operator turns passed to the VSLAM, and the avoid give-up;
+`navigation-20261002-2237-r4-*`):
+- own-map goals 27/40;
+- impossible goals rejected 36/36, contacts 0;
+- fault tests passed 10/11 (vs 8/8 run at `07f8ae0`, where more were skipped).
+
+Per-room own-map goals: home_a 8/12, heldout_b 5/9, heldout_c 3/8, home_a_dim 11/11.
+
+Misses split as follows:
+- 6 "says arrived but drifted";
+- 6 not arrived;
+- 1 localisation lost.
+
+Goals are sampled from each run's own map, so the three variants are within
+run-to-run variation. The navigation evaluation shows no regression from the
+round-4 changes.
 
 ## Round 3: near-field depth guard (current code)
 
