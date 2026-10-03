@@ -261,18 +261,27 @@ class Investigate(Activity):
 class Avoid(Activity):
     name = "avoid"
 
-    def __init__(self, entity_id, entity_xy, reason=""):
+    def __init__(self, entity_id, entity_xy, reason="", hold_until=None):
         super().__init__(entity_id, reason or "keeping distance from a disliked entity")
         self.entity_xy = np.asarray(entity_xy, float)
         self.goto = None
+        self.hold_until = hold_until  # retreats kept failing: hold still (never approach)
 
     def step(self, rt, now):
+        if self.hold_until is not None:
+            self.phase = "holding (retreat failed)"
+            if now >= self.hold_until:
+                self.finish("held")
+            return 0.0, 0.0
         if self.goto is None:
             away = np.asarray(rt.pose[:2]) - self.entity_xy
             ang = math.atan2(away[1], away[0])
             goal = None
-            for dist in (1.1, 0.95, 0.8):
-                for delta in (0, 0.4, -0.4, 0.8, -0.8):
+            # Retreat poses 0.8-1.3 m from the entity, preferring the away direction;
+            # never the far side (that path would pass the entity).
+            deltas = [0.0] + [sgn * math.radians(d) for d in (30, 60, 90, 120) for sgn in (1, -1)]
+            for delta in deltas:
+                for dist in (1.1, 0.95, 1.3, 0.8):
                     p = self.entity_xy + dist * np.array([math.cos(ang + delta), math.sin(ang + delta)])
                     if rt.planner.traversable_xy(rt.grid, p[None])[0]:
                         goal = p

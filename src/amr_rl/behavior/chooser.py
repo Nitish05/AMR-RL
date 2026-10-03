@@ -43,6 +43,11 @@ class ChooserConfig:
     max_switches_per_minute: int = 6
     avoid_radius: float = 0.75
     unreachable_backoff: float = 30.0
+    # Give-up rule for the forced avoid (engineered): after this many failed retreats
+    # the robot holds still (it never approaches the entity) for avoid_backoff x
+    # min(4, holds) seconds, then tries one retreat again.
+    avoid_max_failures: int = 3
+    avoid_backoff: float = 20.0
 
 
 class Motivation:
@@ -108,6 +113,27 @@ class ActivityChooser:
         self.candidates = []
         self.chosen = None
         self.fixed_order = None
+        self._avoid_state = {}  # entity -> {"failures", "holds", "hold_until"} (this session)
+        self._last_avoid = None
+
+    def _note_avoid_result(self, now):
+        """Read the outcome of the last Avoid once. A cancel (Stop, revocation) is not
+        a failure; a completed retreat resets the entity's give-up state."""
+        act = self._last_avoid
+        if act is None or not act.done:
+            return
+        self._last_avoid = None
+        status = (act.result or {}).get("status")
+        st = self._avoid_state.setdefault(act.target_entity, {"failures": 0, "holds": 0, "hold_until": None})
+        if status == "completed":
+            self._avoid_state.pop(act.target_entity, None)
+        elif status == "held":
+            st["hold_until"] = None  # one retry
+        elif status == "navigation_failed":
+            st["failures"] += 1
+            if st["failures"] >= self.cfg.avoid_max_failures:
+                st["holds"] += 1
+                st["hold_until"] = now + self.cfg.avoid_backoff * min(4, st["holds"])
 
     # ---------------------------------------------------------------- values
     def candidates_for(self, rt, now):
@@ -115,22 +141,31 @@ class ActivityChooser:
         pose = np.asarray(rt.pose[:2])
         out = []
         visible_ids = {v.entity_id for v in rt.tracker.visible if v.entity_id}
+        self._note_avoid_result(now)
         for ent in rt.known_entities():
             eid = ent["entity_id"]
             if ent.get("x") is None or ent.get("map_version") != rt.slam.map_version:
                 continue
             blocked = rt.is_unreachable(eid, now)
-            if blocked and rt.was_investigated(eid):
-                continue
             xy = np.array([ent["x"], ent["y"]])
             dist = float(np.linalg.norm(xy - pose))
-            context = rt.tracker.last_state.get(eid, "attach:none")
             att = rt.memory.attitude(eid, now)
+            # Avoid comes before any skip: a disliked entity close by is always kept at a
+            # distance, even one that is unreachable for engaging.
             if att["attitude"] == "disliked" and dist < self.cfg.avoid_radius:
+                st = self._avoid_state.get(eid)
+                hold = st["hold_until"] if st and st["hold_until"] is not None and now < st["hold_until"] else None
+                basis = f"learned disliked (EV {att['expected_value']:.2f}); within {dist:.2f} m"
+                if hold is not None:
+                    basis += f"; retreat failed {st['failures']}x: holding still until t={hold:.0f} s"
                 out.append({"activity": "avoid", "entity_id": eid, "action": None, "value": 5.0,
                             "expected_value": att["expected_value"], "information_value": 0.0, "cost": 0.0,
-                            "basis": f"learned disliked (EV {att['expected_value']:.2f}); within {dist:.2f} m",
-                            "xy": xy})
+                            "basis": basis, "xy": xy, "hold_until": hold})
+            elif eid in self._avoid_state:
+                self._avoid_state.pop(eid)  # out of range: the give-up state starts afresh
+            if blocked and rt.was_investigated(eid):
+                continue
+            context = rt.tracker.last_state.get(eid, "attach:none")
             for item in ([] if blocked else option_values(rt.memory, eid, context, now, need=need,
                                                            novelty=rt.motivation.novelty(eid), distance=dist,
                                                            cfg=self.cfg)):
@@ -208,7 +243,8 @@ class ActivityChooser:
         elif kind == "investigate":
             act = Investigate(choice["entity_id"], choice["xy"], choice["basis"])
         elif kind == "avoid":
-            act = Avoid(choice["entity_id"], choice["xy"], choice["basis"])
+            act = Avoid(choice["entity_id"], choice["xy"], choice["basis"], hold_until=choice.get("hold_until"))
+            self._last_avoid = act
         else:
             decision = {k: choice[k] for k in ("activity", "value", "expected_value", "information_value", "cost",
                                                "basis")}

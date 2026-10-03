@@ -435,6 +435,9 @@ class Episode:
         self.rt._investigated.add(cand["entity_id"])
 
     def _avoid(self, cand):
+        if cand.get("hold_until") is not None:  # give-up hold: stand still
+            self._advance(1.0)
+            return
         xy = cand["xy"]
         d = self.rt.pose[:2] - xy
         n = np.linalg.norm(d)
