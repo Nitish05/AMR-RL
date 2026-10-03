@@ -1,8 +1,13 @@
 """Pure perception/identity/outcome contracts (no simulator)."""
 
 import math
+import os
+import platform
+import subprocess
+import sys
 import threading
 import time
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -419,3 +424,38 @@ def test_merge_carries_distinctness_without_constraint_errors(tmp_path):
     assert memory.are_distinct("a", "c") and memory.counts()["entities"] == 2
     with pytest.raises(ValueError):
         memory.merge_entities("a", "c", now=6.0, reason="test")
+
+
+# ----------------------------------------------------------------- kd-tree under flush-to-zero
+_FTZ_KDTREE = r"""
+import ctypes, sys
+import numpy as np
+from amr_rl.perception.vslam import kd_tree
+
+class FEnv(ctypes.Structure):  # macOS arm64 fenv_t
+    _fields_ = [("fpsr", ctypes.c_ulonglong), ("fpcr", ctypes.c_ulonglong)]
+
+libc = ctypes.CDLL(None)
+env = FEnv()
+libc.fegetenv(ctypes.byref(env))
+env.fpcr |= 1 << 24  # FPCR.FZ: what Genesis' runtime leaves set on the main thread
+libc.fesetenv(ctypes.byref(env))
+assert not np.finfo(float).tiny / 4 > 0, "flush-to-zero not active"
+points = np.load(sys.argv[1])["points"]
+tree = kd_tree(points)
+d, _ = tree.query(points[:50], k=1)
+assert np.all(d == 0)
+print("ok")
+"""
+
+
+@pytest.mark.skipif(not (sys.platform == "darwin" and platform.machine() == "arm64"),
+                    reason="fenv_t layout and the observed failure are macOS arm64")
+def test_landmark_kd_tree_builds_under_flush_to_zero():
+    # Real landmark positions on which SciPy's balanced build recursed until the
+    # stack overflowed once Genesis had enabled flush-to-zero (see vslam.kd_tree).
+    data = Path(__file__).parent / "data" / "kdtree_ftz_landmarks.npz"
+    env = dict(os.environ, PYTHONPATH=str(Path(__file__).resolve().parents[1] / "src"))
+    run = subprocess.run([sys.executable, "-c", _FTZ_KDTREE, str(data)], env=env, capture_output=True,
+                         text=True, timeout=120)
+    assert run.returncode == 0 and run.stdout.strip() == "ok", run.stderr[-2000:]

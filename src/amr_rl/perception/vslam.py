@@ -35,6 +35,19 @@ from scipy.spatial import cKDTree
 from .camera_model import CameraModel, wrap
 
 _POPCOUNT = np.array([bin(i).count("1") for i in range(256)], np.uint8)
+
+
+def kd_tree(points) -> cKDTree:
+    """Nearest-neighbour index over ``points``.
+
+    ``balanced_tree=False`` (sliding-midpoint splits) is required, not a tuning
+    choice: Genesis' runtime enables flush-to-zero on the main thread, and under it
+    SciPy's median-split build recursed without end on real landmark maps (macOS
+    arm64, SciPy 1.18.1: segfault by stack overflow). Sliding-midpoint splits always
+    separate at least one point, so the build terminates. Queries are exact either
+    way; only the tree shape differs. Regression: ``tests/test_perception_units.py``.
+    """
+    return cKDTree(points, balanced_tree=False)
 TRACKING, LOST, RELOCALIZING, INITIALIZING = "tracking", "lost", "relocalizing", "initializing"
 PREDICTED = "predicted"  # bounded dead reckoning after brief visual loss (<= 1.5 s, <= 8 cm sigma)
 
@@ -291,7 +304,7 @@ class PlanarVSLAM:
             self.lm.visible[cand] += 1
         tree = self._kp_tree if self._kp_tree_pts is pts else None
         if tree is None:
-            tree = cKDTree(pts)
+            tree = kd_tree(pts)
             self._kp_tree, self._kp_tree_pts = tree, pts
         dist, idx = tree.query(proj, k=min(8, len(pts)), distance_upper_bound=radius)
         dist, idx = np.atleast_2d(dist.T).T if dist.ndim == 1 else dist, idx if idx.ndim == 2 else idx[:, None]
@@ -621,7 +634,7 @@ class PlanarVSLAM:
         ok &= free
         if ok.any() and self.lm.alive.any():
             alive = np.flatnonzero(self.lm.alive)
-            tree = cKDTree(self.lm.pos[alive])
+            tree = kd_tree(self.lm.pos[alive])
             d, j = tree.query(world[ok], k=1, distance_upper_bound=0.02)
             dup = np.isfinite(d)
             idx = np.flatnonzero(ok)
