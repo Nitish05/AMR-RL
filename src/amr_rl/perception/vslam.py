@@ -273,6 +273,15 @@ class VSLAMConfig:
     # turn reversal otherwise left a permanent 3-5 deg offset).
     turn_gate_visual_step: bool = False
     turn_gate_settle: int = 0  # frames without gating after a command change > 0.2 rad/s (wheel lag)
+    # Slip factor estimate for the gate and turn prediction. "ema": slow average from
+    # turn_slip_init (round 8; failed the slip sweep on saved maps). "median": median of
+    # the raw visual/commanded rotation over the last turn_slip_window frames with
+    # enough inliers (gated frames included, so a wrong factor cannot lock itself in;
+    # a near-wall stretch is a minority of the window); no gating until
+    # turn_slip_min_samples exist (engineered estimate).
+    turn_slip_mode: str = "ema"
+    turn_slip_window: int = 60
+    turn_slip_min_samples: int = 15
     turn_max_predicted_rot_deg: float = 60.0
     turn_max_heading_sigma_deg: float = 8.0
     # C11: floor-band ORB with a smaller border/patch so the bottom rows still give
@@ -409,6 +418,7 @@ class PlanarVSLAM:
         self._turn = None  # in-place turn state (see _update_turn_state)
         self._pred_rot = 0.0  # rotation dead-reckoned since tracking was last accepted
         self.turn_slip = None  # learned commanded-to-measured turn ratio (C8); None until configured
+        self._slip_samples = []  # raw visual/commanded turn ratios (turn_slip_mode="median")
         self._turn_count = 0
         self._visible_frame = -1
         self.turn_closures = []  # applied turn closures (operational log)
@@ -1066,6 +1076,10 @@ class PlanarVSLAM:
         cfg, tr = self.cfg, self._turn
         if self.turn_slip is None:
             self.turn_slip = cfg.turn_slip_init
+        if cfg.turn_slip_mode == "median":
+            ready = self._update_slip_median(pose, commanded, dt, inliers)
+            if not ready:
+                return pose, False  # not enough evidence about the slip yet: do not gate
         expected = self.turn_slip * commanded[1] * dt
         visual = wrap(pose[2] - self.pose[2])
         if cfg.turn_gate_visual_step:
@@ -1093,10 +1107,25 @@ class PlanarVSLAM:
             tr["gated"] = tr.get("gated", 0) + 1
             return np.array([self.pose[0], self.pose[1], wrap(self.pose[2] + expected)]), True
         # learn the slip factor from confidently tracked turn frames (slow running average)
-        if inliers >= cfg.turn_slip_min_inliers and abs(commanded[1]) * dt > 1e-3:
+        if cfg.turn_slip_mode == "ema" and inliers >= cfg.turn_slip_min_inliers and abs(commanded[1]) * dt > 1e-3:
             ratio = float(np.clip(visual / (commanded[1] * dt), 0.5, 1.1))
             self.turn_slip = float(np.clip(0.98 * self.turn_slip + 0.02 * ratio, 0.6, 1.0))
         return pose, False
+
+    def _update_slip_median(self, pose, commanded, dt, inliers):
+        """Median slip factor from raw visual turn steps; True once it is usable."""
+        cfg, tr = self.cfg, self._turn
+        last = tr.get("slip_last_visual")
+        tr["slip_last_visual"] = float(pose[2])
+        step = wrap(pose[2] - (last if last is not None else self.pose[2]))
+        cmd = commanded[1] * dt
+        if inliers >= cfg.turn_slip_min_inliers and abs(cmd) > 1e-3:
+            self._slip_samples.append(float(np.clip(step / cmd, 0.3, 1.5)))
+            del self._slip_samples[:-cfg.turn_slip_window]
+        if len(self._slip_samples) >= cfg.turn_slip_min_samples:
+            self.turn_slip = float(np.clip(np.median(self._slip_samples), 0.5, 1.1))
+            return True
+        return False
 
     def _unconfirmable(self, tent, centre):
         """Tentative landmarks that the 4 cm rule must not confirm (C3 tentative, C2a)."""
