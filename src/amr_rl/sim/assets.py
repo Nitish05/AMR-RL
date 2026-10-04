@@ -63,6 +63,43 @@ def textured_box(size, image) -> trimesh.Trimesh:
     return _textured(np.array(vertices, float), np.array(faces), np.array(uv, float), image)
 
 
+def textured_cylinder(radius, height, image, sections=48) -> trimesh.Trimesh:
+    """Cylinder from z=0 to z=height; the side wraps the image once around (u) and
+    bottom to top (v); both caps use a planar projection of the same image."""
+    k = np.arange(sections + 1)
+    th = 2 * np.pi * k / sections
+    x, y = radius * np.cos(th), radius * np.sin(th)
+    vertices = np.r_[np.c_[x, y, np.zeros_like(x)], np.c_[x, y, np.full_like(x, height)]]
+    uv = np.r_[np.c_[k / sections, np.zeros_like(x)], np.c_[k / sections, np.ones_like(x)]]
+    n = sections + 1
+    faces = [(i, i + 1, n + i + 1) for i in range(sections)] + [(i, n + i + 1, n + i) for i in range(sections)]
+    for z, flip in ((0.0, True), (height, False)):
+        c = len(vertices)
+        vertices = np.r_[vertices, [[0, 0, z]], np.c_[x[:-1], y[:-1], np.full(sections, z)]]
+        uv = np.r_[uv, [[0.5, 0.5]], np.c_[0.5 + 0.5 * np.cos(th[:-1]), 0.5 + 0.5 * np.sin(th[:-1])]]
+        for i in range(sections):
+            a_, b_ = c + 1 + i, c + 1 + (i + 1) % sections
+            faces.append((c, b_, a_) if flip else (c, a_, b_))
+    return _textured(np.asarray(vertices, float), np.asarray(faces), np.asarray(uv, float), image)
+
+
+def textured_sphere(radius, image, rings=24, sectors=48) -> trimesh.Trimesh:
+    """UV sphere centred at the origin (equirectangular mapping)."""
+    vertices, uv = [], []
+    for r in range(rings + 1):
+        phi = np.pi * r / rings
+        for s_ in range(sectors + 1):
+            th = 2 * np.pi * s_ / sectors
+            vertices.append((radius * np.sin(phi) * np.cos(th), radius * np.sin(phi) * np.sin(th), radius * np.cos(phi)))
+            uv.append((s_ / sectors, 1 - r / rings))
+    faces = []
+    for r in range(rings):
+        for s_ in range(sectors):
+            a_, b_ = r * (sectors + 1) + s_, (r + 1) * (sectors + 1) + s_
+            faces += [(a_, b_, a_ + 1), (a_ + 1, b_, b_ + 1)]
+    return _textured(np.asarray(vertices, float), np.asarray(faces), np.asarray(uv, float), image)
+
+
 def export_glb(mesh_or_parts, path: Path, *, y_up: bool = False) -> Path:
     """Export parts to GLB. ``y_up=True`` writes standard glTF (Y-up) axes, which
     Genesis ``morphs.Mesh`` converts back to Z-up; URDF-referenced meshes stay Z-up
@@ -81,32 +118,51 @@ def export_glb(mesh_or_parts, path: Path, *, y_up: bool = False) -> Path:
     return path
 
 
-def fixture_urdf(out_dir: Path, name: str, shape: str, paint: str, size) -> Path:
+def fixture_urdf(out_dir: Path, name: str, shape: str, paint: str, size, *, texture: dict | None = None,
+                 flag_seed: int | None = None) -> Path:
     """Fixed-base fixture with two hidden indicator panels on prismatic joints.
 
     The panels (yellow, red) rise above the body when the world-side response
     rule fires. They are ordinary rendered geometry: the robot can only learn
     about a response by seeing a panel in its onboard RGB.
+
+    ``texture`` ({"seed", "style", "base"}) replaces the uniform paint with a
+    multi-hue pattern; ``flag_seed`` gives the panels a pattern (still yellow/red).
     """
     out_dir.mkdir(parents=True, exist_ok=True)
     height = float(size[2])
+    image = None
+    if texture is not None:
+        from .textures import object_texture
+
+        image = object_texture(int(texture.get("seed", 0)), texture.get("base", paint), texture.get("style", "stripes"))
     if shape == "cylinder":
         radius = float(size[0]) / 2
-        body = trimesh.creation.cylinder(radius=radius, height=height, sections=48)
+        if image is None:
+            body = trimesh.creation.cylinder(radius=radius, height=height, sections=48)
+        else:
+            body = textured_cylinder(radius, height, image)
+            body.apply_translation((0, 0, -height / 2))
         collision = ("cylinder", {"radius": radius, "length": height})
         half_w = radius
     elif shape == "box":
-        body = rounded_box(size, 0.02, 0.01)
+        body = rounded_box(size, 0.02, 0.01) if image is None else textured_box(size, image)
         collision = ("box", {"size": list(size)})
         half_w = min(size[0], size[1]) / 2
     else:
         raise ValueError("Fixture shape must be cylinder or box")
-    body = _colored(body, PAINTS[paint])
+    if image is None:
+        body = _colored(body, PAINTS[paint])
     body.apply_translation((0, 0, height / 2))
     export_glb(body, out_dir / f"{name}_body.glb")
     panel_w, panel_h = min(0.16, 1.6 * half_w), 0.12
-    for color in ("yellow", "red"):
-        panel = _colored(trimesh.creation.box(extents=(0.012, panel_w, panel_h)), PAINTS[color])
+    for index, color in enumerate(("yellow", "red")):
+        if flag_seed is None:
+            panel = _colored(trimesh.creation.box(extents=(0.012, panel_w, panel_h)), PAINTS[color])
+        else:
+            from .textures import flag_texture
+
+            panel = textured_box((0.012, panel_w, panel_h), flag_texture(color, flag_seed + index))
         export_glb(panel, out_dir / f"{name}_{color}_panel.glb")
 
     robot = ET.Element("robot", name=name)

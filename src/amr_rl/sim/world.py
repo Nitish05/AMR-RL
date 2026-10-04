@@ -149,7 +149,11 @@ class SimWorld:
             path = out / f"obstacle_{item['name']}.glb"
             size = tuple(item["size"])
             if not path.exists():
-                image = textures.crate_texture(item.get("texture_seed", 100 + index), palette=palette)
+                if item.get("style") == "saturated":  # a colourful distractor (textured worlds)
+                    image = textures.object_texture(item.get("texture_seed", 100 + index), item.get("base", "orange"),
+                                                    item.get("pattern", "blobs"))
+                else:
+                    image = textures.crate_texture(item.get("texture_seed", 100 + index), palette=palette)
                 assets.export_glb(assets.textured_box(size, image), path, y_up=True)
             yaw = float(item.get("yaw", 0.0))
             ent = self.scene.add_entity(gs.morphs.Mesh(
@@ -157,6 +161,25 @@ class SimWorld:
                 euler=(0, 0, math.degrees(yaw)), convexify=True))
             self.entity_names[ent.idx] = item["name"]
             self.static_geometry.append({"name": item["name"], "size": size, "xy": tuple(item["pos"]), "yaw": yaw})
+
+        # Wall posters (textured worlds): flat, saturated, no collision.
+        walls_by_name = {name: (size, xy) for name, size, xy in walls}
+        for index, item in enumerate(cfg.get("posters", [])):
+            (wsx, wsy, _), (wx, wy) = walls_by_name[item["wall"]]
+            pw, ph = item.get("size", [0.6, 0.45])
+            path = out / f"poster_{index}.glb"
+            if not path.exists():
+                quad = assets.textured_quad(pw, ph, textures.poster_texture(item.get("seed", index)))
+                assets.export_glb(quad, path, y_up=True)
+            along, z = float(item.get("along", 0.0)), float(item.get("z", 0.55))
+            # quad lies in x-y facing +z: stand it up facing into the room
+            if item["wall"] in ("wall_n", "wall_s"):
+                sign = -1.0 if item["wall"] == "wall_n" else 1.0
+                pos, euler = (along, wy + sign * (wsy / 2 + 0.004), z), (90 * -sign, 0, 0)
+            else:
+                sign = -1.0 if item["wall"] == "wall_e" else 1.0
+                pos, euler = (wx + sign * (wsx / 2 + 0.004), along, z), (90 * sign, 0, 90)
+            self.scene.add_entity(gs.morphs.Mesh(file=str(path), fixed=True, collision=False, pos=pos, euler=euler))
 
         self.evaluation_obstacle = None
         moved = cfg.get("nav_eval", {}).get("moved_obstacle")
@@ -177,7 +200,19 @@ class SimWorld:
         self.fixture_states = {}
         for item in cfg.get("fixtures", []):
             name = item["name"]
-            if item["shape"] == "sphere":
+            if item["shape"] == "sphere" and "texture" in item:
+                radius = float(item["size"][0]) / 2
+                path = out / "fixtures" / f"{name}_sphere.glb"
+                if not path.exists():
+                    tex = item["texture"]
+                    image = textures.object_texture(int(tex.get("seed", 0)), tex.get("base", item["paint"]),
+                                                    tex.get("style", "blobs"))
+                    assets.export_glb(assets.textured_sphere(radius, image), path, y_up=True)
+                entity = self.scene.add_entity(
+                    gs.morphs.Mesh(file=str(path), pos=(*item["pos"], radius + 0.001)),
+                    material=gs.materials.Rigid(rho=float(item.get("density", 120.0)), friction=0.6),
+                )
+            elif item["shape"] == "sphere":
                 radius = float(item["size"][0]) / 2
                 entity = self.scene.add_entity(
                     gs.morphs.Sphere(radius=radius, pos=(*item["pos"], radius + 0.001)),
@@ -187,7 +222,8 @@ class SimWorld:
             else:
                 urdf = out / "fixtures" / f"{name}.urdf"
                 if not urdf.exists():
-                    assets.fixture_urdf(out / "fixtures", name, item["shape"], item["paint"], item["size"])
+                    assets.fixture_urdf(out / "fixtures", name, item["shape"], item["paint"], item["size"],
+                                        texture=item.get("texture"), flag_seed=item.get("flag_seed"))
                 entity = self.scene.add_entity(gs.morphs.URDF(
                     file=str(urdf), fixed=True, pos=(*item["pos"], 0.0),
                     euler=(0, 0, math.degrees(float(item.get("yaw", 0.0)))), merge_fixed_links=False))
@@ -341,6 +377,16 @@ class SimWorld:
             target = [travel, 0.0] if response == "yellow" else [0.0, travel]
             entity.control_dofs_position(target, item["_dofs"])
         self.events.append(WorldEvent(self.time, name, trigger, response, context))
+
+    def raise_flag_for_evaluation(self, name, color):
+        """EVALUATION ONLY (detector benchmarks): raise a fixture's yellow/red panel,
+        or lower both with ``color=None``, outside the response rules."""
+        item, entity = self.fixtures[name]
+        travel = 0.12 + 0.02
+        target = {"yellow": [travel, 0.0], "red": [0.0, travel], None: [0.0, 0.0]}[color]
+        state = self.fixture_states[name]
+        state.raised, state.lower_at = color, math.inf
+        entity.control_dofs_position(target, item["_dofs"])
 
     def place_evaluation_obstacle(self, xy):
         """EVALUATION ONLY: the environment changes (someone puts a box down)."""

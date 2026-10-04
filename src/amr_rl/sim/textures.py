@@ -126,3 +126,94 @@ def crate_texture(seed: int, size: int = 512, palette: str = "warm") -> np.ndarr
         x, y = rng.integers(0, size, 2)
         cv2.circle(img, (int(x), int(y)), int(rng.integers(2, 6)), tuple(map(float, colors[3])), -1)
     return _desaturate(np.clip(img, 0, 255).astype(np.uint8))
+
+
+# ---------------------------------------------------------------- textured objects
+# Perception-swap worlds (docs/results/textured-worlds.md): objects, flags and
+# posters that are NOT uniformly painted, so a saturated-colour rule no longer
+# identifies them. These textures are deliberately saturated and multi-hue.
+
+OBJECT_HUES = {  # base hue (deg) of a textured object, so objects stay distinguishable
+    "cyan": 185, "magenta": 320, "green": 125, "blue": 225, "violet": 275, "orange": 28, "teal": 165,
+}
+
+
+def _hsv_color(h_deg, s, v):
+    hsv = np.uint8([[[int(h_deg / 2) % 180, int(255 * s), int(255 * v)]]])
+    return tuple(int(c) for c in cv2.cvtColor(hsv, cv2.COLOR_HSV2RGB)[0, 0])
+
+
+def object_texture(seed: int, base: str = "cyan", style: str = "stripes", size: int = 512) -> np.ndarray:
+    """Saturated multi-hue pattern on a base hue: stripes, checks, blobs or a label band.
+    Roughly 40-60 % of the area is the base hue, the rest other hues, white and dark."""
+    rng = np.random.default_rng(seed)
+    h0 = OBJECT_HUES.get(base, 185)
+    img = np.zeros((size, size, 3), np.uint8)
+    img[:] = _hsv_color(h0, 0.8, 0.85)
+    others = [(h0 + d) % 360 for d in rng.choice([60, 100, 140, 180, 220, 260, 300], size=3, replace=False)]
+    palette = [_hsv_color(h, rng.uniform(0.6, 0.95), rng.uniform(0.6, 0.95)) for h in others]
+    palette += [(235, 235, 230), (35, 35, 40)]
+    if style == "stripes":
+        width = int(rng.integers(size // 16, size // 7))
+        for k, y in enumerate(range(0, size, 2 * width)):
+            cv2.rectangle(img, (0, y), (size, y + width), palette[k % len(palette)], -1)
+    elif style == "checker":
+        cell = int(rng.integers(size // 10, size // 5))
+        for i in range(0, size, cell):
+            for j in range(0, size, cell):
+                if ((i // cell) + (j // cell)) % 2:
+                    cv2.rectangle(img, (j, i), (j + cell, i + cell), palette[int(rng.integers(len(palette)))], -1)
+    elif style == "blobs":
+        for _ in range(int(rng.integers(14, 26))):
+            c = tuple(int(v) for v in rng.integers(0, size, 2))
+            cv2.circle(img, c, int(rng.integers(size // 20, size // 7)), palette[int(rng.integers(len(palette)))], -1)
+    elif style == "label":
+        y0 = int(size * rng.uniform(0.3, 0.45))
+        cv2.rectangle(img, (0, y0), (size, y0 + size // 4), palette[-2], -1)
+        for k in range(int(rng.integers(5, 10))):
+            x = int(rng.integers(0, size - 60))
+            cv2.putText(img, "ABCDEFGHKMRSTXZ"[int(rng.integers(15))], (x, y0 + size // 5),
+                        cv2.FONT_HERSHEY_SIMPLEX, 2.0, palette[k % 3], 6)
+        for x in range(0, size, size // 8):
+            cv2.line(img, (x, 0), (x + size // 10, y0), palette[-1], 5)
+    else:
+        raise ValueError(f"unknown object texture style {style!r}")
+    noise = 0.85 + 0.3 * _noise(rng, (size, size), scales=(4, 16, 64))
+    return np.clip(img.astype(np.float32) * noise[..., None], 0, 255).astype(np.uint8)
+
+
+def flag_texture(color: str, seed: int, size: int = 256) -> np.ndarray:
+    """A yellow or red flag with a pattern (stripes or dots in white/dark); the
+    named hue stays dominant (>= ~60 % of the area) so the outcome tokens keep meaning."""
+    rng = np.random.default_rng(seed)
+    base = _hsv_color(52 if color == "yellow" else 2, 0.95, 0.95 if color == "yellow" else 0.85)
+    img = np.zeros((size, size, 3), np.uint8)
+    img[:] = base
+    mark = (240, 240, 235) if rng.random() < 0.5 else (30, 30, 35)
+    if rng.random() < 0.5:
+        w = size // 10
+        for x in range(-size, size, 4 * w):
+            pts = np.array([[x, size], [x + w, size], [x + w + size, 0], [x + size, 0]], np.int32)
+            cv2.fillPoly(img, [pts], mark)
+    else:
+        for y in range(size // 8, size, size // 4):
+            for x in range(size // 8, size, size // 4):
+                cv2.circle(img, (x, y), size // 14, mark, -1)
+    return img
+
+
+def poster_texture(seed: int, width: int = 512, height: int = 384) -> np.ndarray:
+    """A colourful wall poster: saturated blocks, discs and bands of many hues
+    (including yellow and red), i.e. distractors for a saturated-colour detector."""
+    rng = np.random.default_rng(seed)
+    img = np.zeros((height, width, 3), np.uint8)
+    img[:] = _hsv_color(float(rng.uniform(0, 360)), 0.25, 0.9)
+    for _ in range(int(rng.integers(6, 12))):
+        color = _hsv_color(float(rng.uniform(0, 360)), rng.uniform(0.7, 1.0), rng.uniform(0.6, 1.0))
+        x, y = int(rng.integers(0, width)), int(rng.integers(0, height))
+        if rng.random() < 0.5:
+            cv2.rectangle(img, (x, y), (x + int(rng.integers(30, 180)), y + int(rng.integers(20, 120))), color, -1)
+        else:
+            cv2.circle(img, (x, y), int(rng.integers(15, 80)), color, -1)
+    cv2.rectangle(img, (0, 0), (width - 1, height - 1), (30, 30, 30), 8)
+    return img
