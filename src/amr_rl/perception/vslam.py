@@ -267,6 +267,12 @@ class VSLAMConfig:
     turn_gate_ratio: float = 0.15
     turn_gate_keyframes: bool = False  # allow keyframes on gated frames (sensible with C9)
     turn_max_prediction_s: float = 0.0  # >0: in-place turns may predict this long (bounded below)
+    # Gate the visual rotation STEP (vision's own consecutive estimates) instead of the
+    # visual pose against the gated pose: after a gated frame vision can pull the
+    # estimate back once its steps agree again (round-8 design: one gated frame at a
+    # turn reversal otherwise left a permanent 3-5 deg offset).
+    turn_gate_visual_step: bool = False
+    turn_gate_settle: int = 0  # frames without gating after a command change > 0.2 rad/s (wheel lag)
     turn_max_predicted_rot_deg: float = 60.0
     turn_max_heading_sigma_deg: float = 8.0
     # C11: floor-band ORB with a smaller border/patch so the bottom rows still give
@@ -1062,6 +1068,18 @@ class PlanarVSLAM:
             self.turn_slip = cfg.turn_slip_init
         expected = self.turn_slip * commanded[1] * dt
         visual = wrap(pose[2] - self.pose[2])
+        if cfg.turn_gate_visual_step:
+            last = tr.get("last_visual")
+            tr["last_visual"] = float(pose[2])
+            if last is not None:
+                visual = wrap(pose[2] - last)
+        if cfg.turn_gate_settle > 0:
+            if abs(commanded[1] - tr.get("last_cmd_w", commanded[1])) > 0.2:
+                tr["settle"] = cfg.turn_gate_settle
+            tr["last_cmd_w"] = commanded[1]
+            if tr.get("settle", 0) > 0:
+                tr["settle"] -= 1
+                return pose, False
         if cfg.turn_gate_mode == "window":
             hist = tr.setdefault("gate_hist", [])
             hist.append((visual, expected))
