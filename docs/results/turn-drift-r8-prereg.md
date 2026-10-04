@@ -72,3 +72,21 @@ Held-out run, finalists, pooled over worlds; on-map and fresh-map replays judged
 These are L1–L5 as in round 7: coverage-pass builds, normal builds, navigation 4 rooms × 3 seeds, the relocalisation probe, and learning runs in arena_textured. Thresholds are unchanged from [turn-drift-prereg.md](turn-drift-prereg.md).
 
 If all pass, the finalist and `RuntimeConfig.respect_degraded_heading` become defaults. Otherwise everything stays switchable and off, and the result is documented.
+
+## Addendum (committed before the run it covers): slip fix
+
+FA passed the held-out criteria but failed the slip-robustness criterion on saved maps.
+
+**Cause, confirmed with an oracle.** Giving FA the true slip factor removed the error, so the cause is the slowly learned slip factor (exponential average starting at 0.85).
+
+**Fix: `turn_slip_mode="median"`.** The slip factor becomes the median of the raw visual/commanded turn ratio over the last 60 frames with at least 100 inliers. Gated frames count as samples, and the gate stays off until 15 samples exist. This was designed on the design worlds and on the seed-2 slip captures, which are now design data.
+
+A variant that kept a wide gate during the warm-up (`turn_slip_warm_scale` 3) was tried and dropped. On saved maps it was worse (e360 p90 11.7 vs 9.5), and at slip 0.75 it let confidently wrong frames back in (7.6 % vs 0 %).
+
+**Finalist FAm.** FA plus `turn_slip_mode="median"` and `turn_slip_min_inliers=100`, frozen at commit `993459f`. FA and the baseline run alongside it as references.
+
+**Final test, run once.**
+- Held-out split: the new seed-3 capture `turncap-r9-{heldout_b,heldout_c,home_a_dim,home_a_textured}-heldout-20261004`, captured before the fix was designed and never replayed.
+- Slip robustness: new seed-3 captures `turncap-arena-reset-s{0.75,1.0}-seed3-20261004`.
+
+The pass criteria are unchanged from the sections above.
