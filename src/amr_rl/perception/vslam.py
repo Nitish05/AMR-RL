@@ -56,6 +56,11 @@ PREDICTED = "predicted"  # bounded dead reckoning after brief visual loss (<= 1.
 @dataclass
 class VSLAMConfig:
     n_features: int = 900
+    # Share of the feature budget reserved for the image below the horizon (the floor).
+    # 0 = one budget for the whole image (default). In the textured worlds high-contrast
+    # posters and patterned objects took the budget: floor features per frame 502 -> 354
+    # (docs/results/textured-worlds.md). Evaluated, not yet validated for navigation.
+    floor_feature_share: float = 0.0
     fast_threshold: int = 10
     match_radius: float = 22.0
     wide_radius: float = 50.0
@@ -258,6 +263,18 @@ class PlanarVSLAM:
         self.orb = cv2.ORB_create(nfeatures=self.cfg.n_features, scaleFactor=1.2, nlevels=6,
                                   edgeThreshold=15, patchSize=15, fastThreshold=self.cfg.fast_threshold)
         self.clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(4, 4))
+        self._split = None
+        if self.cfg.floor_feature_share > 0:
+            n_floor = int(round(self.cfg.n_features * self.cfg.floor_feature_share))
+            kw = dict(scaleFactor=1.2, nlevels=6, edgeThreshold=15, patchSize=15, fastThreshold=self.cfg.fast_threshold)
+            # horizon row: a floor point far ahead (8 m) projects just below it
+            uv, _ = model.project_world(np.array([[8.0, 0.0, 0.0]]), (0.0, 0.0, 0.0))
+            row = int(np.clip(uv[0, 1], 1, model.height - 2))
+            masks = np.zeros((2, model.height, model.width), np.uint8)
+            masks[0, row:] = 255
+            masks[1, :row] = 255
+            self._split = [(cv2.ORB_create(nfeatures=n_floor, **kw), masks[0]),
+                           (cv2.ORB_create(nfeatures=self.cfg.n_features - n_floor, **kw), masks[1])]
         self.matcher = cv2.BFMatcher(cv2.NORM_HAMMING)
         self.lm = Landmarks()
         self.keyframes: list[Keyframe] = []
@@ -306,7 +323,16 @@ class PlanarVSLAM:
     def features(self, rgb: np.ndarray):
         gray = cv2.cvtColor(rgb, cv2.COLOR_RGB2GRAY)
         gray = self.clahe.apply(gray)
-        kps, desc = self.orb.detectAndCompute(gray, None)
+        if self._split is not None and gray.shape == self._split[0][1].shape:
+            kps, descs = [], []
+            for orb, mask in self._split:
+                k, d = orb.detectAndCompute(gray, mask)
+                if d is not None and k:
+                    kps += list(k)
+                    descs.append(d)
+            desc = np.vstack(descs) if descs else None
+        else:
+            kps, desc = self.orb.detectAndCompute(gray, None)
         if desc is None or not kps:
             return gray, np.zeros((0, 2)), np.zeros((0, 32), np.uint8)
         pts = np.array([k.pt for k in kps], float)

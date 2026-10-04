@@ -4,6 +4,7 @@
 """
 
 import argparse
+import json
 import math
 import sys
 from pathlib import Path
@@ -37,6 +38,7 @@ def main():
     parser.add_argument("--no-loop-closure", action="store_true", help="A/B: run without loop closure")
     parser.add_argument("--coverage-seconds", type=float, default=0.0,
                         help="finish with the coverage pass for this many seconds (survey turns far from keyframes)")
+    parser.add_argument("--vslam", nargs="*", default=[], help="A/B: VSLAMConfig overrides key=value (JSON values)")
     parser.add_argument("--no-coverage", action="store_true",
                         help="A/B: no coverage pass at all (also not when frontiers run out)")
     parser.add_argument("--loop-shadow", action="store_true",
@@ -52,6 +54,11 @@ def main():
     if args.loop_shadow:  # log more candidates; revisits change the trajectory, so off
         cfg.vslam.loop_shadow, cfg.vslam.loop_top_k, cfg.vslam.loop_uncertain_k, cfg.revisit_sigma = True, 3, 3, 0.0
         cfg.vslam.covis_max_per_kf = 3  # recorded for the offline comparison only
+    for item in args.vslam:
+        key, value = item.split("=", 1)
+        if not hasattr(cfg.vslam, key):
+            raise SystemExit(f"unknown VSLAMConfig field {key}")
+        setattr(cfg.vslam, key, json.loads(value))
     if args.no_coverage:
         cfg.coverage_lattice = 0.0
     elif args.coverage_seconds > 0:
