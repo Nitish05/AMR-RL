@@ -181,6 +181,59 @@ class VSLAMConfig:
     local_ba_fixed: int = 2
     sigma_scale: float = 2.0
     sigma_floor: float = 0.005
+    # In-place turns (round 7; docs/results/turn-drift.md). Heading drifted up to 28 deg
+    # per turn near objects: features on object faces below the camera are lifted to
+    # the floor too far away, and the camera's 0.125 m lever arm turns that depth
+    # error into extra yaw; the error then locks in through landmarks made during the
+    # turn. A turn is recognised from the robot's own command (engineered rule):
+    # |v| < turn_v_max and |w| >= turn_w_min for 2 frames; pauses up to turn_pause_s.
+    turn_w_min: float = 0.15
+    turn_v_max: float = 0.02
+    turn_pause_s: float = 1.0
+    # C7: down-weight matches by how much a landmark depth error moves them during a
+    # rotation (sigma ~ f * lever * angle * rel_depth_error / depth). off|turn|always
+    depth_weighting: str = "off"
+    depth_rel_ipm: float = 0.5
+    depth_rel_tri: float = 0.05
+    depth_ref_angle: float = 0.35
+    # C1: estimate heading only during a turn, the base pinned at the turn axis
+    # ("hard") or held by a tight prior ("prior"); falls back to the full fit when
+    # pinning fits clearly worse (the base really moved). off|hard|prior
+    turn_pin_xy: str = "off"
+    turn_xy_sigma: float = 0.002
+    turn_fallback_ratio: float = 1.5
+    # C3: landmarks made during a turn: "gaps" only in image cells without matched
+    # landmarks; "tentative" never confirmed until the base moves 5 cm (or validated).
+    turn_landmarks: str = "normal"
+    turn_gap_cell: int = 40
+    turn_gap_min: int = 2
+    # C2a: validate floor (IPM) landmarks by triangulation between the keyframe that
+    # made them and a later one; non-floor points become triangulated landmarks.
+    # Until validated they are not confirmed by the 4 cm rule. off|turn|all
+    floor_validation: str = "off"
+    floor_val_min_parallax_deg: float = 2.0
+    floor_val_height: float = 0.03
+    # C4: the turn the robot measures must agree with the turn it commanded (wheel
+    # slip only makes the real turn smaller): flag over-rotation and angular freezes.
+    turn_cmd_check: str = "off"   # off|flag
+    turn_k_max: float = 1.0
+    turn_k_min: float = 0.6
+    turn_cmd_margin: float = 0.10
+    turn_sigma_growth: float = 0.03
+    # C5: turn closure: on returning to the turn's start heading (or after each full
+    # revolution), re-find the heading against landmarks that existed before the turn
+    # and spread the correction over the turn's keyframes. off|rotate|purge
+    turn_closure: str = "off"
+    closure_window_deg: float = 40.0
+    closure_search_deg: float = 24.0
+    closure_step_deg: float = 3.0
+    closure_min_inliers: int = 50
+    closure_ratio: float = 1.5
+    closure_max_frac: float = 0.08
+    closure_confirm_deg: float = 1.0
+    # Side fix: count a landmark as "visible" once per frame (not once per hypothesis
+    # and search radius), so the cull rule sees the true re-find rate.
+    visible_once_per_frame: bool = False
 
 
 @dataclass
@@ -223,11 +276,12 @@ class Landmarks:
         self.marked = np.zeros(0, bool)  # already contributed obstacle evidence
         self.created = np.zeros(0)  # timestamp of creation (-inf: loaded from a saved map)
         self.anchor = np.zeros(0, int)  # keyframe that created it (-1: unknown); moves with it on loop closure
+        self.flags = np.zeros(0, np.int8)  # bit0: made during an in-place turn; bit1: validated floor point
 
     def __len__(self):
         return int(self.alive.sum())
 
-    def add(self, pos, desc, kind, origin=None, confirmed=False, created=-np.inf, anchor=-1):
+    def add(self, pos, desc, kind, origin=None, confirmed=False, created=-np.inf, anchor=-1, flags=0):
         n = len(pos)
         if n == 0:
             return np.zeros(0, int)
@@ -244,6 +298,7 @@ class Landmarks:
         self.origin = np.vstack([self.origin, o])
         self.created = np.concatenate([self.created, np.full(n, float(created))])
         self.anchor = np.concatenate([self.anchor, np.full(n, int(anchor))])
+        self.flags = np.concatenate([self.flags, np.full(n, int(flags), np.int8)])
         return np.arange(start, start + n)
 
     def compact(self):
@@ -251,7 +306,7 @@ class Landmarks:
         remap = -np.ones(len(keep), int)
         remap[keep] = np.arange(int(keep.sum()))
         for name in ("pos", "desc", "kind", "visible", "found", "alive", "confirmed", "origin", "marked", "created",
-                     "anchor"):
+                     "anchor", "flags"):
             setattr(self, name, getattr(self, name)[keep])
         return remap
 
@@ -303,6 +358,11 @@ class PlanarVSLAM:
         self.n_loaded_keyframes = 0  # keyframes of a loaded map stay fixed in the pose graph
         self.horizon = model.horizon_row()
         self.frames = 0
+        self._turn = None  # in-place turn state (see _update_turn_state)
+        self._turn_count = 0
+        self._visible_frame = -1
+        self.turn_closures = []  # applied turn closures (operational log)
+        self._lever = float(np.linalg.norm(model.T_base_cam[:2, 3]))
         self.last_hypothesis = None
         self.predicted_time = 0.0
         self._kp_tree = self._kp_tree_pts = None
@@ -378,11 +438,15 @@ class PlanarVSLAM:
         J[bad] = 0.0
         return r.ravel(), J.reshape(-1, 3)
 
-    def optimize(self, pose0, P, uv, iters=10, weights=None, prior=None):
+    def optimize(self, pose0, P, uv, iters=10, weights=None, prior=None, pin=None):
         """Robust planar pose fit. ``prior`` = (pose, sigmas): the robot's own commanded
         motion as a weak Gaussian prior (whitened, Huber-robust); vision dominates
-        whenever it is informative."""
+        whenever it is informative. ``pin`` = (mode, xy): during an in-place turn the
+        base stays at xy ("hard": heading only) or is held there by a tight
+        un-robustified prior ("prior", sigma turn_xy_sigma)."""
         x = np.asarray(pose0, float).copy()
+        if pin is not None and pin[0] == "hard":
+            x[:2] = pin[1]
         H = np.eye(3)
         for _ in range(iters):
             r, J = self._residuals_jacobian(x, P, uv)
@@ -398,8 +462,15 @@ class PlanarVSLAM:
                 wp = np.where(np.abs(d) <= 3.0, 1.0, 3.0 / np.maximum(np.abs(d), 1e-9))
                 H = H + np.diag(wp / sig ** 2)
                 g = g + wp * d / sig
+            if pin is not None and pin[0] == "prior":
+                sp = self.cfg.turn_xy_sigma
+                H = H + np.diag([1 / sp ** 2, 1 / sp ** 2, 0.0])
+                g = g + np.array([(x[0] - pin[1][0]) / sp ** 2, (x[1] - pin[1][1]) / sp ** 2, 0.0])
             try:
-                dx = -np.linalg.solve(H + 1e-6 * np.eye(3), g)
+                if pin is not None and pin[0] == "hard":
+                    dx = np.array([0.0, 0.0, -g[2] / (H[2, 2] + 1e-6)])
+                else:
+                    dx = -np.linalg.solve(H + 1e-6 * np.eye(3), g)
             except np.linalg.LinAlgError:
                 break
             x += dx
@@ -425,7 +496,14 @@ class PlanarVSLAM:
         if len(cand) == 0:
             return empty
         if count_visible:
-            self.lm.visible[cand] += 1
+            if self.cfg.visible_once_per_frame:
+                if self._visible_frame != self.frames or len(self._visible_seen) != len(self.lm.pos):
+                    self._visible_frame, self._visible_seen = self.frames, np.zeros(len(self.lm.pos), bool)
+                new = cand[~self._visible_seen[cand]]
+                self.lm.visible[new] += 1
+                self._visible_seen[new] = True
+            else:
+                self.lm.visible[cand] += 1
         tree = self._kp_tree if self._kp_tree_pts is pts else None
         if tree is None:
             tree = kd_tree(pts)
@@ -459,9 +537,42 @@ class PlanarVSLAM:
         return cand[bl[uniq]], bk[uniq]
 
     def _pose_from_matches(self, pose0, lm_idx, kp_idx, pts):
+        tr = self._turn
+        if tr is None or self.cfg.turn_pin_xy == "off":
+            return self._fit(pose0, lm_idx, kp_idx, pts)
+        pinned = self._fit(pose0, lm_idx, kp_idx, pts, pin=(self.cfg.turn_pin_xy, tr["axis"]))
+        free = self._fit(pose0, lm_idx, kp_idx, pts)
+        if pinned[2] is None:
+            return free
+        if free[2] is not None:
+            e_p = float(np.mean(pinned[3][pinned[1]])) if pinned[1].any() else np.inf
+            e_f = float(np.mean(free[3][free[1]])) if free[1].any() else np.inf
+            if e_p > self.cfg.turn_fallback_ratio * max(e_f, 0.3) or pinned[1].sum() < 0.75 * free[1].sum():
+                tr["fallbacks"] += 1  # the base really moved (slide, push): follow it
+                tr["axis"] = free[0][:2].copy()
+                return free
+        return pinned
+
+    def _depth_weights(self, lm_idx, pose):
+        """C7: how far a landmark's image position moves, for a rotation of
+        depth_ref_angle, per its relative depth error (lever arm a, depth d):
+        sigma_px = f * a * angle * rel / d; weight = huber^2 / (huber^2 + sigma^2)."""
+        mode = self.cfg.depth_weighting
+        if mode == "off" or (mode == "turn" and self._turn is None):
+            return None
+        cam = self.model.T_world_cam(pose)[:3, 3]
+        d = np.maximum(np.linalg.norm(self.lm.pos[lm_idx] - cam, axis=1), 0.05)
+        exact = (self.lm.kind[lm_idx] == 1) | ((self.lm.flags[lm_idx] & 2) != 0)
+        rel = np.where(exact, self.cfg.depth_rel_tri, self.cfg.depth_rel_ipm)
+        sig = self.model.K[0, 0] * self._lever * self.cfg.depth_ref_angle * rel / d
+        hub = self.cfg.huber_px ** 2
+        return hub / (hub + sig ** 2)
+
+    def _fit(self, pose0, lm_idx, kp_idx, pts, pin=None):
         P, uv = self.lm.pos[lm_idx], pts[kp_idx]
         prior = self._motion_prior
-        pose, err, _ = self.optimize(pose0, P, uv, prior=prior)
+        dw = self._depth_weights(lm_idx, pose0)
+        pose, err, _ = self.optimize(pose0, P, uv, prior=prior, weights=dw, pin=pin)
         inl = err < self.cfg.inlier_px * 2
         if inl.sum() >= self.cfg.min_inliers:
             use = inl & self.lm.confirmed[lm_idx]
@@ -470,7 +581,9 @@ class PlanarVSLAM:
             # Established landmarks (re-observed many times) anchor the estimate more
             # strongly than fresh ones, limiting drift from newly added points.
             weights = np.clip(0.3 + self.lm.found[lm_idx[use]] / 8.0, 0.3, 1.5)
-            pose, err, H = self.optimize(pose, P[use], uv[use], weights=weights, prior=prior)
+            if dw is not None:
+                weights = weights * dw[use]
+            pose, err, H = self.optimize(pose, P[use], uv[use], weights=weights, prior=prior, pin=pin)
             full = np.linalg.norm(self._residuals_jacobian(pose, P, uv)[0].reshape(-1, 2), axis=1)
             inl = full < self.cfg.inlier_px
             return pose, inl, H, full
@@ -502,6 +615,9 @@ class PlanarVSLAM:
             cm = self.pose + np.array([v * dt * math.cos(th), v * dt * math.sin(th), w * dt])
             cm[2] = wrap(cm[2])
             out.append(("commanded", cm))
+        if self._turn is not None and self.cfg.turn_pin_xy != "off":
+            for _, h in out:
+                h[:2] = self._turn["axis"]
         return out
 
     def track(self, rgb: np.ndarray, timestamp: float, commanded=None) -> TrackResult:
@@ -519,8 +635,10 @@ class PlanarVSLAM:
         if self.status == INITIALIZING:
             return self._initialize(gray, pts, desc, timestamp)
         if self.status in (LOST, RELOCALIZING):
+            self._turn, self._turn_count = None, 0
             return self._relocalize(gray, pts, desc, timestamp, commanded=commanded, dt=dt, rgb=rgb)
         # TRACKING or PREDICTED: try to (re)acquire against the local map.
+        self._update_turn_state(commanded, dt, timestamp)
         hypotheses = self._hypotheses(dt, commanded)
         self._motion_prior = None
         if commanded is not None and dt > 0 and self.cfg.motion_prior:
@@ -589,6 +707,7 @@ class PlanarVSLAM:
                 self.position_sigma = self.heading_sigma = None
                 self.velocity[:] = 0
                 self._motion_log.clear()
+                self._turn, self._turn_count = None, 0
                 return TrackResult(LOST, None, None, None, 0, 0, False, timestamp, "tracking_failed")
             self.status = PREDICTED
             return TrackResult(PREDICTED, self.pose.copy(), self.position_sigma, self.heading_sigma,
@@ -605,6 +724,7 @@ class PlanarVSLAM:
             self.position_sigma = self.heading_sigma = None
             self.velocity[:] = 0
             self._motion_log.clear()
+            self._turn, self._turn_count = None, 0
             return TrackResult(LOST, None, None, None, 0, 0, False, timestamp, "visual_motion_inconsistent_with_commands")
         self.failures = 0
         if dt > 0:
@@ -628,17 +748,37 @@ class PlanarVSLAM:
         if len(tent):
             moved = np.linalg.norm(self.lm.origin[tent] - centre, axis=1) >= 0.04
             ok = moved & (self.lm.found[tent] >= 3)
+            ok &= ~self._unconfirmable(tent, centre)
             self.lm.confirmed[tent[ok]] = True
         self._last_quality = (int(inl.sum()), float(np.mean(err[inl])))
         self._set_sigma(H, int(inl.sum()))
+        info = {}
+        tr = self._turn
+        if tr is not None:
+            tr["est_rot"] += wrap(pose[2] - tr["last_th"])
+            tr["last_th"] = float(pose[2])
+            tr["max_exc"] = max(tr["max_exc"], abs(tr["est_rot"] - tr["rot_at_closure"]))
+            if self.cfg.turn_pin_xy != "off":
+                self.position_sigma = max(self.position_sigma, 0.02)  # measured base slide in turns: 1-3 cm
+            closure = self._turn_closure_check(pts, desc, timestamp) if self.cfg.turn_closure != "off" else None
+            if closure is not None:
+                info["turn_closure"] = closure
+            if self.cfg.turn_cmd_check != "off":
+                self._turn_command_check(tr)
+                if self.cfg.turn_sigma_growth > 0:
+                    self.heading_sigma = float(np.hypot(self.heading_sigma, self.cfg.turn_sigma_growth
+                                                        * abs(tr["est_rot"] - tr["rot_at_closure"])))
+            info.update({"turn": True, "turn_rot": float(tr["est_rot"]), "degraded": bool(tr["flagged"])})
         matched_lm = -np.ones(len(pts), int)
         matched_lm[kp_idx[inl]] = lm_idx[inl]
-        kf = self._maybe_keyframe(gray, pts, desc, matched_lm, int(inl.sum()), timestamp)
+        kf = False
+        if not info.get("degraded"):  # never extend the map from a flagged turn
+            kf = self._maybe_keyframe(gray, pts, desc, matched_lm, int(inl.sum()), timestamp)
         if kf and self.place is not None and self.cfg.loop_closure:
             self._loop_check(rgb, timestamp)
         return TrackResult(TRACKING, self.pose.copy(), self.position_sigma, self.heading_sigma,
                            int(inl.sum()), len(lm_idx), kf, timestamp,
-                           inlier_uv=pts[kp_idx[inl]])
+                           inlier_uv=pts[kp_idx[inl]], info=info)
 
     def _on_frozen(self, t):
         """Vision disagreed with the commanded motion: distrust everything since the
@@ -769,10 +909,18 @@ class PlanarVSLAM:
             return False  # never extend the map from a weakly constrained pose
         kf = Keyframe(len(self.keyframes), timestamp, self.pose.copy(), pts, desc, matched_lm.copy(), gray)
         self._triangulate(kf, last)
+        if self.cfg.floor_validation != "off":
+            self._validate_floor(kf)
         # Remaining unmatched floor-like features become metric floor landmarks.
         free = kf.landmark < 0
         world, ok = self._ipm(pts, self.pose)
         ok &= free
+        if self._turn is not None and self.cfg.turn_landmarks == "gaps" and len(pts):
+            cell = np.floor(pts / self.cfg.turn_gap_cell).astype(int)
+            key = cell[:, 0] * 1000 + cell[:, 1]
+            matched_keys, counts = np.unique(key[matched_lm >= 0], return_counts=True)
+            covered = matched_keys[counts >= self.cfg.turn_gap_min]
+            ok &= ~np.isin(key, covered)  # only map views the existing map does not cover
         if ok.any() and self.lm.alive.any():
             alive = np.flatnonzero(self.lm.alive)
             tree = kd_tree(self.lm.pos[alive])
@@ -787,16 +935,214 @@ class PlanarVSLAM:
                 # a different appearance (scale/viewpoint) is kept as a new observation.
                 ok[idx[same]] = False
         ids = self.lm.add(world[ok], desc[ok], 0, origin=self.model.T_world_cam(self.pose)[:3, 3],
-                          created=self._now, anchor=kf.id)
+                          created=self._now, anchor=kf.id, flags=1 if self._turn is not None else 0)
         kf.landmark[np.flatnonzero(ok)] = ids
         self._note_covisibility(kf, matched_lm)
         self.keyframes.append(kf)
-        if self.cfg.local_ba_window >= 4 and len(self.keyframes) >= self.cfg.local_ba_window:
+        if self._turn is not None:
+            self._turn["kf_rot"][kf.id] = float(self._turn["est_rot"])
+        pinned = self._turn is not None and self.cfg.turn_pin_xy != "off"
+        if self.cfg.local_ba_window >= 4 and len(self.keyframes) >= self.cfg.local_ba_window and not pinned:
             self._local_ba()
         if len(self.keyframes) > 400:  # keep images only for recent keyframes
             self.keyframes[-400].gray = None
         self._cull()
         return True
+
+    # ------------------------------------------------------------ in-place turns
+    def _update_turn_state(self, commanded, dt, t):
+        """Recognise an in-place turn from the robot's own command (engineered rule)."""
+        cfg = self.cfg
+        if commanded is None or self.pose is None:
+            self._turn, self._turn_count = None, 0
+            return
+        v, w = commanded
+        turning = abs(v) < cfg.turn_v_max and abs(w) >= cfg.turn_w_min
+        tr = self._turn
+        if tr is not None:
+            if abs(v) >= cfg.turn_v_max or (not turning and t - tr["last_turning"] > cfg.turn_pause_s):
+                self._turn, self._turn_count = None, 0
+            else:
+                if turning:
+                    tr["last_turning"] = t
+                tr["cmd_rot"] += w * dt
+                return
+        self._turn_count = self._turn_count + 1 if turning else 0
+        if turning and self._turn_count >= 2:
+            self._turn = {"axis": self.pose[:2].copy(), "theta0": float(self.pose[2]), "t0": t, "last_turning": t,
+                          "cmd_rot": w * dt, "est_rot": 0.0, "last_th": float(self.pose[2]), "max_exc": 0.0,
+                          "rot_at_closure": 0.0, "kf_rot": {}, "flagged": False, "pending": None, "closures": 0,
+                          "fallbacks": 0}
+
+    def _unconfirmable(self, tent, centre):
+        """Tentative landmarks that the 4 cm rule must not confirm (C3 tentative, C2a)."""
+        out = np.zeros(len(tent), bool)
+        born_in_turn = (self.lm.flags[tent] & 1) != 0
+        if self.cfg.turn_landmarks == "tentative":
+            far = np.linalg.norm(self.lm.origin[tent] - centre, axis=1) >= 0.10
+            out |= born_in_turn & ((self._turn is not None) | ~far)
+        if self.cfg.floor_validation != "off":
+            scope = born_in_turn if self.cfg.floor_validation == "turn" else np.ones(len(tent), bool)
+            out |= scope & (self.lm.kind[tent] == 0) & ((self.lm.flags[tent] & 2) == 0)
+        return out
+
+    def _validate_floor(self, kf):
+        """C2a: triangulate tentative floor landmarks seen in ``kf`` against the keyframe
+        that created them. On the floor -> validated and confirmed; above it -> a
+        triangulated landmark at the measured position; below it -> removed."""
+        cfg = self.cfg
+        ids = kf.landmark[kf.landmark >= 0]
+        if len(ids) == 0:
+            return 0
+        lm = self.lm
+        sel = (lm.kind[ids] == 0) & ~lm.confirmed[ids] & ((lm.flags[ids] & 2) == 0) & (lm.anchor[ids] >= 0) \
+            & (lm.anchor[ids] != kf.id)
+        if cfg.floor_validation == "turn":
+            sel &= (lm.flags[ids] & 1) != 0
+        ids = ids[sel]
+        if len(ids) == 0:
+            return 0
+        by = {k.id: k for k in self.keyframes}
+        where = {int(lid): i for i, lid in enumerate(kf.landmark) if lid >= 0}
+        done = 0
+        for a in np.unique(lm.anchor[ids]):
+            A = by.get(int(a))
+            if A is None or A.pts is None or len(A.pts) == 0:
+                continue
+            in_a = {int(lid): j for j, lid in enumerate(A.landmark) if lid >= 0}
+            group = [int(i) for i in ids[lm.anchor[ids] == a] if int(i) in in_a]
+            if not group:
+                continue
+            ka = np.array([where[i] for i in group])
+            ja = np.array([in_a[i] for i in group])
+            T1 = np.linalg.inv(self.model.T_world_cam(kf.pose))
+            T2 = np.linalg.inv(self.model.T_world_cam(A.pose))
+            K = self.model.K
+            X = cv2.triangulatePoints(K @ T1[:3], K @ T2[:3], kf.pts[ka].T.astype(float), A.pts[ja].T.astype(float))
+            X = (X[:3] / X[3]).T
+            uv1, z1 = self._project(X, kf.pose)
+            uv2, z2 = self._project(X, A.pose)
+            e = np.maximum(np.linalg.norm(uv1 - kf.pts[ka], axis=1), np.linalg.norm(uv2 - A.pts[ja], axis=1))
+            c1, c2 = np.linalg.inv(T1)[:3, 3], np.linalg.inv(T2)[:3, 3]
+            r1, r2 = X - c1, X - c2
+            cos = (r1 * r2).sum(1) / (np.linalg.norm(r1, axis=1) * np.linalg.norm(r2, axis=1) + 1e-9)
+            par = np.degrees(np.arccos(np.clip(cos, -1, 1)))
+            good = (z1 > 0.05) & (z2 > 0.05) & (e < 2.0) & (par >= cfg.floor_val_min_parallax_deg)
+            g = np.array(group)
+            on_floor = good & (np.abs(X[:, 2]) <= cfg.floor_val_height)
+            above = good & (X[:, 2] > cfg.floor_val_height) & (X[:, 2] < 2.0)
+            below = good & (X[:, 2] < -cfg.floor_val_height)
+            lm.flags[g[on_floor]] |= 2
+            lm.confirmed[g[on_floor]] = True
+            lm.pos[g[above]] = X[above]
+            lm.kind[g[above]] = 1
+            lm.flags[g[above]] |= 2
+            lm.confirmed[g[above]] = True
+            lm.alive[g[below]] = False
+            done += int(good.sum())
+        return done
+
+    def _turn_command_check(self, tr):
+        """C4: the measured turn must not exceed the commanded one (slip only reduces
+        it) and must not stay far below it (angular freeze)."""
+        cfg = self.cfg
+        cmd, est = abs(tr["cmd_rot"]), abs(tr["est_rot"])
+        over = est > cfg.turn_k_max * cmd + cfg.turn_cmd_margin + 0.05 * cmd
+        frozen = cmd >= 0.5 and est < cfg.turn_k_min * cmd - cfg.turn_cmd_margin
+        if over or frozen:
+            tr["flagged"] = True
+
+    def _turn_closure_check(self, pts, desc, t):
+        """C5: back at the turn's start heading (after >= 60 deg away), re-find the
+        heading against landmarks that existed before the turn; two consecutive
+        agreeing frames, a distinct best mode and a bounded correction are required."""
+        cfg, tr = self.cfg, self._turn
+        if tr["max_exc"] < math.radians(60) or abs(wrap(self.pose[2] - tr["theta0"])) > math.radians(cfg.closure_window_deg):
+            return None
+        anchors = np.flatnonzero(self.lm.alive & (self.lm.created < tr["t0"]))
+        if len(anchors) < cfg.closure_min_inliers or len(pts) < cfg.closure_min_inliers:
+            return None
+        saved = self._frame_candidates
+        self._frame_candidates = anchors
+        xy = tr["axis"] if cfg.turn_pin_xy != "off" else self.pose[:2]
+        n = int(round(cfg.closure_search_deg / cfg.closure_step_deg))
+        found = []
+        for j in range(-n, n + 1):
+            cand = np.array([xy[0], xy[1], wrap(self.pose[2] + math.radians(j * cfg.closure_step_deg))])
+            li, ki = self._guided(cand, pts, desc, 12.0, count_visible=False)
+            if len(li) < cfg.closure_min_inliers // 2:
+                continue
+            pose, err, _ = self.optimize(cand, self.lm.pos[li], pts[ki], pin=("hard", xy))
+            inl = err < self.cfg.inlier_px
+            if inl.sum():
+                found.append((int(inl.sum()), float(np.mean(err[inl])), float(pose[2])))
+        self._frame_candidates = saved
+        entry = {"t": float(t), "candidates": len(found)}
+        if not found:
+            return None
+        found.sort(key=lambda f: -f[0])
+        best = found[0]
+        rivals = [f[0] for f in found[1:] if abs(wrap(f[2] - best[2])) > math.radians(6)]
+        second = max(rivals, default=0)
+        delta = wrap(best[2] - self.pose[2])
+        entry.update({"inliers": best[0], "mean_px": best[1], "second": second, "delta_deg": math.degrees(delta)})
+        if best[0] < cfg.closure_min_inliers or best[1] >= 2.0 or best[0] < cfg.closure_ratio * second:
+            entry["outcome"] = "rejected_weak"
+            return None
+        turned = abs(tr["est_rot"] - tr["rot_at_closure"])
+        if abs(delta) > max(math.radians(4), cfg.closure_max_frac * turned):
+            tr["pending"] = None
+            entry["outcome"] = "rejected_too_large"
+            self.turn_closures.append(entry)
+            return None
+        if abs(delta) < math.radians(0.2):
+            tr["max_exc"], tr["rot_at_closure"], tr["pending"] = 0.0, tr["est_rot"], None
+            return None  # nothing to correct
+        if tr["pending"] is None or abs(wrap(delta - tr["pending"])) > math.radians(cfg.closure_confirm_deg):
+            tr["pending"] = delta
+            return None
+        self._apply_turn_closure(delta, xy)
+        tr["max_exc"], tr["rot_at_closure"], tr["pending"] = 0.0, tr["est_rot"], None
+        tr["closures"] += 1
+        entry["outcome"] = "closed"
+        self.turn_closures.append(entry)
+        return entry
+
+    def _apply_turn_closure(self, delta, xy):
+        """Rotate the turn's keyframes about the axis by their share of the turn
+        (purge mode: drop their landmarks instead of moving them), and the pose."""
+        tr = self._turn
+        total = max(abs(tr["est_rot"] - tr["rot_at_closure"]), 1e-6)
+        by = {k.id: k for k in self.keyframes}
+        corrections = {}
+        for kid, rot in tr["kf_rot"].items():
+            k = by.get(kid)
+            if k is None or kid < self.n_loaded_keyframes:
+                continue
+            share = float(np.clip(abs(rot - tr["rot_at_closure"]) / total, 0.0, 1.0))
+            d = delta * share
+            c, s_ = math.cos(d), math.sin(d)
+            before = k.pose.copy()
+            rel = k.pose[:2] - xy
+            k.pose = np.array([xy[0] + c * rel[0] - s_ * rel[1], xy[1] + s_ * rel[0] + c * rel[1], wrap(k.pose[2] + d)])
+            T = correction(before, k.pose)
+            corrections[kid] = T
+            sel = self.lm.anchor == kid
+            if sel.any():
+                if self.cfg.turn_closure == "purge":
+                    self.lm.alive[sel] = False
+                else:
+                    self.lm.pos[sel, :2] = apply_transform(T, self.lm.pos[sel, :2])
+        c, s_ = math.cos(delta), math.sin(delta)
+        rel = self.pose[:2] - xy
+        self.pose = np.array([xy[0] + c * rel[0] - s_ * rel[1], xy[1] + s_ * rel[0] + c * rel[1], wrap(self.pose[2] + delta)])
+        tr["est_rot"] += delta
+        tr["last_th"] = float(self.pose[2])
+        self.velocity[:] = 0
+        self._motion_log.clear()  # the jump is a correction, not motion
+        self._kp_tree = self._kp_tree_pts = None
+        if corrections and self.on_loop_closure is not None:
+            self.on_loop_closure(corrections, {k.id: k.timestamp for k in self.keyframes})
 
     def _triangulate(self, kf, ref):
         a = np.flatnonzero(kf.landmark < 0)
@@ -1565,7 +1911,8 @@ class PlanarVSLAM:
         alive = self.lm.alive
         np.savez_compressed(directory / "landmarks.npz", pos=self.lm.pos[alive], desc=self.lm.desc[alive],
                             kind=self.lm.kind[alive], visible=self.lm.visible[alive], found=self.lm.found[alive],
-                            confirmed=self.lm.confirmed[alive], anchor=self.lm.anchor[alive])
+                            confirmed=self.lm.confirmed[alive], anchor=self.lm.anchor[alive],
+                            flags=(self.lm.flags[alive] & 2).astype(np.int8))
         described = [kf for kf in self.keyframes if kf.gdesc is not None]
         if described:  # v2: place descriptors for keyframe retrieval (relocalisation, loop closure)
             np.savez_compressed(directory / "keyframes.npz", ids=np.array([kf.id for kf in described]),
@@ -1596,6 +1943,8 @@ class PlanarVSLAM:
         slam.lm.confirmed[:] = data["confirmed"]
         if "anchor" in data:  # v2
             slam.lm.anchor[:] = data["anchor"]
+        if "flags" in data:  # validated floor points (C2a)
+            slam.lm.flags[:] = data["flags"]
         slam.status = RELOCALIZING
         slam.n_loaded_keyframes = len(meta["keyframes"])
         for item in meta["keyframes"]:

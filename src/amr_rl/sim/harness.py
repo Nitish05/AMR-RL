@@ -71,19 +71,20 @@ class Session:
         if any(a <= frame.timestamp < b for a, b in self.blackouts):
             frame.rgb = np.zeros_like(frame.rgb)
         truth_at_frame = evaluator.true_pose(self.world)  # scoring only, same instant as the image
+        cmd = self.runtime.last_command  # what on_frame passes to the VSLAM (logged for turn analysis)
         self.runtime.on_frame(frame)
         screen, signal = self.runtime.tick(self.world.time)
         self.world.set_screen(screen, signal_pattern=signal)
         for _ in range(self.steps_per_control):
             self.world.step()
-        self._score(truth_at_frame, frame.timestamp)
+        self._score(truth_at_frame, frame.timestamp, cmd)
         state = self.runtime.last_state
         self.recorder.row({"sim_time": state["sim_time"], "generation": state["authority"]["generation"],
                            "activity": state["activity"], "localization": state["localization"],
                            "authority": state["authority"], "navigation": state["navigation"],
                            "interaction": state["interaction"], "camera": state["camera"]})
 
-    def _score(self, truth_pose, frame_time):
+    def _score(self, truth_pose, frame_time, cmd=None):
         truth = evaluator.to_map_frame(self.origin, truth_pose)
         est = self.runtime.pose
         err = None if est is None else evaluator.pose_error(est, truth)
@@ -92,6 +93,7 @@ class Session:
                            "err": None if err is None else err[0], "herr": None if err is None else err[1],
                            "sigma": self.runtime.sigma, "status": self.runtime.slam.status,
                            "activity": None if self.runtime.activity is None else self.runtime.activity.name,
+                           "cmd": None if cmd is None else [float(cmd[0]), float(cmd[1])],
                            **_track_fields(self.runtime.last_track)})
         touching = evaluator.robot_contacts(self.world)
         if touching:
@@ -146,7 +148,14 @@ def _track_fields(track):
     was lost or relocalised); empty before the first frame."""
     if track is None:
         return {}
-    return {"reason": track.reason, "inliers": int(track.inliers), "matched": int(track.matched)}
+    out = {"reason": track.reason, "inliers": int(track.inliers), "matched": int(track.matched),
+           "keyframe": bool(track.keyframe), "heading_sigma": track.heading_sigma}
+    info = {k: v for k, v in (track.info or {}).items() if k in ("turn", "turn_rot", "degraded")}
+    if (track.info or {}).get("turn_closure"):
+        info["turn_closure"] = True
+    if info:
+        out["info"] = info
+    return out
 
 
 def _episodes(contacts, gap=0.35):

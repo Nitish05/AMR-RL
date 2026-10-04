@@ -20,6 +20,8 @@ import cv2
 import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "eval"))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import capture_common  # noqa: E402
 from learning import ARENA_STARTS, map_origin_for  # noqa: E402
 
 from amr_rl.sim import evaluator  # noqa: E402
@@ -50,30 +52,11 @@ lx, ly = world.config["room"]["size"]
 
 
 def blocked(p, r):
-    """Scoring geometry: does a disc of radius r at p overlap walls, furniture or fixtures?"""
-    if abs(p[0]) > lx / 2 - r or abs(p[1]) > ly / 2 - r:
-        return True
-    boxes = [g for g in world.static_geometry if g["name"] != "evaluation_obstacle"]
-    for item, entity in world.fixtures.values():
-        xy = np.asarray(entity.get_pos()).reshape(3)[:2]
-        boxes.append({"size": item["size"], "xy": xy, "yaw": float(item.get("yaw", 0.0)),
-                      "round": item["shape"] in ("cylinder", "sphere")})
-    for b in boxes:
-        d = np.asarray(p, float) - np.asarray(b["xy"], float)
-        if b.get("round"):
-            if np.linalg.norm(d) <= b["size"][0] / 2 + r:
-                return True
-            continue
-        c, s = math.cos(b["yaw"]), math.sin(b["yaw"])
-        loc = np.array([c * d[0] + s * d[1], -s * d[0] + c * d[1]])
-        q = np.maximum(np.abs(loc) - np.asarray(b["size"][:2]) / 2, 0.0)
-        if np.linalg.norm(q) <= r:
-            return True
-    return False
+    return capture_common.blocked(world, p, r)
 
 
 def kf_distance(p):
-    return float(np.min(np.linalg.norm(kf_world - np.asarray(p)[None], axis=1)))
+    return capture_common.keyframe_distance(kf_world, p)
 
 
 positions = []
