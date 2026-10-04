@@ -113,11 +113,15 @@ def fixture_for(session, map_xy):
 
 
 def run_phase(phase, *, map_dir, memory_path, run_dir, seed, world="arena", start=None, map_origin=None,
-              detector="fixture", detector_device="auto"):
+              detector="fixture", detector_device="auto", vslam=None):
     policy = phase.get("policy", "learned")
     config = RuntimeConfig(supervisor=SupervisorConfig(require_heartbeat=False), policy=policy, seed=seed,
                            initial_survey=False, motivation=MotivationConfig(**phase.get("motivation", {})),
                            detector=detector, detector_device=detector_device)
+    for key, value in (vslam or {}).items():
+        if not hasattr(config.vslam, key):
+            raise ValueError(f"unknown VSLAMConfig field {key}")
+        setattr(config.vslam, key, value)
     consequences = load_consequences(phase["consequences"])
     session = Session(world, run_dir=run_dir, memory_path=memory_path, config=config, consequences=consequences,
                       seed=seed, inspection=False, map_dir=map_dir, map_origin=map_origin,
@@ -280,6 +284,7 @@ def main():
     parser.add_argument("--world", default="arena", help="arena or arena_textured (same layout and rules)")
     parser.add_argument("--detector", default="fixture", choices=["fixture", "open_vocab"])
     parser.add_argument("--detector-device", default="auto")
+    parser.add_argument("--vslam", nargs="*", default=[], help="VSLAMConfig overrides key=value (JSON values)")
     args = parser.parse_args()
     out = Path(args.out) if args.out else fresh_dir("learning")
     out.mkdir(parents=True, exist_ok=True)
@@ -303,7 +308,8 @@ def main():
                 try:
                     record = run_phase(phase, map_dir=args.map, memory_path=mem, run_dir=exp_dir / f"phase{index}",
                                        seed=1000 * seed + index, start=start, map_origin=origin, world=args.world,
-                                       detector=args.detector, detector_device=args.detector_device)
+                                       detector=args.detector, detector_device=args.detector_device,
+                                       vslam={k: json.loads(v) for k, v in (i.split("=", 1) for i in args.vslam)})
                     record["score"] = score(record)
                 except Exception as error:  # retained in the denominator
                     import traceback
