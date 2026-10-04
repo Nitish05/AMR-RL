@@ -49,5 +49,16 @@ console server and UI, screen expression, evaluation harness and scripts.
 | trimesh | 5.1.0 | asset generation (Studio env has 5.0.0) |
 | Genesis Studio | not imported | `docs/STUDIO.md` explains the optional project export; Studio revision `cd20c8c685f2b51263814fd0a6296bfd849bdce6` was read, never modified |
 
-No third-party model weights are downloaded or committed. The default semantic
-backend is an engineered describer; learned semantic models are a ledger item.
+No third-party model weights are committed. Optional models are fetched on request
+into the user's Hugging Face / torch-hub caches outside the repository, pinned by
+revision and loaded with `local_files_only` at run time:
+
+| Model | Licence | Pinned revision | Used by | Status |
+|---|---|---|---|---|
+| Depth Anything V2 Small (`depth-anything/Depth-Anything-V2-Small-hf`) | Apache-2.0 | `5426e4f0f36572d16453bbda7a8389317b1bef99` | `perception/near_depth.py` (near-field guard) | runtime, optional (`scripts/amr.sh fetch-depth-model`) |
+| MegaLoc (code `gmberton/MegaLoc`, weights on HF) | MIT | code `5fe0dd697c4a70ba3e23607f6716ab3c606b16db`, weights `a0f34722c4297ff787e022433799250180860af7` | `perception/place_recognition.py` (loop closure, retrieval) | runtime, optional (`scripts/amr.sh fetch-place-model`) |
+| Qwen3-VL-2B-Instruct (`Qwen/Qwen3-VL-2B-Instruct`) | Apache-2.0 | `89644892e4d85e24eaac8bacfd4f463576704203` | `scripts/dev/vlm_outcome_pilot.py` | evaluation only ([results/vlm-outcome-pilot.md](results/vlm-outcome-pilot.md)) |
+| SmolVLM2-500M-Video-Instruct (`HuggingFaceTB/SmolVLM2-500M-Video-Instruct`) | Apache-2.0 | `7b375e1b73b11138ff12fe22c8f2822d8fe03467` | `scripts/dev/vlm_outcome_pilot.py` | evaluation only; its processor needs `num2words` (LGPL, unmodified, evaluation environment only) |
+
+The default semantic backend is still an engineered describer, and outcomes come from
+the engineered colour detector.
