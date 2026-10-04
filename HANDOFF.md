@@ -18,6 +18,21 @@ Project rules are in `AGENTS.md` (read it first). Results with denominators are 
   Expect first-run bugs. Fix them, keep `scripts/amr.sh test` green, then commit.
 
 
+## Update: round 8 (2026-10-04): near-surface turn tail
+
+- The tail is wrong depth (wall/box faces lifted to the floor, times the lever arm), not edge aliasing.
+- Finalist **FA** passed every held-out criterion (`docs/results/turn-drift.md`, round 8). It is a combination of switches, all off by default:
+  - `turn_heading_gate` 0.65° / 0.3;
+  - `turn_gate_keyframes`;
+  - `turn_max_prediction_s` 4;
+  - `turn_gate_settle` 3;
+  - `c9_parallax_check="turn"`;
+  - `floor_validation="turn"`;
+  - `turn_closure="rotate"`.
+- It **failed the slip sweep on saved maps**, probably because the slip factor is learned slowly from a 0.85 start.
+- Next: robust slip estimation, then a new held-out capture, a new slip sweep, and live L1–L5.
+- New runtime switch `respect_degraded_heading` (off).
+
 ## Update: round 7 (2026-10-04): heading drift in in-place turns
 
 - Research: code map, 354-run analysis, literature.

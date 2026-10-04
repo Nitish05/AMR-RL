@@ -151,3 +151,96 @@ The commanded-turn gate (C8) removes the confidently wrong headings (5 % → abo
   - command-check flags.
 - **Harness logging.** The harness now logs, per frame, the command passed to the VSLAM, keyframes, heading sigma and turn flags, so live runs can be analysed for turns.
 - **An aborted run, kept in the record.** The first round-1 run used the working tree while `vslam.py` was being edited. It was stopped after the baseline variant and re-run from a pinned worktree (`work/evidence/turnbench-20261004/aborted-r1/`).
+
+---
+
+# Round 8: the near-surface tail
+
+Evidence: `work/evidence/turnbench-r8-20261004/`; pre-registration: [turn-drift-r8-prereg.md](turn-drift-r8-prereg.md).
+
+## Corrected diagnosis
+
+The round-7 account of the tail ("matches slide along the skirting edge") was wrong. Replaying 4,482 turning frames from 7 bad and 7 good sequences showed the following.
+
+- **The heading was well constrained.** Heading information in the pose Hessian (AUC 0.60) and the image spread of the inliers (AUC 0.43–0.57) do not separate the frames where the error jumps from the normal ones.
+- **Most of the points used were on a surface, not on the floor.** In jump frames, 55 % of the inliers lie on a wall or box face 0.15–0.3 m away that was lifted onto the floor; in normal frames, 0 %.
+- **The over-rotation follows that share and the lever-arm model.**
+
+  | share of lifted face points | estimated / true rotation |
+  |---|---|
+  | under 5 % | 1.00 |
+  | 40–60 % | 1.34 |
+  | over 80 % | 1.70 |
+
+  The model 1 + 0.125/d predicts 1.73 for a wall at 0.18 m.
+- **The points were created during the same turn.** 92 % had been made in the previous second, so later floor validation (C2a) comes too late.
+- **Close walls were hidden in the bins.** The round-7 bins counted objects only, so turns next to a wall fell into the middle bin. Round 8 bins by the nearest surface, walls included.
+
+## Candidates added
+
+All are switches in `VSLAMConfig`, off by default.
+- **C9** `c9_parallax_check`: before lifting a new point onto the floor, triangulate it against the previous keyframe.
+- **C10** `c10_weight`: give lower weight to unvalidated points made during the turn.
+- **C8b**: a tighter gate (0.65°, `turn_gate_frac` 0.3, or a 3-frame window), longer prediction during turns (`turn_max_prediction_s`), keyframes on gated frames (`turn_gate_keyframes`), and later a step-based comparison and 3 settle frames after command changes (`turn_gate_visual_step`, `turn_gate_settle`).
+- **C11** `floor_patch_size`: smaller ORB patches in the floor band.
+
+## Design rounds
+
+All values are p90 heading error after 360°, on map / fresh map. 108 sequences per replay mode.
+
+| variant | after 360° | near-surface bin | lost frames | note |
+|---|---|---|---|---|
+| baseline | 10.1 / 8.3 | 10.9 / 20.9 | 6.3 % / 0.1 % | |
+| C9 strict / lenient | 9.7 / 7.8; 10.2 / 7.5 | | strict loses more | little gain alone |
+| C10 | 17.8 / 12.6 | | | worse |
+| C8b per frame / window | 7.8 / 6.4; 7.0 / 4.6 | 8.5 / 7.1; 6.9 / 4.8 | 8.9 / 10.3 %; 13.7 / 16.6 % | accurate but loses tracking |
+| C11 | 12.1 / 4.5 | | **58.9 %** / 0 % | old maps use other descriptors; on maps rebuilt with C11: 5.9 on map but 24 % lost |
+| gate + keyframes on gated frames | 8.3 / 6.3 | 9.9 / 7.1 | 5.4 % / 0 % | the loss problem is solved |
+| + C9 + C2a (F1) | 7.6 / 4.0 | 6.2 / 3.1 | 5.4 % / 0 % | |
+| F1 + C5 | 6.3 / 3.6 | | | |
+| F1 + settle | 7.6 / 4.0 | | | removes a 4–6° offset left by one gated frame at a turn reversal |
+
+The finalists, frozen at commit `946491a`:
+- **FA** = gate (0.65° / 0.3) + keyframes on gated frames + 4 s turn prediction + settle 3 + C9 (turn) + C2a (turn) + C5 (rotate).
+- **FB** = FA without C5.
+
+On the odd-numbered positions, FA scored 10.7 / 2.9 against the baseline's 13.2 / 6.0. On saved maps the remainder is mostly distortion already in the maps.
+
+## Held out, run once
+
+Fresh seed-2 capture, including 4 positions next to a wall in each world.
+- On map: 232 sequences (3 worlds).
+- Fresh map: 320 sequences (4 worlds).
+
+| | baseline | FA | FB | limit |
+|---|---|---|---|---|
+| e360 p90 | 16.2 / 15.6 | **2.3 / 2.2** | 2.8 / 3.2 | ≤ 5 |
+| near-surface p90 | 19.8 / 19.2 | **2.8 / 4.2** | 2.8 / 4.8 | ≤ 8 |
+| e720 p90 | 31.9 / 30.5 | **2.4 / 1.0** | 2.9 / 3.1 | ≤ 7 |
+| back to start, p90 | 2.6 / 0.2 | 2.7 / 0.3 | 2.7 / 0.3 | ≤ 3 |
+| lost frames | 12.1 % / 5.5 % | 10.5 % / 4.9 % | 10.5 % / 4.9 % | ≤ +1 pp |
+| predicted frames | 2.5 % / 0.5 % | 3.2 % / 1.1 % | 3.2 % / 1.1 % | ≤ +2 pp |
+| confidently wrong frames | 6.9 % / 12.5 % | **0.0 % / 0.1 %** | 0.0 % / 0.1 % | ≤ 0.5 % |
+| jump frames | 2.8 % / 3.0 % | 0.3 % / 0.2 % | 0.3 % / 0.2 % | ≤ 30 % of baseline |
+| ms per frame, p95 | 218 / 94 | 183 / 81 | 126 / 69 | ≤ 1.25× |
+
+Both finalists pass all held-out criteria. Under the choice rule FA wins: FB is 1.03° worse on fresh maps, just outside the 1° margin.
+
+## Slip robustness: FA fails
+
+These are reset-mode captures on arena, 24 sequences each. The pose is set every frame to slip × the commanded rotation.
+
+| true slip | replay | baseline e360 p90 | FA e360 p90 | baseline → FA, confidently wrong frames | baseline → FA, lost frames |
+|---|---|---|---|---|---|
+| 0.75 | fresh map | 3.2 | **0.2** | 0.9 % → 0 % | 8.0 % → 7.0 % |
+| 0.75 | saved map | 5.2 | **17.6** | 1.2 % → **19 %** | 10.5 % → 9.6 % |
+| 1.0 | fresh map | 0.2 | 0.2 | 4.7 % → 4.7 % | 7.2 % → 7.6 % |
+| 1.0 | saved map | 5.1 | **18.7** (e720 41) | 1.2 % → **36 %** | 8.7 % → **18.1 %** |
+
+The robustness criterion is not met, so FA is **not adopted** and the live validation (L1–L5) was not started.
+
+**Suspected cause (not yet confirmed).** When FA overrides vision, it uses the slip-scaled command. The slip factor starts at an engineered 0.85, is learned slowly (2 % per frame, and only on frames with at least 150 inliers), and is reset for every new session. When the true slip differs, every overridden frame adds error. Saved maps give fewer high-inlier frames, so the factor may never adapt there.
+
+The reset captures are idealised: perfectly constant slip and no wheel lag. The criterion still stands as registered.
+
+**Next:** make the slip factor robust (fast learning from well-tracked turn frames, and a gate that widens while the factor is uncertain), then re-test on a new held-out capture and a new slip sweep.
