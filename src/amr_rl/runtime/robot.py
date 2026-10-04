@@ -95,6 +95,19 @@ class RuntimeConfig:
     coverage_min_kf_dist: float = 0.3
 
 
+def apply_turn_preset(cfg, name):
+    """Apply a named turn-handling preset (perception/vslam.py TURN_PRESETS) and the
+    runtime's degraded-heading handling that goes with it. ``None``/"none": unchanged."""
+    if name in (None, "none"):
+        return cfg
+    from ..perception.vslam import TURN_PRESETS
+
+    for key, value in TURN_PRESETS[name].items():
+        setattr(cfg.vslam, key, value)
+    cfg.respect_degraded_heading = True
+    return cfg
+
+
 def choose_recovery(*, loss_reason, last_command, nudge_retrace, turning_clearance, required_clearance, certified):
     """Bounded recovery after localisation was lost (pure; unit-tested).
 

@@ -28,7 +28,7 @@ from amr_rl.behavior.chooser import MotivationConfig  # noqa: E402
 from amr_rl.control.supervisor import SupervisorConfig  # noqa: E402
 from amr_rl.learning.memory import LearningConfig  # noqa: E402
 from amr_rl.robot.spec import PROJECT_ROOT  # noqa: E402
-from amr_rl.runtime.robot import RuntimeConfig  # noqa: E402
+from amr_rl.runtime.robot import RuntimeConfig, apply_turn_preset  # noqa: E402
 from amr_rl.sim import evaluator  # noqa: E402
 from amr_rl.sim.harness import Session  # noqa: E402
 
@@ -113,11 +113,12 @@ def fixture_for(session, map_xy):
 
 
 def run_phase(phase, *, map_dir, memory_path, run_dir, seed, world="arena", start=None, map_origin=None,
-              detector="fixture", detector_device="auto", vslam=None):
+              detector="fixture", detector_device="auto", vslam=None, turn_preset="none"):
     policy = phase.get("policy", "learned")
     config = RuntimeConfig(supervisor=SupervisorConfig(require_heartbeat=False), policy=policy, seed=seed,
                            initial_survey=False, motivation=MotivationConfig(**phase.get("motivation", {})),
                            detector=detector, detector_device=detector_device)
+    apply_turn_preset(config, turn_preset)
     for key, value in (vslam or {}).items():
         if not hasattr(config.vslam, key):
             raise ValueError(f"unknown VSLAMConfig field {key}")
@@ -286,6 +287,7 @@ def main():
     parser.add_argument("--detector", default="fixture", choices=["fixture", "open_vocab"])
     parser.add_argument("--detector-device", default="auto")
     parser.add_argument("--vslam", nargs="*", default=[], help="VSLAMConfig overrides key=value (JSON values)")
+    parser.add_argument("--turn-preset", default="none", help="named turn-handling preset (vslam.TURN_PRESETS)")
     args = parser.parse_args()
     out = Path(args.out) if args.out else fresh_dir("learning")
     out.mkdir(parents=True, exist_ok=True)
@@ -310,7 +312,8 @@ def main():
                     record = run_phase(phase, map_dir=args.map, memory_path=mem, run_dir=exp_dir / f"phase{index}",
                                        seed=1000 * seed + index, start=start, map_origin=origin, world=args.world,
                                        detector=args.detector, detector_device=args.detector_device,
-                                       vslam={k: json.loads(v) for k, v in (i.split("=", 1) for i in args.vslam)})
+                                       vslam={k: json.loads(v) for k, v in (i.split("=", 1) for i in args.vslam)},
+                                       turn_preset=args.turn_preset)
                     record["score"] = score(record)
                 except Exception as error:  # retained in the denominator
                     import traceback

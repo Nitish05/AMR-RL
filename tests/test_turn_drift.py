@@ -110,3 +110,13 @@ def test_alignment_turn_continues_on_turn_prediction_only_when_enabled():
     assert g.step(rt((0.2, 0.1), enabled=True), 0.0) == (0.0, 0.0)  # never drive on a prediction
     g = Goto((1.0, 0.0))
     assert g.step(rt((0.0, 0.4), enabled=True, turning=False), 0.0) == (0.0, 0.0)
+
+
+def test_turn_preset_sets_the_finalist_and_degraded_heading_handling():
+    from amr_rl.perception.vslam import TURN_PRESETS
+    from amr_rl.runtime.robot import RuntimeConfig, apply_turn_preset
+
+    cfg = apply_turn_preset(RuntimeConfig(), "fam")
+    assert cfg.respect_degraded_heading
+    assert all(getattr(cfg.vslam, k) == v for k, v in TURN_PRESETS["fam"].items())
+    assert not apply_turn_preset(RuntimeConfig(), "none").respect_degraded_heading

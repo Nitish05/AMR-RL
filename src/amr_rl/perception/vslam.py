@@ -293,6 +293,17 @@ class VSLAMConfig:
     visible_once_per_frame: bool = False
 
 
+# Named turn-handling configurations (docs/results/turn-drift.md). "fam": round-8
+# finalist FAm, frozen at 993459f (not a default; under live validation).
+TURN_PRESETS = {
+    "fam": {
+        "turn_heading_gate": True, "turn_gate_deg": 0.65, "turn_gate_frac": 0.3, "turn_max_prediction_s": 4.0,
+        "turn_gate_keyframes": True, "c9_parallax_check": "turn", "floor_validation": "turn", "turn_gate_settle": 3,
+        "turn_closure": "rotate", "turn_slip_mode": "median", "turn_slip_min_inliers": 100,
+    },
+}
+
+
 @dataclass
 class Keyframe:
     id: int

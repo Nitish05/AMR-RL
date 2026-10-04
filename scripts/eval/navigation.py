@@ -25,7 +25,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from common import dump, fresh_dir, provenance, score_loops, trajectory_metrics  # noqa: E402
 
 from amr_rl.control.supervisor import SupervisorConfig  # noqa: E402
-from amr_rl.runtime.robot import RuntimeConfig  # noqa: E402
+from amr_rl.runtime.robot import RuntimeConfig, apply_turn_preset  # noqa: E402
 from amr_rl.sim import evaluator  # noqa: E402
 from amr_rl.sim.harness import Session  # noqa: E402
 from amr_rl.sim.world import WORLD_DIR, load_world_config  # noqa: E402
@@ -245,7 +245,7 @@ def fault_test(session, log, seed, fault, *, blackout=None, obstacle=False, min_
     return record
 
 
-def evaluate_world(name, out_root, map_seconds, seed, loop_closure=True):
+def evaluate_world(name, out_root, map_seconds, seed, loop_closure=True, turn_preset="none"):
     """Seed 0 uses the configured start; seed k turns the start heading by k x 72 deg
     (same position, so the start stays valid in every room)."""
     run_dir = out_root / (name if seed == 0 else f"{name}-s{seed}")
@@ -254,6 +254,7 @@ def evaluate_world(name, out_root, map_seconds, seed, loop_closure=True):
     start[2] = float(start[2] + seed * 2 * math.pi / 5)
     config = RuntimeConfig(supervisor=SupervisorConfig(require_heartbeat=False), policy="explore_only", seed=seed,
                            place_descriptor="megaloc" if loop_closure else None)
+    apply_turn_preset(config, turn_preset)
     session = Session(name, run_dir=run_dir, memory_path=run_dir / "throwaway-memory.sqlite", config=config,
                       seed=seed, inspection=False, world_overrides={"robot_start": start})
     log = []
@@ -380,6 +381,7 @@ def main():
     parser.add_argument("--seeds", nargs="+", type=int, default=[0])
     parser.add_argument("--out", default=None)
     parser.add_argument("--no-loop-closure", action="store_true", help="A/B: run without loop closure")
+    parser.add_argument("--turn-preset", default="none", help="A/B: named turn-handling preset (vslam.TURN_PRESETS)")
     args = parser.parse_args()
     out = Path(args.out) if args.out else fresh_dir("navigation")
     out.mkdir(parents=True, exist_ok=True)
@@ -393,7 +395,8 @@ def main():
             print(f"== {name} seed {seed}", flush=True)
             results = [r for r in results if not (r.get("world") == name and r.get("seed", 0) == seed)]
             try:
-                results.append(evaluate_world(name, out, args.map_seconds, seed, not args.no_loop_closure))
+                results.append(evaluate_world(name, out, args.map_seconds, seed, not args.no_loop_closure,
+                                              turn_preset=args.turn_preset))
             except Exception as error:  # retain failed runs in the denominator
                 import traceback
 
