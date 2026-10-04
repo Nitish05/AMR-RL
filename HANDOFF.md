@@ -44,7 +44,10 @@ Open, in order:
 1. **Depth-guard creep contacted the evaluation box** in one navigation run (home_a
    s1, t = 425 s). FIXED in round 6 (`7ec324e`): unseen faces, loop-closure replay erasing guard marks, rotate recovery.
 2. **Loop closure** only helps when the robot revisits a region mapped before the
-   drift. Preferring the oldest matching keyframe is a candidate next step.
+   drift. Round 6 evaluated uncertainty slots, active revisits and covisibility edges
+   (live A/B + paired shadow evaluation, `docs/results/loop-closure.md`): not adopted,
+   defaults stay round 5. Correction helps drifted maps and hurts accurate ones;
+   the pose-graph-only back-end misses re-anchoring, so global BA is the next step.
 3. **Relocalisation** more than ~0.3 m from keyframes still mostly fails (one start
    per map).
 4. **The learning suite** (restart, reversal, inert, noisy) has not been re-run on

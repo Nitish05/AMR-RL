@@ -71,7 +71,7 @@ class RuntimeConfig:
     # position relative to the robot has become uncertain in the pose graph (sigma >=
     # revisit_sigma), drive back to its pose and heading so a loop can close (at most
     # once per revisit_interval). Engineered behaviour; 0 disables.
-    revisit_sigma: float = 0.08
+    revisit_sigma: float = 0.0  # 0.08 evaluated in round 6, not adopted (docs/results/loop-closure.md)
     revisit_interval: float = 120.0
     revisit_early_s: float = 60.0
     # Coverage pass (mapping sessions): once frontiers run out, or when ``coverage_mode``

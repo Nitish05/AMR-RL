@@ -226,3 +226,77 @@ found three causes:
 
 All three are fixed in `7ec324e`. The navigation re-run had 0 contacts and a closest
 box approach of 0.165 m.
+
+## Round 6: closures that correct more drift (evaluated, not adopted)
+
+**Defaults:** unchanged from round 5:
+- the 3 most similar candidates;
+- correction on;
+- no uncertainty slots, revisits or covisibility edges.
+
+Each change below is switchable:
+- `VSLAMConfig.loop_uncertain_k`;
+- `RuntimeConfig.revisit_sigma`;
+- `VSLAMConfig.covis_max_per_kf`;
+- `VSLAMConfig.loop_shadow`.
+
+**What was tried.** In round 5 only ~7 of 94 closures fixed ≥ 3 cm of real drift, so three changes were tried:
+1. **Uncertainty slots.** Check the 2 most similar candidates, plus up to 2 more whose pose-graph σ relative to the current keyframe is ≥ 3 cm (`relative_sigma`: Dijkstra over odometry and loop edges).
+2. **Active revisits.** During mapping, drive back to an early keyframe when its σ exceeds 8 cm.
+3. **Covisibility (essential-graph) edges.** Link a keyframe to older keyframes whose landmarks it was tracked on (≥ 30 shared).
+
+The pass rule was fixed beforehand:
+- 0 false closures;
+- keyframe-map RMSE better or equal in ≥ 4/6 scenarios;
+- none worse by more than 2 cm.
+
+### Live A/B
+
+Six fresh scenarios, three variants each:
+- off: no loop closure;
+- r5: round-5 rules;
+- new: changes 1 and 2.
+
+Evidence: `work/evidence/i2-{off,r5,new}-*`. Keyframe-map RMSE in cm (map ATE in brackets):
+
+| scenario | off | r5 | new |
+|---|---|---|---|
+| home_a s3 | 5.9 | 3.2 | **2.3** |
+| home_a s4 | 7.5 | 3.1 | **2.6** (4.7) |
+| heldout_c s3 | 7.7 | 6.3 | **5.0** (3.7) |
+| heldout_b s3 | **2.3** | 9.4 (3.9) | 5.1 (1 false closure) |
+| heldout_b s4 | **2.5** | 3.7 | 3.9 |
+| home_a_dim s2 | **2.5** | 4.3 | 5.0 |
+
+"new" was better than off in 3/6 scenarios and worse by more than 2 cm in 2. It also had one false closure. **The pass rule failed.** r5 split 3/3 against off.
+
+The pattern is clear. Loop correction helps runs that had drifted (6–8 cm), and it hurts runs that were already accurate (2–3 cm).
+
+### Paired shadow evaluation
+
+Live runs diverge after the first closure, so they cannot separate the rules. `--loop-shadow` builds instead detect, verify and confirm loops exactly as live, but only record them. `scripts/dev/loop_shadow_eval.py` then optimises the same final keyframes with and without the recorded constraints. It uses the live pose graph and scores against the truth at each keyframe's time.
+
+Runs: 12, of which 3 were arena runs (evaluation only). Evidence:
+- `work/evidence/shadow-*` and `shadow-eval-20261003.json`;
+- `work/evidence/shadow2-*` (with covisibility) and `shadow2-eval-20261003.json`;
+- `shadow2-gapbreak-20261003.txt`.
+
+| back-end variant | better than none | worse than none | median change |
+|---|---|---|---|
+| round-5 loop edges | 2/12 | 6/12 | +0.2 cm |
+| + covisibility edges | 3/12 | 4/12 | +0.1 cm |
+| + covisibility, odometry edges loosened across tracking gaps > 3 s | 3/12 | 4/12 | +0.1 cm |
+
+The rule choice did not matter here. Uncertainty slots added only 0–2 constraints per run, and "all" scored the same as "r5".
+
+The constraints themselves were accurate: ≤ 1.3 cm / 1.3° against the truth. The damage comes from the back-end.
+
+**Diagnosis (arena s3: 7.6 → 12.7 cm).** Tracking runs against the persistent map. After a tracking loss (36.9 s at keyframe 628), and gradually as the robot moves through mapped space, new keyframes re-anchor to old landmarks. A keyframe pose graph models only the odometry chain and the loop edges, so it does not see this re-anchoring. A correct loop edge then bends a chain whose real constraints are elsewhere: keyframes 520–700 went from 5–7 cm to 20–24 cm. Covisibility edges are the essential-graph approximation of that anchoring. They removed two of the six regressions but not the large one, and loosening odometry across gaps did not help either.
+
+**Conclusion and next step.** The planar loop detector and verifier work. Correcting the map through this pose-graph-only back-end is not a reliable gain:
+- it is large where a pre-drift region is revisited;
+- it is negative on maps that were already accurate.
+
+Round-5 behaviour stays the default, because the navigation A/B validated it: own-map arrivals 35/44 → 38/46 and drift misses 3 → 1. The round-6 additions stay off.
+
+What should fix this is a joint optimisation of keyframes and landmarks after a closure: global bundle adjustment over planar poses and floor landmarks, as ORB-SLAM runs after its essential-graph step. The test is the same paired shadow evaluation, so the recorded constraints can be replayed without new simulation.

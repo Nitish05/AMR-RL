@@ -49,6 +49,7 @@ def main():
                         place_descriptor=None if args.no_loop_closure else "megaloc")
     if args.loop_shadow:  # log more candidates; revisits change the trajectory, so off
         cfg.vslam.loop_shadow, cfg.vslam.loop_top_k, cfg.vslam.loop_uncertain_k, cfg.revisit_sigma = True, 3, 3, 0.0
+        cfg.vslam.covis_max_per_kf = 3  # recorded for the offline comparison only
     if args.legacy_loop_candidates:
         cfg.vslam.loop_top_k, cfg.vslam.loop_uncertain_k, cfg.revisit_sigma = 3, 0, 0.0
     # Seed k turns the configured start heading by k x 72 deg (seed 0 = configured start).

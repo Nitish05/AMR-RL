@@ -118,12 +118,12 @@ class VSLAMConfig:
     loop_min_gap_kf: int = 30
     loop_min_gap_s: float = 30.0
     loop_min_travel: float = 0.6       # m of path since the candidate: a revisit, not continuous tracking
-    loop_top_k: int = 2                # most similar candidates checked every keyframe
+    loop_top_k: int = 3                # most similar candidates checked every keyframe (round 5)
     # ...plus up to loop_uncertain_k more: the most similar candidates whose position
     # relative to the current keyframe is uncertain in the pose graph (sigma >=
     # loop_min_sigma): those are the closures that can correct real drift. Round 5:
     # only ~7 of 94 closures fixed >= 3 cm, most were against recently tied-in regions.
-    loop_uncertain_k: int = 2
+    loop_uncertain_k: int = 0          # evaluated in round 6, not adopted (docs/results/loop-closure.md)
     loop_min_sigma: float = 0.03
     loop_min_similarity: float = 0.55
     loop_window_kf: int = 8            # candidate's landmarks: anchored within +- this many keyframes
@@ -149,8 +149,10 @@ class VSLAMConfig:
     # edges the pose graph treats consecutive keyframes as a free odometry chain and
     # drags keyframes that had re-anchored to the old map along with a loop correction
     # (shadow evaluation: correct loops made 6/12 maps worse, e.g. 5.8 -> 23 cm).
+    # Offline they reduced that to 4/12 but did not make loop correction a net gain;
+    # not validated live, so off (covis_max_per_kf = 3 to enable).
     covis_min_shared: int = 30
-    covis_max_per_kf: int = 3
+    covis_max_per_kf: int = 0
     motion_prior: bool = True
     consistency_window: float = 3.0
     # Fast "frozen estimate" check: commanded travel >= freeze_min_cmd within
