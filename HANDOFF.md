@@ -18,6 +18,18 @@ Project rules are in `AGENTS.md` (read it first). Results with denominators are 
   Expect first-run bugs. Fix them, keep `scripts/amr.sh test` green, then commit.
 
 
+## Update: round 7 (2026-10-04): heading drift in in-place turns
+
+- Research: code map, 354-run analysis, literature.
+- Benchmark: `scripts/dev/turn_capture.py`, `turn_bench.py`.
+- Eight candidates as `VSLAMConfig` switches, all off (`docs/results/turn-drift.md`, pre-registration `turn-drift-prereg.md`).
+- None passed held out:
+  - floor validation (C2a) fixes the typical near-object drift but not the tail;
+  - the tail is heading locks near featureless walls (skirting edge);
+  - the commanded-turn gate (C8) removes the wrong headings but loses tracking.
+- Next: a degeneracy-aware gate that keeps the lock (spread of matches along the turn, slip-scaled dead reckoning, longer prediction while turning).
+- Harness now logs the command per frame.
+
 ## Update: round 6 (2026-10-03): the five open items worked in order
 
 1. **Safety** (`7ec324e`): fixed (0 contacts in 12 navigation runs).
