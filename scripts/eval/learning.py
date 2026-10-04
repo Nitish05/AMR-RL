@@ -129,7 +129,8 @@ def run_phase(phase, *, map_dir, memory_path, run_dir, seed, world="arena", star
     rt = session.runtime
     record = {"phase": phase, "policy": policy, "seed": seed, "start_world": None if start is None else list(start),
               "memory_sessions_before": rt.memory.counts()["sessions"] - 1,
-              "authority_at_start": rt.supervisor.snapshot(), "enable_attempts": [], "switches": []}
+              "authority_at_start": rt.supervisor.snapshot(), "enable_attempts": [], "switches": [],
+              "detector": rt.detector_status}
     # Relocalize from fresh onboard images before any authority is granted.
     t_reloc = None
     record["operator_turns"] = []

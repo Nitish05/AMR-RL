@@ -45,6 +45,24 @@ def box_iou(a, b):
     return inter / max(union, 1e-9)
 
 
+def _offline_config(repo, rev):
+    """The model config with its timm backbone resolved locally. transformers otherwise
+    asks the Hugging Face Hub whether the backbone name is a repository, which fails
+    (and must not happen) offline."""
+    from transformers import AutoConfig
+    from transformers.configuration_utils import PreTrainedConfig
+
+    data, _ = PreTrainedConfig.get_config_dict(repo, revision=rev, local_files_only=True)
+    backbone = data.get("backbone")
+    if backbone and not data.get("backbone_config"):
+        data["backbone_config"] = {"model_type": "timm_backbone", "backbone": backbone,
+                                   **(data.get("backbone_kwargs") or {})}
+        data["backbone"], data["backbone_kwargs"] = None, None
+    data["use_pretrained_backbone"] = False  # weights come from the pinned checkpoint
+    model_type = data.pop("model_type")
+    return AutoConfig.for_model(model_type, **data)
+
+
 class OpenVocabDetector:
     # Defaults frozen on the arena_textured design capture (docs/results/textured-worlds.md)
     # before the held-out home_a_textured capture was scored. LLMDet-tiny was tried
@@ -74,7 +92,7 @@ class OpenVocabDetector:
         self.flag_color_share = flag_color_share
         self.processor = AutoProcessor.from_pretrained(repo, revision=rev, local_files_only=True)
         self.net = AutoModelForZeroShotObjectDetection.from_pretrained(
-            repo, revision=rev, local_files_only=True).to(device).eval()
+            repo, revision=rev, local_files_only=True, config=_offline_config(repo, rev)).to(device).eval()
 
     # ------------------------------------------------------------ proposals
     def proposals(self, rgb):
