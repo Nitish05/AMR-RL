@@ -61,3 +61,32 @@ def test_short_episodes_run_and_score_for_every_policy():
 def test_clean_learner_finds_rewards():
     s = Episode(EpisodeConfig(seconds=600, seed=1, noise=NOISE_PRESETS["clean"])).run().summary()
     assert s["rewards"] >= 2 and s["label_accuracy"] is not None and s["label_accuracy"] > 0.9
+
+
+def test_measured_flag_errors_are_one_sided_and_read_from_a_benchmark(tmp_path):
+    import json
+
+    w = SyntheticWorld(WorldConfig(), np.random.default_rng(1))
+    obj = w.objects[0]
+    pose = np.array([obj.xy[0] - 1.0, obj.xy[1], 0.0])
+
+    def tokens(noise):
+        p = NoisyPerception(w, noise, RobotConfig(), np.random.default_rng(0))
+        return {d.state_token for _ in range(20) for d in p.detect(pose, 0.1) if d._true == obj.index}
+
+    obj.state = "attach:none"
+    assert tokens(NoiseConfig(false_flag=1.0, false_flag_color="red")) == {"attach:red"}
+    assert tokens(NoiseConfig(flag_miss=1.0)) == {"attach:none"}
+    obj.state = "attach:yellow"
+    assert tokens(NoiseConfig(flag_miss=1.0)) == {"attach:none"}
+    assert tokens(NoiseConfig(false_flag=1.0)) == {"attach:yellow"}
+    rows = [{"name": "a", "range": 1.0, "truncated": False, "matched": True, "pos_err": 0.02,
+             "state_truth": "attach:yellow", "state_pred": "attach:none"},
+            {"name": "a", "range": 1.0, "truncated": False, "matched": True, "pos_err": 0.02,
+             "state_truth": "attach:none", "state_pred": "attach:none"},
+            {"name": "b", "range": 1.5, "truncated": False, "matched": False},
+            {"name": "c", "range": 3.0, "truncated": False, "matched": False}]
+    (tmp_path / "bench.json").write_text(json.dumps({"rows": rows}))
+    n = NoiseConfig.from_measurement(tmp_path / "bench.json")
+    assert abs(n.miss - 1 / 3) < 1e-9 and n.flag_miss == 1.0 and n.false_flag == 0.0
+    assert abs(n.pos_sigma - 0.02 / 1.1774) < 1e-6

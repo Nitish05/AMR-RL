@@ -57,6 +57,15 @@ case "$cmd" in
     # Hugging Face cache outside the repository. Without them the near-field guard is off.
     "$PY" -c "from amr_rl.perception.near_depth import load_backend; import sys; sys.exit(0 if load_backend(allow_download=True) else 1)"
     ;;
+  fetch-detector-model)
+    # Pinned OmDet-Turbo (open-vocabulary detector) and DINOv2-S (re-ID embedder), both
+    # Apache-2.0, into the Hugging Face cache outside the repository (docs/PROVENANCE.md).
+    "$PY" -c "from huggingface_hub import snapshot_download as d; from amr_rl.perception.open_vocab import MODELS; from amr_rl.perception import reid; r, v, _ = MODELS['omdet']; d(r, revision=v); d(reid.MODEL_ID, revision=reid.MODEL_REVISION); print('detector models ready')"
+    ;;
+  fetch-vlm-model)
+    # Pinned Qwen3-VL-2B-Instruct (Apache-2.0) for the offline outcome pilot (evaluation only).
+    "$PY" -c "import sys; sys.path.insert(0, 'scripts/dev'); from huggingface_hub import snapshot_download as d; from vlm_outcome_pilot import MODELS; r, v, _ = MODELS['qwen3vl']; d(r, revision=v); print('vlm ready')"
+    ;;
   test)
     "$PY" -m pytest -q -p no:cacheprovider -m "not genesis" "$@"
     "$PY" -m ruff check --no-cache src tests scripts
@@ -82,6 +91,6 @@ case "$cmd" in
     "$PY" scripts/eval/learning.py "$@"
     ;;
   *)
-    echo "usage: scripts/amr.sh {setup|bench-setup|bench-test|learner-bench|fetch-depth-model|fetch-place-model|test|test-sim|generate-robot|app|map|eval-nav|eval-learning} [args]"
+    echo "usage: scripts/amr.sh {setup|bench-setup|bench-test|learner-bench|fetch-depth-model|fetch-place-model|fetch-detector-model|fetch-vlm-model|test|test-sim|generate-robot|app|map|eval-nav|eval-learning} [args]"
     ;;
 esac

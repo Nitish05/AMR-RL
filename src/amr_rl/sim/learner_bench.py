@@ -56,7 +56,39 @@ class NoiseConfig:
     label_confusion: float = 0.0     # per response: the new attachment is consistently reported as a
     #                                  neighbouring colour for that whole response (VLM synonym error)
     spurious_response: float = 0.0   # per interaction: a change that did not happen is reported
+    flag_miss: float = 0.0           # per frame: a raised flag is read as "none" (measured detectors)
+    false_flag: float = 0.0          # per frame: "none" is read as a flag of colour false_flag_color
+    false_flag_color: str = "red"
     name: str = "custom"
+
+    @classmethod
+    def from_measurement(cls, path, name="measured"):
+        """Error rates measured by scripts/eval/detector_bench.py (objects within 2 m).
+        Measured: missed detections, position error (sigma from the median of a 2-D
+        error, Rayleigh), position outliers (> 0.3 m), flag read as none, none read as
+        a flag, and yellow/red confusion (applied per response). Not measured by that
+        benchmark and set to the "low" preset: appearance jitter and corner-on views."""
+        import json
+        from pathlib import Path
+
+        r = json.loads(Path(path).read_text())
+        rows = [x for x in r["rows"] if "name" in x and x["range"] < 2.0 and not x["truncated"]]
+        errs = np.array([x["pos_err"] for x in rows if "pos_err" in x])
+        st = [x for x in rows if "state_truth" in x]
+        flagged = [x for x in st if x["state_truth"] != "attach:none"]
+        plain = [x for x in st if x["state_truth"] == "attach:none"]
+        wrong_colour = [x for x in flagged if x["state_pred"] not in ("attach:none", x["state_truth"])]
+        false = [x["state_pred"] for x in plain if x["state_pred"] != "attach:none"]
+        return cls(
+            pos_sigma=float(np.median(errs) / 1.1774) if len(errs) else 0.02,
+            pos_outlier=float(np.mean(errs > 0.3)) if len(errs) else 0.0,
+            appearance_jitter=0.5, bad_view=0.03,
+            miss=float(1.0 - np.mean([x["matched"] for x in rows])) if rows else 0.0,
+            flag_miss=float(np.mean([x["state_pred"] == "attach:none" for x in flagged])) if flagged else 0.0,
+            false_flag=len(false) / max(1, len(plain)),
+            false_flag_color=max(set(false), key=false.count).split(":")[1] if false else "red",
+            label_confusion=len(wrong_colour) / max(1, len(flagged)),
+            name=name)
 
 
 NOISE_PRESETS = {
@@ -247,6 +279,10 @@ class NoisyPerception:
                 token = f"attach:{COLORS[int(self.rng.integers(len(COLORS)))]}"
             else:
                 token = "attach:none"
+        elif token != "attach:none" and self.rng.random() < n.flag_miss:
+            token = "attach:none"
+        elif token == "attach:none" and self.rng.random() < n.false_flag:
+            token = f"attach:{n.false_flag_color}"
         return token
 
     def detect(self, pose, now, all_around=False):

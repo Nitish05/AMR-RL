@@ -58,6 +58,9 @@ revision and loaded with `local_files_only` at run time:
 | Depth Anything V2 Small (`depth-anything/Depth-Anything-V2-Small-hf`) | Apache-2.0 | `5426e4f0f36572d16453bbda7a8389317b1bef99` | `perception/near_depth.py` (near-field guard) | runtime, optional (`scripts/amr.sh fetch-depth-model`) |
 | MegaLoc (code `gmberton/MegaLoc`, weights on HF) | MIT | code `5fe0dd697c4a70ba3e23607f6716ab3c606b16db`, weights `a0f34722c4297ff787e022433799250180860af7` | `perception/place_recognition.py` (loop closure, retrieval) | runtime, optional (`scripts/amr.sh fetch-place-model`) |
 | Qwen3-VL-2B-Instruct (`Qwen/Qwen3-VL-2B-Instruct`) | Apache-2.0 | `89644892e4d85e24eaac8bacfd4f463576704203` | `scripts/dev/vlm_outcome_pilot.py` | evaluation only ([results/vlm-outcome-pilot.md](results/vlm-outcome-pilot.md)) |
+| OmDet-Turbo Swin-T (`omlab/omdet-turbo-swin-tiny-hf`) | Apache-2.0 | `7fe93cecfb770c4d76cf71163956221249cab566` | `perception/open_vocab.py` (`RuntimeConfig.detector="open_vocab"`) | runtime, optional, off by default (`scripts/amr.sh fetch-detector-model`); needs `timm` (Apache-2.0) |
+| DINOv2-S (`facebook/dinov2-small`) | Apache-2.0 | `ed25f3a31f01632728cabb09d1542f84ab7b0056` | `perception/reid.py` | evaluation (`scripts/eval/reid_bench.py`); not used by identity |
+| LLMDet-tiny (`iSEE-Laboratory/llmdet_tiny`) | Apache-2.0 | `d05199165a19320a9236396e20fca0a5e065189c` | evaluated in `perception/open_vocab.py` (`backend="llmdet"`) | rejected (results/textured-worlds.md) |
 | SmolVLM2-500M-Video-Instruct (`HuggingFaceTB/SmolVLM2-500M-Video-Instruct`) | Apache-2.0 | `7b375e1b73b11138ff12fe22c8f2822d8fe03467` | `scripts/dev/vlm_outcome_pilot.py` | evaluation only; its processor needs `num2words` (LGPL, unmodified, evaluation environment only) |
 
 The default semantic backend is still an engineered describer, and outcomes come from

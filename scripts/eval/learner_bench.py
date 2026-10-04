@@ -49,9 +49,9 @@ BASELINES = ("random", "nearest", "fixed")
 
 
 def run_job(job):
-    exp, noise_name, policy, seed, quick, before_frames = job
+    exp, noise, policy, seed, quick, before_frames = job
+    noise_name = noise.name
     t0 = time.time()
-    noise = NOISE_PRESETS[noise_name]
     robot = RobotConfig(before_frames=before_frames)
     scale = 0.4 if quick else 1.0
     try:
@@ -167,8 +167,8 @@ def _frac(values):
     return f"{sum(bool(x) for x in v)}/{len(v)}" if v else "—"
 
 
-def report(rows, out: Path, args):
-    noises = [n for n in NOISE_PRESETS if any(r["noise"] == n for r in rows)]
+def report(rows, out: Path, args, presets=NOISE_PRESETS):
+    noises = [n for n in presets if any(r["noise"] == n for r in rows)]
     lines = ["# Learner testbed results", "",
              f"Seeds per cell: {args.seeds}{' (quick: durations x0.4)' if args.quick else ''}. "
              f"Pre-action frames kept: {args.before_frames}. "
@@ -176,12 +176,14 @@ def report(rows, out: Path, args):
              f"{sum(r['status'] != 'ok' for r in rows)} of {len(rows)}.", "",
              "Perception noise presets (per frame unless noted):", "",
              "| preset | pos σ m | outliers | appearance jitter | bad view | missed | state misread | "
+             "flag read as none | none read as flag | "
              "outcome label confused (per response) | hallucinated change (per interaction) |",
-             "|---|---|---|---|---|---|---|---|---|"]
+             "|---|---|---|---|---|---|---|---|---|---|---|"]
     for n in noises:
-        c = NOISE_PRESETS[n]
-        lines.append(f"| {n} | {c.pos_sigma} | {c.pos_outlier} | {c.appearance_jitter} | {c.bad_view} | {c.miss} | "
-                     f"{c.token_flip} | {c.label_confusion} | {c.spurious_response} |")
+        c = presets[n]
+        lines.append(f"| {n} | {c.pos_sigma:.3g} | {c.pos_outlier:.3g} | {c.appearance_jitter} | {c.bad_view} | "
+                     f"{c.miss:.3g} | {c.token_flip} | {c.flag_miss:.3g} | {c.false_flag:.3g} | "
+                     f"{c.label_confusion:.3g} | {c.spurious_response} |")
     ok = [r for r in rows if r["status"] == "ok"]
 
     def cell(exp, noise, policy):
@@ -257,7 +259,15 @@ def main():
     ap.add_argument("--before-frames", type=int, default=3,
                     help="pre-action frames kept for the outcome classifier (runtime default 3)")
     ap.add_argument("--out", default=None)
+    ap.add_argument("--measured", nargs="*", default=[],
+                    help="name=detector_bench.json: add a noise preset measured by scripts/eval/detector_bench.py")
     args = ap.parse_args()
+    from amr_rl.sim.learner_bench import NoiseConfig
+
+    presets = dict(NOISE_PRESETS)
+    for item in args.measured:
+        name, path = item.split("=", 1)
+        presets[name] = NoiseConfig.from_measurement(path, name=name)
     stamp = time.strftime("%Y%m%d-%H%M%S")
     out = Path(args.out) if args.out else ROOT / "work" / "evidence" / f"learner-bench-{stamp}"
     out.mkdir(parents=True, exist_ok=True)
@@ -273,7 +283,7 @@ def main():
         for noise in args.noise:
             for policy in policies:
                 for seed in range(args.seeds):
-                    jobs.append((exp, noise, policy, seed, args.quick, args.before_frames))
+                    jobs.append((exp, presets[noise], policy, seed, args.quick, args.before_frames))
     print(f"{len(jobs)} episodes on {args.workers} workers -> {out}", flush=True)
     rows = []
     t0 = time.time()
@@ -284,7 +294,7 @@ def main():
             fh.flush()
             if k % 10 == 0 or k == len(jobs):
                 print(f"  {k}/{len(jobs)} done ({time.time() - t0:.0f} s)", flush=True)
-    print(report(rows, out, args))
+    print(report(rows, out, args, presets))
     print(f"\nwrote {out / 'report.md'}")
 
 

@@ -24,6 +24,9 @@ dev = ["pytest>=8.3,<9", "ruff>=0.6,<1"]
 # Near-field obstacle guard (monocular depth). Weights are fetched separately into the
 # user's Hugging Face cache (scripts/amr.sh fetch-depth-model), never into the repo.
 depth = ["torch>=2.7,<3", "transformers>=4.45"]
+# Perception swap (open-vocabulary detector, re-ID embedder, VLM outcome pilot). Weights
+# are fetched separately (scripts/amr.sh fetch-detector-model / fetch-vlm-model).
+perception = ["torch>=2.7,<3", "transformers>=5.0", "timm>=1.0"]
 # Loop closure place recognition (MegaLoc, MIT). Weights fetched separately into the
 # user's caches (scripts/amr.sh fetch-place-model), never into the repo.
 place = ["torch>=2.7,<3", "torchvision>=0.22", "safetensors>=0.4", "huggingface_hub>=0.24"]
