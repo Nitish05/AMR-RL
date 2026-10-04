@@ -282,6 +282,7 @@ class VSLAMConfig:
     turn_slip_mode: str = "ema"
     turn_slip_window: int = 60
     turn_slip_min_samples: int = 15
+    turn_slip_warm_scale: float = 0.0  # >0: during warm-up, gate with turn_slip_init and a gate this many times wider
     turn_max_predicted_rot_deg: float = 60.0
     turn_max_heading_sigma_deg: float = 8.0
     # C11: floor-band ORB with a smaller border/patch so the bottom rows still give
@@ -1076,10 +1077,13 @@ class PlanarVSLAM:
         cfg, tr = self.cfg, self._turn
         if self.turn_slip is None:
             self.turn_slip = cfg.turn_slip_init
+        widen = 1.0
         if cfg.turn_slip_mode == "median":
             ready = self._update_slip_median(pose, commanded, dt, inliers)
             if not ready:
-                return pose, False  # not enough evidence about the slip yet: do not gate
+                if cfg.turn_slip_warm_scale <= 0:
+                    return pose, False  # not enough evidence about the slip yet: do not gate
+                widen = cfg.turn_slip_warm_scale  # gate only gross disagreements with the prior
         expected = self.turn_slip * commanded[1] * dt
         visual = wrap(pose[2] - self.pose[2])
         if cfg.turn_gate_visual_step:
@@ -1101,7 +1105,7 @@ class PlanarVSLAM:
             sv, se = sum(h[0] for h in hist), sum(h[1] for h in hist)
             bad = len(hist) >= cfg.turn_gate_window and abs(se) > 1e-6 and abs(sv / se - 1.0) > cfg.turn_gate_ratio
         else:
-            gate = max(math.radians(cfg.turn_gate_deg), cfg.turn_gate_frac * abs(expected))
+            gate = widen * max(math.radians(cfg.turn_gate_deg), cfg.turn_gate_frac * abs(expected))
             bad = abs(visual - expected) > gate
         if bad:
             tr["gated"] = tr.get("gated", 0) + 1
