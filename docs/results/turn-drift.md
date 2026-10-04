@@ -244,3 +244,66 @@ The robustness criterion is not met, so FA is **not adopted** and the live valid
 The reset captures are idealised: perfectly constant slip and no wheel lag. The criterion still stands as registered.
 
 **Next:** make the slip factor robust (fast learning from well-tracked turn frames, and a gate that widens while the factor is uncertain), then re-test on a new held-out capture and a new slip sweep.
+
+## Slip fix and final test (run once)
+
+**The cause, confirmed with an oracle.** Given the true slip factor, FA's error on the worst slip-1.0 sequences fell from 16–23° to 0.8–4.9°.
+
+**The fix: `turn_slip_mode="median"`.** The slip factor is the median of the raw visual/commanded rotation over the last 60 frames with at least 100 inliers. Gated frames are included, and the gate stays off until 15 samples exist.
+
+This gives finalist **FAm** = FA + median slip. It was frozen at `993459f`, and the addendum to [turn-drift-r8-prereg.md](turn-drift-r8-prereg.md) was committed before this run.
+
+The final test used new seed-3 data: held-out captures from 4 worlds, and slip captures at 0.75 and 1.0.
+
+### Held-out split (seed 3)
+
+| | baseline | FA | **FAm** | limit |
+|---|---|---|---|---|
+| e360 p90 | 8.2 / 13.3 | 2.5 / 2.6 | **2.9 / 3.0** ✓ | ≤ 5 |
+| near-surface p90 | 16.1 / 18.0 | 2.3 / 3.8 | **3.8 / 4.2** ✓ | ≤ 8 |
+| e720 p90 | 12.0 / 25.2 | 2.3 / 1.9 | **2.6 / 3.4** ✓ | ≤ 7 |
+| back to start, p90 | 2.0 / 0.2 | 2.2 / 0.2 | **2.2 / 0.2** ✓ | ≤ 3 |
+| lost frames | 18.7 % / 6.4 % | 15.8 % / 3.7 % | **17.2 % / 4.7 %** ✓ | ≤ +1 pp |
+| predicted frames | 2.9 % / 0.6 % | 3.9 % / 1.1 % | **4.0 % / 1.0 %** ✓ | ≤ +2 pp |
+| confidently wrong | 4.9 % / 6.8 % | 0.3 % / 0.8 % | 0.3 % / **1.5 %** ✗ | ≤ 0.5 % |
+| jump frames | 2.6 % / 2.9 % | 0.4 % / 0.3 % | **0.6 % / 0.7 %** ✓ | ≤ 30 % of baseline |
+| far median | 1.16 / 0.10 | 1.07 / 0.06 | **1.09 / 0.06** ✓ | ≤ +0.5 |
+| ms per frame, p95 | 228 / 105 | 155 / 86 | **130 / 66** ✓ | ≤ 1.25× |
+
+Values are on map / fresh map: 232 on-map sequences and 320 fresh-map sequences.
+
+### Slip robustness (seed 3)
+
+| slip | | baseline | FA | **FAm** |
+|---|---|---|---|---|
+| 0.75 | e360 p90, saved / fresh map | 9.8 / 3.5 | 17.7 / 0.2 | **7.7** / 0.2 |
+| 0.75 | near-surface p90, saved / fresh map | 11.2 / 2.4 | 18.0 / 0.8 | **16.6** / 0.7 |
+| 1.0 | e360 p90, saved / fresh map | 5.8 / 2.9 | **35.0** / 0.4 | **5.1** / 0.1 |
+| 1.0 | e720 p90, saved / fresh map | 7.1 / 4.1 | 76.4 / 0.6 | 5.1 / 0.2 |
+| 1.0 | confidently wrong, saved map | 5.7 % | 63 % | 3.9 % |
+
+## Verdict
+
+**FAm is not adopted**, because the pre-registered criteria are not all met:
+1. **Confidently wrong frames on fresh maps: 1.5 %**, against a 0.5 % limit. The baseline has 6.8 %.
+2. **Slip robustness on saved maps.**
+   - At slip 0.75: e360 p90 7.7° (limit 5°) and near-surface 16.6° (limit 8°).
+   - At slip 1.0: e360 p90 5.1°, just over the 5° limit.
+
+   The baseline also fails these limits (9.8° and 5.8°).
+
+**On everything else FAm is a large improvement over the baseline:**
+- held-out p90 after 360° is about 3°, against 8–13°;
+- after 720° it is 2.6–3.4°, against 12–25°;
+- confidently wrong frames are 3–16× fewer;
+- it loses tracking less and is faster.
+
+**FAm also removes FA's slip failure.** At slip 1.0 on a saved map FA reached 35°; FAm stays at 5°.
+
+Everything stays switchable and off. The live validation (L1–L5) was not started.
+
+**What remains:**
+- **Saved maps at a slip far from the learned value.** At 0.75, the near-surface bin is worse than the baseline: 16.6° vs 11.2°.
+- **Fresh maps.** 1.5 % of tracking frames are still confidently wrong.
+
+The reset-mode slip captures are idealised (perfectly constant slip, no wheel lag), so live runs would show more.

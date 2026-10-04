@@ -32,6 +32,11 @@ Project rules are in `AGENTS.md` (read it first). Results with denominators are 
 - It **failed the slip sweep on saved maps**, probably because the slip factor is learned slowly from a 0.85 start.
 - Next: robust slip estimation, then a new held-out capture, a new slip sweep, and live L1–L5.
 - New runtime switch `respect_degraded_heading` (off).
+- Slip fix: FAm = FA + `turn_slip_mode="median"`, `turn_slip_min_inliers=100`.
+  - It passes most held-out criteria (e360 p90 about 3°).
+  - It fails two: confidently-wrong frames on fresh maps are 1.5 % (limit 0.5 %), and on saved maps at slip 0.75 the error is 7.7° (near-surface bin 16.6°).
+  - Not adopted.
+  - The seed-3 held-out and slip captures are now used up.
 
 ## Update: round 7 (2026-10-04): heading drift in in-place turns
 
