@@ -213,6 +213,7 @@ class VSLAMConfig:
     floor_validation: str = "off"
     floor_val_min_parallax_deg: float = 2.0
     floor_val_height: float = 0.03
+    floor_val_ratio: float = 0.12  # |triangulated / floor-lifted distance - 1| <= this: on the floor
     # C4: the turn the robot measures must agree with the turn it commanded (wheel
     # slip only makes the real turn smaller): flag over-rotation and angular freezes.
     turn_cmd_check: str = "off"   # off|flag
@@ -1029,9 +1030,14 @@ class PlanarVSLAM:
             par = np.degrees(np.arccos(np.clip(cos, -1, 1)))
             good = (z1 > 0.05) & (z2 > 0.05) & (e < 2.0) & (par >= cfg.floor_val_min_parallax_deg)
             g = np.array(group)
-            on_floor = good & (np.abs(X[:, 2]) <= cfg.floor_val_height)
-            above = good & (X[:, 2] > cfg.floor_val_height) & (X[:, 2] < 2.0)
-            below = good & (X[:, 2] < -cfg.floor_val_height)
+            # Distance along the ray: triangulated vs where the floor assumption put it.
+            # A point on an object face is much nearer than its floor lifting; a floor
+            # point agrees within the triangulation noise (a fixed height threshold
+            # misread noisy floor points as objects).
+            ratio = np.linalg.norm(r1, axis=1) / np.maximum(np.linalg.norm(lm.pos[g] - c1, axis=1), 1e-6)
+            on_floor = good & (np.abs(ratio - 1.0) <= cfg.floor_val_ratio)
+            above = good & (ratio < 1.0 - 2 * cfg.floor_val_ratio) & (X[:, 2] > cfg.floor_val_height) & (X[:, 2] < 2.0)
+            below = good & (ratio > 1.0 + 2 * cfg.floor_val_ratio) & (X[:, 2] < -cfg.floor_val_height)
             lm.flags[g[on_floor]] |= 2
             lm.confirmed[g[on_floor]] = True
             lm.pos[g[above]] = X[above]

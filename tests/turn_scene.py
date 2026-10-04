@@ -66,9 +66,10 @@ def visible(model, pose, P, box):
 
 
 def run_turn(cfg=None, *, box_dist=0.35, slip=0.83, w_cmd=0.45, turn_deg=360.0, seed=0, start_heading=0.0,
-             base_drift=(0.0, 0.0), slam=None):
+             base_drift=(0.0, 0.0), slam=None, inject=None):
     """Turn in place; returns (slam, rows). rows: (t, status, heading error deg relative to
-    the start, position error m, result). ``base_drift``: true base velocity (m/s)."""
+    the start, position error m, result). ``base_drift``: true base velocity (m/s).
+    ``inject(k, slam)``: called before frame k (tests inject estimation errors)."""
     rng = np.random.default_rng(seed)
     model = CameraModel.from_spec(RobotSpec.load())
     P, desc, box = scene(rng, box_dist)
@@ -84,7 +85,9 @@ def run_turn(cfg=None, *, box_dist=0.35, slip=0.83, w_cmd=0.45, turn_deg=360.0, 
     dt, t, prev, rows = 0.1, 0.0, (0.0, 0.0), []
     n = int(round(math.radians(turn_deg) / (slip * w_cmd * dt)))
     start = None
-    for cmd in [(0.0, 0.0)] * 5 + [(0.0, w_cmd)] * n + [(0.0, 0.0)] * 3:
+    for k, cmd in enumerate([(0.0, 0.0)] * 5 + [(0.0, w_cmd)] * n + [(0.0, 0.0)] * 3):
+        if inject is not None:
+            inject(k, slam)
         truth = truth + np.array([base_drift[0] * dt, base_drift[1] * dt, slip * prev[1] * dt])
         state["pose"] = truth
         r = slam.track(None, t, commanded=prev)
