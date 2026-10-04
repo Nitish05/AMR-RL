@@ -107,7 +107,9 @@ class VSLAMConfig:
     # Pool floor seeds over the last few frames of the relocalisation turn (moved into
     # the current frame by the robot's own commanded motion): far from the map's
     # keyframes a single frame rarely holds two correct floor matches. 0 disables.
-    reloc_pool_frames: int = 5
+    # Off (round 6): on the arena probe 0.3-0.5 m recall 2/8 -> 4/8, all 5 starts, 0
+    # false; held out (home_a) one false pose 1.08 m off (docs/results/relocalisation.md).
+    reloc_pool_frames: int = 0
     # Loop closure (docs/VSLAM.md): active when a place descriptor is attached
     # (``PlanarVSLAM.place``). Candidates: older keyframes with a similar whole-image
     # descriptor; verification as for relocalisation but only against the

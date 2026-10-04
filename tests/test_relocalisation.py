@@ -182,6 +182,7 @@ def test_pooling_the_turn_finds_a_pose_no_single_frame_supports(model):
     pos, desc, kind = synthetic_map(model, rng, n_wall=0)
     truth = np.array([0.1, -0.3, 0.4])
     slam = map_slam(model, pos, desc, kind)
+    slam.cfg.reloc_pool_frames = 5  # off by default (held-out false pose), evaluated here
     step = math.radians(4)
     hyps_single, hyps_pooled = [], None
     for k in range(5):

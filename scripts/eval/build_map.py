@@ -54,6 +54,8 @@ def main():
         cfg.vslam.covis_max_per_kf = 3  # recorded for the offline comparison only
     if args.no_coverage:
         cfg.coverage_lattice = 0.0
+    elif args.coverage_seconds > 0:
+        cfg.coverage_lattice = 0.35
     if args.legacy_loop_candidates:
         cfg.vslam.loop_top_k, cfg.vslam.loop_uncertain_k, cfg.revisit_sigma = 3, 0, 0.0
     # Seed k turns the configured start heading by k x 72 deg (seed 0 = configured start).

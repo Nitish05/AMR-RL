@@ -78,7 +78,9 @@ class RuntimeConfig:
     # is set, visit free-space lattice points (this spacing, m) farther than
     # coverage_min_kf_dist from every keyframe and make a full survey turn there, so
     # the map has keyframes to relocalise against everywhere. 0 disables.
-    coverage_lattice: float = 0.35
+    # Off (round 6): the survey turns drifted the heading by up to 28 deg while still
+    # "tracking" (arena s4 map ATE 4.0 -> 29.1 cm; docs/results/relocalisation.md).
+    coverage_lattice: float = 0.0
     coverage_min_kf_dist: float = 0.3
 
 
