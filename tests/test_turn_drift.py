@@ -80,3 +80,33 @@ def test_commanded_turn_check_flags_over_rotation_and_freezes_only():
         tr = {"cmd_rot": cmd, "est_rot": est, "flagged": False}
         slam._turn_command_check(tr)
         assert tr["flagged"] == flagged, (cmd, est)
+
+
+def test_alignment_turn_continues_on_turn_prediction_only_when_enabled():
+    from types import SimpleNamespace
+
+    from amr_rl.behavior.activities import Goto
+
+    class Nav:
+        def __init__(self, cmd):
+            self.cmd, self.status, self.reason = cmd, "following", ""
+
+        def set_goal(self, *a, **k):
+            return True
+
+        def step(self, *a):
+            return self.cmd
+
+    def rt(cmd, enabled, turning=True):
+        return SimpleNamespace(loc_status="predicted", pose=np.zeros(3), sigma=0.01, grid=None, nav=Nav(cmd),
+                               cfg=SimpleNamespace(respect_degraded_heading=enabled),
+                               slam=SimpleNamespace(_turn={} if turning else None), avoid_regions=lambda: [])
+
+    g = Goto((1.0, 0.0))
+    assert g.step(rt((0.0, 0.4), enabled=False), 0.0) == (0.0, 0.0)
+    g = Goto((1.0, 0.0))
+    assert g.step(rt((0.0, 0.4), enabled=True), 0.0) == (0.0, 0.4)  # pure rotation continues
+    g = Goto((1.0, 0.0))
+    assert g.step(rt((0.2, 0.1), enabled=True), 0.0) == (0.0, 0.0)  # never drive on a prediction
+    g = Goto((1.0, 0.0))
+    assert g.step(rt((0.0, 0.4), enabled=True, turning=False), 0.0) == (0.0, 0.0)

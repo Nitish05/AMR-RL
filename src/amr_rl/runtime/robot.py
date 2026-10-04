@@ -72,6 +72,11 @@ class RuntimeConfig:
     # docs/results/textured-worlds.md). Optional model from the local cache only; without
     # it the colour detector is used and detector_status says so.
     detector: str = "fixture"
+    # Round 8 (docs/results/turn-drift.md): when the VSLAM flags a frame's heading as
+    # doubtful (info["degraded"]: a gated or flagged in-place turn), do not mark the
+    # grid or place entities from it; in-place alignment turns may continue through
+    # bounded dead reckoning instead of freezing facing the wall. Off by default.
+    respect_degraded_heading: bool = False
     detector_device: str = "auto"
     # Mapping sessions (explore_only) with loop closure: when an early keyframe's
     # position relative to the robot has become uncertain in the pose graph (sigma >=
@@ -238,12 +243,14 @@ class RobotRuntime:
                 self.grid.mark_free_disc(result.pose[:2], self.cfg.start_clearance_attested)
                 self._attested = True
             self.pose, self.sigma = result.pose, result.position_sigma
+            degraded = self.cfg.respect_degraded_heading and bool((result.info or {}).get("degraded"))
             if not self.trajectory or np.hypot(*(np.asarray(self.trajectory[-1]) - self.pose[:2])) > 0.02:
                 self.trajectory.append([float(self.pose[0]), float(self.pose[1])])
                 self.trajectory = self.trajectory[-4000:]
-            self.grid.mark_footprint(self.pose, self.spec.chassis["length"], self.spec.overall_width,
-                                     self.spec.chassis["length"] / 2 + self.spec.chassis["axle_offset_x"])
-            if result.keyframe and len(self.slam.keyframes) >= 2:
+            if not degraded:
+                self.grid.mark_footprint(self.pose, self.spec.chassis["length"], self.spec.overall_width,
+                                         self.spec.chassis["length"] / 2 + self.spec.chassis["axle_offset_x"])
+            if result.keyframe and len(self.slam.keyframes) >= 2 and not degraded:
                 self.mapper.update_keyframe(self.slam.keyframes)
                 # Well-established triangulated points 10-45 cm high mark obstacles,
                 # each landmark at most once.
@@ -265,8 +272,10 @@ class RobotRuntime:
             self.last_good_pose = None if result.pose is None else result.pose.copy()
         if self.supervisor.recovery is None:
             self.recovery_plan = None
-        detections = self.detector.detect(frame.rgb, self.pose if status == TRACKING else None)
-        if self.pose is not None and status == TRACKING:
+        heading_ok = not (self.cfg.respect_degraded_heading and status == TRACKING
+                          and bool((result.info or {}).get("degraded")))
+        detections = self.detector.detect(frame.rgb, self.pose if status == TRACKING and heading_ok else None)
+        if self.pose is not None and status == TRACKING and heading_ok:
             n_merges = len(self.tracker.merge_log)
             visible = self.tracker.update(detections, self.pose, self.sigma, self.slam.map_version, self.now,
                                           in_view=self.place_in_view)

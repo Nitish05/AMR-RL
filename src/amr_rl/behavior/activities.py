@@ -115,7 +115,16 @@ class Goto:
                 return 0.0, 0.0
             self.status = "moving"
         if getattr(rt, "loc_status", "tracking") != "tracking":
-            return 0.0, 0.0  # ordinary navigation holds still on predicted (dead-reckoned) poses
+            # Ordinary navigation holds still on predicted (dead-reckoned) poses. With
+            # respect_degraded_heading, an in-place alignment turn may continue on the
+            # VSLAM's bounded turn prediction (rotation only), instead of freezing.
+            turning = (getattr(rt, "loc_status", "") == "predicted" and rt.pose is not None
+                       and getattr(getattr(rt, "cfg", None), "respect_degraded_heading", False)
+                       and getattr(getattr(rt, "slam", None), "_turn", None) is not None)
+            if not turning:
+                return 0.0, 0.0
+            v, w = rt.nav.step(rt.grid, rt.pose, rt.sigma, now)
+            return (0.0, w) if abs(v) < 1e-9 else (0.0, 0.0)
         v, w = rt.nav.step(rt.grid, rt.pose, rt.sigma, now)
         if rt.nav.status == "arrived":
             self.status = "arrived"
@@ -212,6 +221,8 @@ class Explore(Activity):
             return v, w
         # sweep left, right, back to centre
         self.phase = "looking around"
+        if rt.pose is None:
+            return 0.0, 0.0  # no pose this frame: hold (the sweep resumes when it returns)
         turned = wrap(rt.pose[2] - self._last)
         self._last = rt.pose[2]
         self._left -= turned
