@@ -112,10 +112,12 @@ def fixture_for(session, map_xy):
     return None if best is None or best[1] > 0.5 else best[0]
 
 
-def run_phase(phase, *, map_dir, memory_path, run_dir, seed, world="arena", start=None, map_origin=None):
+def run_phase(phase, *, map_dir, memory_path, run_dir, seed, world="arena", start=None, map_origin=None,
+              detector="fixture", detector_device="auto"):
     policy = phase.get("policy", "learned")
     config = RuntimeConfig(supervisor=SupervisorConfig(require_heartbeat=False), policy=policy, seed=seed,
-                           initial_survey=False, motivation=MotivationConfig(**phase.get("motivation", {})))
+                           initial_survey=False, motivation=MotivationConfig(**phase.get("motivation", {})),
+                           detector=detector, detector_device=detector_device)
     consequences = load_consequences(phase["consequences"])
     session = Session(world, run_dir=run_dir, memory_path=memory_path, config=config, consequences=consequences,
                       seed=seed, inspection=False, map_dir=map_dir, map_origin=map_origin,
@@ -275,11 +277,14 @@ def main():
     parser.add_argument("--seeds", nargs="+", type=int, default=[0],
                         help="one run per seed; seed k starts at ARENA_STARTS[k %% 5] (seed 0 = configured start)")
     parser.add_argument("--out", default=None)
+    parser.add_argument("--world", default="arena", help="arena or arena_textured (same layout and rules)")
+    parser.add_argument("--detector", default="fixture", choices=["fixture", "open_vocab"])
+    parser.add_argument("--detector-device", default="auto")
     args = parser.parse_args()
     out = Path(args.out) if args.out else fresh_dir("learning")
     out.mkdir(parents=True, exist_ok=True)
     origin = map_origin_for(args.map)
-    provenance(out, configs=[PROJECT_ROOT / "configs/worlds/arena.yaml", *sorted(CONSEQUENCES.glob("*.yaml"))],
+    provenance(out, configs=[PROJECT_ROOT / f"configs/worlds/{args.world}.yaml", *sorted(CONSEQUENCES.glob("*.yaml"))],
                extra={"args": vars(args), "map_origin_world": origin,
                       "map_meta": json.loads((Path(args.map) / "map.json").read_text())["map_version"]})
     for seed in args.seeds:
@@ -297,7 +302,8 @@ def main():
                     mem = exp_dir / f"memory-fresh-{index}.sqlite"
                 try:
                     record = run_phase(phase, map_dir=args.map, memory_path=mem, run_dir=exp_dir / f"phase{index}",
-                                       seed=1000 * seed + index, start=start, map_origin=origin)
+                                       seed=1000 * seed + index, start=start, map_origin=origin, world=args.world,
+                                       detector=args.detector, detector_device=args.detector_device)
                     record["score"] = score(record)
                 except Exception as error:  # retained in the denominator
                     import traceback

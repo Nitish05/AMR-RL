@@ -67,6 +67,12 @@ class RuntimeConfig:
     # loaded only from the local cache (scripts/amr.sh fetch-place-model); without it
     # the VSLAM runs without loop closure and the state says so.
     place_descriptor: str | None = "megaloc"
+    # Object detector: "fixture" (engineered saturated-colour detector) or "open_vocab"
+    # (OmDet-Turbo boxes + engineered floor-contact and flag rules, perception/open_vocab.py;
+    # docs/results/textured-worlds.md). Optional model from the local cache only; without
+    # it the colour detector is used and detector_status says so.
+    detector: str = "fixture"
+    detector_device: str = "auto"
     # Mapping sessions (explore_only) with loop closure: when an early keyframe's
     # position relative to the robot has become uncertain in the pose graph (sigma >=
     # revisit_sigma), drive back to its pose and heading so a loop can close (at most
@@ -148,6 +154,18 @@ class RobotRuntime:
         self.loop_closures = []
         self.supervisor = Supervisor(backend, self.cfg.supervisor, wall_clock=wall_clock or time.monotonic)
         self.detector = FixtureDetector(self.model)
+        self.detector_status = "fixture (engineered colour detector)"
+        if self.cfg.detector == "open_vocab":
+            from ..perception.open_vocab import MODELS as OV_MODELS
+            from ..perception.open_vocab import load_open_vocab
+
+            ov = load_open_vocab(self.model, device=self.cfg.detector_device)
+            if ov is None:
+                self.detector_status = "fixture (open-vocabulary model unavailable in the local cache)"
+            else:
+                self.detector = ov
+                repo, rev, _ = OV_MODELS[ov.backend]
+                self.detector_status = f"open_vocab ({repo}@{rev[:8]}, {self.cfg.detector_device})"
         self.memory = ExperienceMemory(memory_path, config=self.cfg.learning)
         self.memory.invalidate_positions(self.slam.map_version)
         self.tracker = EntityTracker(self.memory)
@@ -787,6 +805,7 @@ class RobotRuntime:
                     "start_clearance_attested": self.cfg.start_clearance_attested if self._attested else None,
                     "loop_closure": {"status": self.place_status, "closures": len(self.loop_closures),
                                      "last": self.loop_closures[-1] if self.loop_closures else None}},
+            "detector": self.detector_status,
             "semantic": None if self.semantic is None else {"backend": self.semantic.backend.name,
                                                             **self.semantic.stats},
             "acks": [{k: v for k, v in a.items() if not k.startswith("_")} for a in self.acks[-5:]],
