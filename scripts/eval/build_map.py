@@ -37,6 +37,8 @@ def main():
     parser.add_argument("--no-loop-closure", action="store_true", help="A/B: run without loop closure")
     parser.add_argument("--coverage-seconds", type=float, default=0.0,
                         help="finish with the coverage pass for this many seconds (survey turns far from keyframes)")
+    parser.add_argument("--no-coverage", action="store_true",
+                        help="A/B: no coverage pass at all (also not when frontiers run out)")
     parser.add_argument("--loop-shadow", action="store_true",
                         help="evaluation: detect and verify loops but only record them (paired scoring)")
     parser.add_argument("--legacy-loop-candidates", action="store_true",
@@ -50,6 +52,8 @@ def main():
     if args.loop_shadow:  # log more candidates; revisits change the trajectory, so off
         cfg.vslam.loop_shadow, cfg.vslam.loop_top_k, cfg.vslam.loop_uncertain_k, cfg.revisit_sigma = True, 3, 3, 0.0
         cfg.vslam.covis_max_per_kf = 3  # recorded for the offline comparison only
+    if args.no_coverage:
+        cfg.coverage_lattice = 0.0
     if args.legacy_loop_candidates:
         cfg.vslam.loop_top_k, cfg.vslam.loop_uncertain_k, cfg.revisit_sigma = 3, 0, 0.0
     # Seed k turns the configured start heading by k x 72 deg (seed 0 = configured start).

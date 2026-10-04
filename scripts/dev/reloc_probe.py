@@ -149,6 +149,8 @@ def main():
     ap.add_argument("--positions", default="all", help="all | even | odd | comma list of ids")
     ap.add_argument("--no-single", action="store_true")
     ap.add_argument("--workers", type=int, default=12)
+    ap.add_argument("--map", default=None, help="probe another map of the same scenario (same map origin); "
+                    "positions keep the capture map's distance bins")
     args = ap.parse_args()
     meta = json.loads((Path(args.capture) / "poses.json").read_text())
     positions = meta["positions"]
@@ -159,10 +161,12 @@ def main():
     elif args.positions != "all":
         keep = {int(x) for x in args.positions.split(",")}
         positions = [p for p in positions if p["id"] in keep]
-    report = {"capture": args.capture, "map_dir": meta["map_dir"], "positions": args.positions, "variants": {}}
+    map_dir = args.map or meta["map_dir"]
+    report = {"capture": args.capture, "map_dir": map_dir, "capture_map_dir": meta["map_dir"],
+              "positions": args.positions, "variants": {}}
     for spec in args.variant:
         name, overrides = spec[0], parse_overrides(spec[1:])
-        jobs = [(args.capture, meta["map_dir"], p, overrides, not args.no_single, meta["step_deg"]) for p in positions]
+        jobs = [(args.capture, map_dir, p, overrides, not args.no_single, meta["step_deg"]) for p in positions]
         t0 = time.time()
         with mp.get_context("spawn").Pool(args.workers) as pool:
             results = pool.map(run_position, jobs)
