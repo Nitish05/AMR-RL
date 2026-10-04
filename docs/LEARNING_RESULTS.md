@@ -22,6 +22,51 @@ Evidence: `work/evidence/learning-20260930-154854`; control run
 `work/evidence/learning-control-oldmap`. Regenerate:
 `python scripts/eval/report.py --learning work/evidence/learning-20260930-154854 --out <file>`.
 
+## Round 6 (2026-10-03): the suite re-run on current code
+
+**Setup:**
+- 7 experiments × 5 starts, 45 phases, 0 crashes.
+- Code `34a8fc2`: round-5 loop closure, round-6 safety fixes, the round-6 defaults
+  (coverage pass and turn pooling off).
+- Map `i3-nocov-arena-s4` (ATE 4.0 cm, keyframe RMSE 3.0 cm). It was chosen and recorded
+  (`MAP_CHOICE.md`) before the run, because the relocalisation probe found every
+  start relocalising on it.
+- Evidence: `work/evidence/learning-r6-20261003/s{0..4}`, report `.../report.md`.
+
+**Relocalisation:**
+- **All 5 starts relocalised correctly** (worst 3 cm / 3.2°). Round 3 had 2 starts
+  that never relocalised and 1 wrong.
+- During the runs, 6 of 152 relocalisations were false, all in two phases (inert s1,
+  noisy s1). In both, the robot was already tracking 0.28 m / 8° and 0.58 m / 12° off
+  before the loss. The relocalisation reproduced that inherited error, the same class
+  as round 4's single case. Heading drift while "tracking" is the open problem
+  (also seen in [results/relocalisation.md](results/relocalisation.md), coverage pass).
+
+**Restart persistence:**
+- Where training produced a liked option, the first decision after restart targeted
+  it in **10/10**.
+- The first completed interaction was on that fixture in 9/10 and with that action
+  in 7/10. history_b s3 first completed grump. In s4 the learned option was
+  roller/nudge, and the robot signalled the roller first.
+
+**Reversal: adapted in 6/10** (early swap: s0, s1, s2; late swap: s1, s2, s3).
+- s4 never adapts. It starts near the roller, satisfies its engineered need by
+  nudging the roller (whose rolling is physics, not a rule), and never tries the
+  fixtures whose rules swap. Its training phases are therefore identical across
+  experiments (deterministic simulator).
+- s3 early and s0 late did not find the new option before the run ended.
+- Round 3 had 6/6, but on 3 seeds.
+
+**Settling (inert world): not shown.** Outcomes in the first vs second half:
+4 → 6, 6 → 1, 7 → 5, 4 → 6, 6 → 1. Several "useful" outcomes are again the roller
+rolling after a nudge.
+
+**Aversion held.** At most one red panel per learned run.
+
+**Contacts:** 0 unintended contact episodes in 45 phases.
+
+**Interventions:** 0–6 operator re-enables per phase (report table).
+
 ## Round 4 (2026-10-03): pre-registered policy comparison
 
 [results/policy-comparison.md](results/policy-comparison.md). These are 75 phases on

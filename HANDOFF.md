@@ -18,6 +18,31 @@ Project rules are in `AGENTS.md` (read it first). Results with denominators are 
   Expect first-run bugs. Fix them, keep `scripts/amr.sh test` green, then commit.
 
 
+## Update: round 6 (2026-10-03): the five open items worked in order
+
+1. **Safety** (`7ec324e`): fixed (0 contacts in 12 navigation runs).
+2. **Loop closure:** uncertainty slots, revisits and covisibility edges were
+   evaluated and not adopted. The pose-graph-only back-end ignores re-anchoring, so
+   global BA is next (`docs/results/loop-closure.md`).
+3. **Relocalisation range:** turn pooling, threshold 50 and the coverage pass were
+   evaluated; none adopted. Next: an "explained share" floor and heading drift in
+   in-place turns (`docs/results/relocalisation.md`).
+4. **Learning suite re-run** (`docs/LEARNING_RESULTS.md`, round 6): 5/5 starts
+   relocalised; restart 10/10; reversal 6/10; inert does not settle; 0 unintended
+   contacts.
+5. **Perception swap:**
+   - VLM pilot: Qwen3-VL-2B held out 0.935, but red misses 4 %, so not in the
+     runtime (`docs/results/vlm-outcome-pilot.md`).
+   - Textured worlds and the open-vocabulary detector (OmDet-Turbo): held out
+     recall 1.0 / precision 0.97 / state 0.982 (`docs/results/textured-worlds.md`).
+   - Measured error presets in the learner testbed.
+   - Open: the VSLAM loses tracking in textured worlds unless
+     `floor_feature_share=0.7` (off by default; needs navigation validation).
+     Runtime A/B n = 2.
+
+Models (all pinned, local cache): `scripts/amr.sh fetch-detector-model`, `fetch-vlm-model`;
+the `perception` extra adds `timm`.
+
 ## Update: round 5 (2026-10-03): loop closure
 
 Done (`73da7e2`, `211d626`, `c9a7694` and the docs commit; `docs/results/loop-closure.md`):

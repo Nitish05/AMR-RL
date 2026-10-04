@@ -66,11 +66,31 @@ afterwards: in seed 3, 1,996 attempts failed.
 **Cause found.** The fixed ORB budget (900 per frame) goes to the high-contrast
 posters and patterns. Features in the lower image (mostly floor) fell from a median
 of 502 to 354 per frame, and floor matches are what planar relocalisation needs.
-The remedy is an optional floor share of the budget (`VSLAMConfig.floor_feature_share`);
-its build results are in the section below.
+**Remedy: an optional floor share of the budget** (`VSLAMConfig.floor_feature_share`,
+off by default). With 0.7, 70 % of the 900 features are taken below the horizon row
+and the rest above it, in the spirit of ORB-SLAM spreading features over a grid.
+Lower-image features rise from 354 to 432 per frame in the textured frames, and drop
+slightly from 502 to 485 in the plain arena. Paired builds (`work/evidence/floor07-*`):
 
-**This criterion is not met:** VSLAM does regress in the textured world. Runtime
-experiments in it are confounded by localisation until that is fixed.
+| build | ATE | keyframe RMSE | frames lost | coverage |
+|---|---|---|---|---|
+| arena_textured s3, default | 7.1 cm (134 keyframes) | 6.6 cm | 3,429 | 0.26 |
+| arena_textured s3, floor share 0.7 | 11.3 cm | 4.7 cm | **311** | **0.56** |
+| arena_textured s4, default | 8.9 cm | 8.5 cm | 1,025 | 0.45 |
+| arena_textured s4, floor share 0.7 | 8.0 cm | 7.8 cm | **35** | **0.58** |
+| arena s3, default | 10.1 cm | 9.9 cm | 0 | 0.57 |
+| arena s3, floor share 0.7 | 6.4 cm | 6.4 cm | 36 | 0.55 |
+| arena s4, default | 3.4 cm | 3.4 cm | 664 | 0.54 |
+| arena s4, floor share 0.7 | 6.3 cm | 8.2 cm | 0 | 0.64 |
+
+The floor share removes most of the textured world's tracking losses: 4,454 frames
+lost become 346 over two seeds. In the plain arena it is mixed (ATE 10.1 → 6.4 cm
+and 3.4 → 6.3 cm).
+
+**This criterion is not met by the default configuration.** It stays off by default
+because changing the default VSLAM front end needs the navigation and relocalisation
+validation of earlier rounds. Textured-world runtime experiments use it
+(`--vslam floor_feature_share=0.7`).
 
 ## 5b: open-vocabulary detector behind `Detection`
 
@@ -125,8 +145,30 @@ base hue, which is a limit of these worlds and not a property of real objects.
 Identity therefore keeps hue and size, computed from the detector's box. The
 embedder stays available for worlds where colour does not identify objects.
 
-**Not yet done for 5b.** Identity purity in a runtime run. That needs the textured
-world's VSLAM problem fixed first (above).
+**Runtime check (Genesis, first look).** history_a (480 s training, then a restart
+test) in arena_textured on the floor-share textured map `floor07-arena_textured-s4`,
+with `--vslam floor_feature_share=0.7`, colour detector vs open-vocabulary detector.
+Seeds 0 and 1. Evidence: `work/evidence/ovlearn-20261003/`.
+
+| run | attempts | outcomes | useful | identity merges | learned / first choice after restart |
+|---|---|---|---|---|---|
+| colour, s0 | 83 | 15 | 2 | 13 | grump/nudge "→ yellow" (a misread) / grump |
+| colour, s1 | 77 | 17 | 5 | 4 | — / grump |
+| **open-vocabulary, s1** | 25 | 12 | 6 | 1 | **bloom/signal → yellow (6×) / bloom/signal** |
+| open-vocabulary, s0 | 12 | 2 | 0 | 0 | nothing liked (see below) |
+
+- **Colour detector.** It missed bloom's yellow flag on every signal (5/5 in s0),
+  reported "moved" and "attach:yellow" for outcomes that never happened, and merged
+  identities 4–13 times.
+- **Open-vocabulary detector, s1.** It learned the true rule as in the plain arena
+  and chose it first after the restart.
+- **Open-vocabulary, s0.** Localisation failed, not detection. The robot tracked
+  29–30 cm off from t ≈ 76 s to the end, and the colour run from the same start was
+  also 15–20 cm off at 50–150 s. Navigation then failed, and after one red panel it
+  spent the rest of the run in "avoid".
+
+This is n = 2 per detector on one map. It shows the swap works in the loop where
+localisation holds. Identity purity is not yet measured over enough runs.
 
 ## 5d: measured errors in the learner testbed
 

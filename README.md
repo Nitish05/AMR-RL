@@ -42,8 +42,8 @@ Right: the same moment from Pip's onboard camera — the only sensor it perceive
 
 ## Results summary
 
-These are round-2 results: navigation in 4 rooms × 3 seeds, and learning on
-up to 3 seeds (start poses). That is enough to see failure modes, not to
+Latest results: navigation in 4 rooms × 3 seeds (rounds 5–6), and the learning
+suite on 5 start poses (round 6). That is enough to see failure modes, not to
 report statistics. Navigation and learning were evaluated separately. Full
 tables with every denominator are in
 [docs/NAVIGATION_RESULTS.md](docs/NAVIGATION_RESULTS.md) and
@@ -51,14 +51,15 @@ tables with every denominator are in
 
 | Question | Result |
 |---|---|
-| Does remembered experience change later choices? | **Yes, 5/5.** After a restart, every robot that had learned a liked option chose it first (bloom/signal after history_a, stone/signal after history_b, seeds 0–2). With no memory, all three seeds chose roller/signal and then grump/signal. **Carried out on the intended fixture in 3/5:** twice the remembered fixture was not confirmed in fresh images, and the robot moved on. |
+| Does remembered experience change later choices? | **Yes, 10/10** in round 6 (5 starts × 2 opposite histories). After a restart, every robot that had learned a liked option chose it first; the first completed interaction was on that fixture in 9/10 and with that action in 7/10. All 5 starts relocalised correctly (worst 3 cm). |
 | Does it survive a restart without keeping motion permission? | **Yes.** In all 9 restart phases, autonomy started disabled and was enabled only after relocalising from fresh images. |
 | Does it avoid what hurt it? | **Yes, 14/14 learned runs.** It saw the red panel once per run and never went back to that fixture or to a duplicate of it. (In round 1 a duplicate identity was re-targeted; duplicates are now merged.) |
-| Does it adapt when the rules change? | **Yes, 4/4 informative runs.** Three failed tries of the old option, then it found the new one 100–300 s after the swap. The 2 seed-0 runs are uninformative because seed 0 never learned the old option. |
+| Does it adapt when the rules change? | **6/10 in round 6** (early and late swap × 5 starts). Seed 4 never tries the swapped fixtures: it satisfies its engineered need by nudging the rolling ball. Two other runs did not find the new option before the run ended. |
 | Is it better than simple baselines? | **Not shown.** Baselines ran on seed 0 only, and seed 0 is the learned policy's failure case: it never completed an interaction with the rewarding fixture. Total valence: nearest 2.0, random 0.2, learned 0.2, fixed 0.0. On seeds 1–2 the learned policy got 0.57 and 0.54 per outcome, but with no baselines to compare. A control on the round-1 map with the same code learned normally on seed 0, so the failure depends on the map. |
 | Can it reach goals in its own map? | **38/46 (83 %)** with loop closure, 35/44 (80 %) without, in round 5 (macOS, 4 rooms × 3 seeds; drift misses 3 → 1, [details](docs/results/loop-closure.md)); 20/37 (54 %) in round 3; 5/16 in round 1. Remaining misses are mostly the robot not reaching the goal or slight drift. |
 | Does it refuse goals it cannot justify? | **Yes, 36/36.** Unknown space is never treated as free. |
-| Does it touch things? | **0 contacts in the latest 12 navigation runs** (round 6; closest box approach 0.165 m). Round 5 had one box contact. It came from an unseen box face the map kept free, guard marks erased by a loop-closure replay, and a recovery that rotated against the box. All three are fixed ([details](docs/results/near-field-guard.md)). Learning runs: 0 unintended contacts in rounds 3–4. |
+| Does it touch things? | **0 contacts in the latest 12 navigation runs** (round 6; closest box approach 0.165 m). Round 5 had one box contact. It came from an unseen box face the map kept free, guard marks erased by a loop-closure replay, and a recovery that rotated against the box. All three are fixed ([details](docs/results/near-field-guard.md)). Learning runs: 0 unintended contacts in rounds 3–6 (45 phases in round 6). |
+| Can it recognise objects that are not uniformly painted? | **With an optional detector, in simulation.** The default colour detector fails in textured worlds (held out: recall 0.20, 5.8 false positives per frame). An open-vocabulary detector (OmDet-Turbo + engineered floor and flag rules, off by default) gets recall 1.0, precision 0.97 and flag state 0.982 within 2 m on the held-out textured world ([details](docs/results/textured-worlds.md)). The textured worlds also hurt the VSLAM until features are reserved for the floor. |
 
 ![Valence per outcome by seed](docs/media/policy-comparison.png)
 

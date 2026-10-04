@@ -165,7 +165,7 @@ class RobotRuntime:
             else:
                 self.detector = ov
                 repo, rev, _ = OV_MODELS[ov.backend]
-                self.detector_status = f"open_vocab ({repo}@{rev[:8]}, {self.cfg.detector_device})"
+                self.detector_status = f"open_vocab ({repo}@{rev[:8]}, {ov.device})"
         self.memory = ExperienceMemory(memory_path, config=self.cfg.learning)
         self.memory.invalidate_positions(self.slam.map_version)
         self.tracker = EntityTracker(self.memory)
