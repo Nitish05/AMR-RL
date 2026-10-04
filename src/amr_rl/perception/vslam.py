@@ -232,9 +232,10 @@ class VSLAMConfig:
     closure_ratio: float = 1.5
     closure_max_frac: float = 0.08
     closure_confirm_deg: float = 1.0
-    # C8: heading gate in turns. Close to an almost featureless wall (a horizontal
-    # skirting edge) matches slide along the edge and the heading locks onto a wrong
-    # rotation (+10-27 deg per revolution in the benchmark). Each frame's visual
+    # C8: heading gate in turns. Next to a near wall or box the heading locks onto a
+    # wrong rotation (+10-27 deg per revolution in the benchmark); round-8 analysis: the
+    # cause is wrong depth (face points lifted to the floor) times the lever arm, not
+    # matches sliding along the skirting edge. Each frame's visual
     # rotation is compared with the commanded one times a slip factor learned from
     # well-tracked turns (engineered estimate, prior turn_slip_init); a disagreement
     # above max(turn_gate_deg, turn_gate_frac x the expected step) keeps the commanded
@@ -244,6 +245,33 @@ class VSLAMConfig:
     turn_gate_frac: float = 0.5
     turn_slip_init: float = 0.85
     turn_slip_min_inliers: int = 150
+    # Round 8 (docs/results/turn-drift.md): the tail of the turn drift is wrong depth.
+    # Next to a wall or box (0.15-0.3 m), image points below the horizon on its face are
+    # lifted to the floor far too distant; with the 0.125 m lever arm the turn is then
+    # over-estimated by up to 1 + 0.125/d (x1.7 at 0.18 m). 92 % of the points used in
+    # such frames were created during the same turn, before any later validation.
+    # C9: before lifting a new point to the floor, triangulate it against the previous
+    # keyframe (the lever arm gives a baseline even in a turn): consistent with the
+    # floor -> a validated floor point; much nearer -> a triangulated point; too little
+    # parallax -> lifted as before (far points: small effect). off|turn|always
+    c9_parallax_check: str = "off"
+    c9_min_parallax_deg: float = 1.5
+    c9_min_baseline: float = 0.01
+    c9_unmatched: str = "lenient"   # strict: in turns, unmatched candidates wait for the next keyframe
+    # C10: during a turn, points made in that turn and not yet validated are weighted
+    # by c10_weight (1.0 = off).
+    c10_weight: float = 1.0
+    # C8b: gate variants and turn-aware prediction (with turn_heading_gate).
+    turn_gate_mode: str = "frame"   # frame: per-frame step; window: mean ratio over turn_gate_window frames
+    turn_gate_window: int = 3
+    turn_gate_ratio: float = 0.15
+    turn_gate_keyframes: bool = False  # allow keyframes on gated frames (sensible with C9)
+    turn_max_prediction_s: float = 0.0  # >0: in-place turns may predict this long (bounded below)
+    turn_max_predicted_rot_deg: float = 60.0
+    turn_max_heading_sigma_deg: float = 8.0
+    # C11: floor-band ORB with a smaller border/patch so the bottom rows still give
+    # floor features when a near wall hides most of the floor (needs floor_feature_share).
+    floor_patch_size: int = 15
     # Side fix: count a landmark as "visible" once per frame (not once per hypothesis
     # and search radius), so the cull rule sees the true re-find rate.
     visible_once_per_frame: bool = False
@@ -341,7 +369,8 @@ class PlanarVSLAM:
             masks = np.zeros((2, model.height, model.width), np.uint8)
             masks[0, row:] = 255
             masks[1, :row] = 255
-            self._split = [(cv2.ORB_create(nfeatures=n_floor, **kw), masks[0]),
+            kw_floor = dict(kw, edgeThreshold=self.cfg.floor_patch_size, patchSize=self.cfg.floor_patch_size)
+            self._split = [(cv2.ORB_create(nfeatures=n_floor, **kw_floor), masks[0]),
                            (cv2.ORB_create(nfeatures=self.cfg.n_features - n_floor, **kw), masks[1])]
         self.matcher = cv2.BFMatcher(cv2.NORM_HAMMING)
         self.lm = Landmarks()
@@ -372,10 +401,12 @@ class PlanarVSLAM:
         self.horizon = model.horizon_row()
         self.frames = 0
         self._turn = None  # in-place turn state (see _update_turn_state)
+        self._pred_rot = 0.0  # rotation dead-reckoned since tracking was last accepted
         self.turn_slip = None  # learned commanded-to-measured turn ratio (C8); None until configured
         self._turn_count = 0
         self._visible_frame = -1
         self.turn_closures = []  # applied turn closures (operational log)
+        self.c9_stats = {"floor": 0, "converted": 0, "far": 0, "dropped": 0, "deferred": 0, "no_reference": 0}
         self._lever = float(np.linalg.norm(model.T_base_cam[:2, 3]))
         self.last_hypothesis = None
         self.predicted_time = 0.0
@@ -586,6 +617,11 @@ class PlanarVSLAM:
         P, uv = self.lm.pos[lm_idx], pts[kp_idx]
         prior = self._motion_prior
         dw = self._depth_weights(lm_idx, pose0)
+        if self.cfg.c10_weight < 1.0 and self._turn is not None:
+            prov = ((self.lm.flags[lm_idx] & 1) != 0) & ((self.lm.flags[lm_idx] & 2) == 0) \
+                & (self.lm.created[lm_idx] >= self._turn["t0"])
+            f = np.where(prov, self.cfg.c10_weight, 1.0)
+            dw = f if dw is None else dw * f
         pose, err, _ = self.optimize(pose0, P, uv, prior=prior, weights=dw, pin=pin)
         inl = err < self.cfg.inlier_px * 2
         if inl.sum() >= self.cfg.min_inliers:
@@ -712,10 +748,24 @@ class PlanarVSLAM:
                 self.pose = self.pose + np.array([v * dt * math.cos(th), v * dt * math.sin(th), w * dt])
                 self.pose[2] = wrap(self.pose[2])
                 self.position_sigma = (self.position_sigma or 0.0) + 0.5 * abs(v) * dt + 0.002
-                self.heading_sigma = (self.heading_sigma or 0.0) + 0.3 * abs(w) * dt + 0.003
-            if (self.predicted_time > self.cfg.max_prediction_seconds + 1e-9
-                    or (self.position_sigma or 0.0) > self.cfg.max_prediction_sigma
-                    or self.failures > 2 * self.cfg.max_prediction_frames):
+                turn_pred = self._turn is not None and self.cfg.turn_max_prediction_s > 0 and abs(v) < self.cfg.turn_v_max
+                if turn_pred:
+                    self.heading_sigma = (self.heading_sigma or 0.0) + 0.15 * abs(w) * dt
+                    self._pred_rot += abs(w) * dt
+                else:
+                    self.heading_sigma = (self.heading_sigma or 0.0) + 0.3 * abs(w) * dt + 0.003
+            in_turn = (self._turn is not None and self.cfg.turn_max_prediction_s > 0
+                       and commanded is not None and abs(commanded[0]) < self.cfg.turn_v_max)
+            if in_turn:
+                expired = (self.predicted_time > self.cfg.turn_max_prediction_s + 1e-9
+                           or self._pred_rot > math.radians(self.cfg.turn_max_predicted_rot_deg)
+                           or (self.heading_sigma or 0.0) > math.radians(self.cfg.turn_max_heading_sigma_deg)
+                           or (self.position_sigma or 0.0) > self.cfg.max_prediction_sigma)
+            else:
+                expired = (self.predicted_time > self.cfg.max_prediction_seconds + 1e-9
+                           or (self.position_sigma or 0.0) > self.cfg.max_prediction_sigma
+                           or self.failures > 2 * self.cfg.max_prediction_frames)
+            if expired:
                 # Tracking usually degrades before it fails (a wrong lock for ~1 s):
                 # landmarks created in the window before the loss are suspect too.
                 self._arm_dead_reckoning(timestamp, remove_landmarks=True)
@@ -730,6 +780,7 @@ class PlanarVSLAM:
                                0, 0, False, timestamp, "visual_tracking_interrupted", info={"degraded": True})
         self.status = TRACKING
         self.predicted_time = 0.0
+        self._pred_rot = 0.0
         pose, inl, H, lm_idx, kp_idx, err = result
         self._frame_candidates = None
         if self._probation > 0 and not self._motion_consistent(pose, commanded, dt, timestamp):
@@ -794,7 +845,9 @@ class PlanarVSLAM:
         matched_lm = -np.ones(len(pts), int)
         matched_lm[kp_idx[inl]] = lm_idx[inl]
         kf = False
-        if not info.get("degraded"):  # never extend the map from a flagged turn
+        allow = not info.get("degraded") or (gated and not (tr is not None and tr["flagged"])
+                                              and self.cfg.turn_gate_keyframes)
+        if allow:  # never extend the map from a flagged turn (gated frames only with C8b + C9)
             kf = self._maybe_keyframe(gray, pts, desc, matched_lm, int(inl.sum()), timestamp)
         if kf and self.place is not None and self.cfg.loop_closure:
             self._loop_check(rgb, timestamp)
@@ -937,6 +990,9 @@ class PlanarVSLAM:
         free = kf.landmark < 0
         world, ok = self._ipm(pts, self.pose)
         ok &= free
+        validated = np.zeros(len(pts), bool)
+        if self.cfg.c9_parallax_check == "always" or (self.cfg.c9_parallax_check == "turn" and self._turn is not None):
+            ok, validated = self._parallax_check(kf, last, world, ok)
         if self._turn is not None and self.cfg.turn_landmarks == "gaps" and len(pts):
             cell = np.floor(pts / self.cfg.turn_gap_cell).astype(int)
             key = cell[:, 0] * 1000 + cell[:, 1]
@@ -956,9 +1012,12 @@ class PlanarVSLAM:
                 # Only a near-identical descriptor at the same floor point is a duplicate;
                 # a different appearance (scale/viewpoint) is kept as a new observation.
                 ok[idx[same]] = False
-        ids = self.lm.add(world[ok], desc[ok], 0, origin=self.model.T_world_cam(self.pose)[:3, 3],
-                          created=self._now, anchor=kf.id, flags=1 if self._turn is not None else 0)
-        kf.landmark[np.flatnonzero(ok)] = ids
+        born = 1 if self._turn is not None else 0
+        origin = self.model.T_world_cam(self.pose)[:3, 3]
+        for sel, flag in ((ok & ~validated, born), (ok & validated, born | 2)):
+            if sel.any():
+                ids = self.lm.add(world[sel], desc[sel], 0, origin=origin, created=self._now, anchor=kf.id, flags=flag)
+                kf.landmark[np.flatnonzero(sel)] = ids
         self._note_covisibility(kf, matched_lm)
         self.keyframes.append(kf)
         if self._turn is not None:
@@ -1003,8 +1062,16 @@ class PlanarVSLAM:
             self.turn_slip = cfg.turn_slip_init
         expected = self.turn_slip * commanded[1] * dt
         visual = wrap(pose[2] - self.pose[2])
-        gate = max(math.radians(cfg.turn_gate_deg), cfg.turn_gate_frac * abs(expected))
-        if abs(visual - expected) > gate:
+        if cfg.turn_gate_mode == "window":
+            hist = tr.setdefault("gate_hist", [])
+            hist.append((visual, expected))
+            del hist[:-cfg.turn_gate_window]
+            sv, se = sum(h[0] for h in hist), sum(h[1] for h in hist)
+            bad = len(hist) >= cfg.turn_gate_window and abs(se) > 1e-6 and abs(sv / se - 1.0) > cfg.turn_gate_ratio
+        else:
+            gate = max(math.radians(cfg.turn_gate_deg), cfg.turn_gate_frac * abs(expected))
+            bad = abs(visual - expected) > gate
+        if bad:
             tr["gated"] = tr.get("gated", 0) + 1
             return np.array([self.pose[0], self.pose[1], wrap(self.pose[2] + expected)]), True
         # learn the slip factor from confidently tracked turn frames (slow running average)
@@ -1024,6 +1091,67 @@ class PlanarVSLAM:
             scope = born_in_turn if self.cfg.floor_validation == "turn" else np.ones(len(tent), bool)
             out |= scope & (self.lm.kind[tent] == 0) & ((self.lm.flags[tent] & 2) == 0)
         return out
+
+    def _parallax_check(self, kf, ref, world, ok):
+        """C9: check new floor candidates against the previous keyframe before lifting.
+        Returns (ok, validated): candidates kept as floor points, and which of them the
+        triangulation confirmed on the floor. Much nearer points become triangulated
+        landmarks here (they leave ``ok``)."""
+        cfg = self.cfg
+        validated = np.zeros(len(ok), bool)
+        a = np.flatnonzero(ok)
+        b = np.flatnonzero(ref.landmark < 0) if ref.pts is not None and len(ref.pts) else np.zeros(0, int)
+        strict = cfg.c9_unmatched == "strict" and self._turn is not None
+        if len(a) == 0 or len(b) < 5:
+            if strict:
+                ok = ok & False
+            self.c9_stats["no_reference"] += int(len(a))
+            return ok, validated
+        matches = self.matcher.knnMatch(kf.desc[a], ref.desc[b], k=2)
+        pairs = [(m[0].queryIdx, m[0].trainIdx) for m in matches
+                 if m and m[0].distance < 50 and (len(m) < 2 or m[0].distance < 0.8 * m[1].distance)]
+        matched = np.zeros(len(ok), bool)
+        if pairs:
+            ia = a[[p[0] for p in pairs]]
+            ib = b[[p[1] for p in pairs]]
+            T1 = np.linalg.inv(self.model.T_world_cam(kf.pose))
+            T2 = np.linalg.inv(self.model.T_world_cam(ref.pose))
+            c1, c2 = np.linalg.inv(T1)[:3, 3], np.linalg.inv(T2)[:3, 3]
+            K = self.model.K
+            X = cv2.triangulatePoints(K @ T1[:3], K @ T2[:3], kf.pts[ia].T.astype(float), ref.pts[ib].T.astype(float))
+            X = (X[:3] / X[3]).T
+            uv1, z1 = self._project(X, kf.pose)
+            uv2, z2 = self._project(X, ref.pose)
+            e = np.maximum(np.linalg.norm(uv1 - kf.pts[ia], axis=1), np.linalg.norm(uv2 - ref.pts[ib], axis=1))
+            r1, r2 = X - c1, X - c2
+            cos = (r1 * r2).sum(1) / (np.linalg.norm(r1, axis=1) * np.linalg.norm(r2, axis=1) + 1e-9)
+            par = np.degrees(np.arccos(np.clip(cos, -1, 1)))
+            base_ok = np.linalg.norm(c1 - c2) >= cfg.c9_min_baseline
+            geo = (z1 > 0.05) & (z2 > 0.05) & (e < 1.5)
+            measured = geo & (par >= cfg.c9_min_parallax_deg) & base_ok
+            ratio = np.linalg.norm(r1, axis=1) / np.maximum(np.linalg.norm(world[ia] - c1, axis=1), 1e-6)
+            floor = measured & (np.abs(ratio - 1.0) <= cfg.floor_val_ratio)
+            near = measured & (ratio < 1.0 - 2 * cfg.floor_val_ratio) & (X[:, 2] > 0.0) & (X[:, 2] < 2.0)
+            far = geo & ~measured  # too little parallax: far away, the floor error matters little
+            validated[ia[floor]] = True
+            if near.any():
+                ids = self.lm.add(X[near], kf.desc[ia[near]], 1, origin=c1, confirmed=True, created=self._now,
+                                  anchor=kf.id, flags=(1 if self._turn is not None else 0) | 2)
+                kf.landmark[ia[near]] = ids
+                ref.landmark[ib[near]] = ids
+                ok[ia[near]] = False
+            odd = measured & ~floor & ~near  # measured, neither floor nor clearly nearer: do not lift
+            ok[ia[odd]] = False
+            matched[ia[floor | near | far | odd]] = True
+            self.c9_stats["floor"] += int(floor.sum())
+            self.c9_stats["converted"] += int(near.sum())
+            self.c9_stats["far"] += int(far.sum())
+            self.c9_stats["dropped"] += int(odd.sum())
+        unmatched = ok & ~matched
+        if strict:
+            ok = ok & ~unmatched
+            self.c9_stats["deferred"] += int(unmatched.sum())
+        return ok, validated
 
     def _validate_floor(self, kf):
         """C2a: triangulate tentative floor landmarks seen in ``kf`` against the keyframe

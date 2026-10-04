@@ -65,3 +65,22 @@ def nearest_object(world, p, heading=None, hfov_deg=42.5):
 
 def keyframe_distance(kf_world, p):
     return float(np.min(np.linalg.norm(np.asarray(kf_world) - np.asarray(p)[None], axis=1)))
+
+
+def config_boxes(cfg):
+    """Footprints of obstacles and fixtures from a world config (no simulator; fixtures
+    at their configured positions)."""
+    boxes = [{"name": o["name"], "size": o["size"], "xy": o["pos"], "yaw": float(o.get("yaw", 0.0))}
+             for o in cfg.get("obstacles", [])]
+    boxes += [{"name": f["name"], "size": f["size"], "xy": f["pos"], "yaw": float(f.get("yaw", 0.0)),
+               "round": f["shape"] in ("cylinder", "sphere")} for f in cfg.get("fixtures", [])]
+    return boxes
+
+
+def surface_distances(cfg, p):
+    """(nearest object footprint, nearest wall face) distances (m) from point p, from the
+    world config. Walls are the room's axis-aligned inner faces."""
+    lx, ly = cfg["room"]["size"]
+    wall = min(lx / 2 - abs(p[0]), ly / 2 - abs(p[1]))
+    obj = min((footprint_distance(p, b) for b in config_boxes(cfg)), default=math.inf)
+    return obj, wall

@@ -133,12 +133,17 @@ def run_sequence(job):
     true_slide = max(float(np.linalg.norm(np.asarray(r["truth"][:2]) - np.asarray(rows[0]["truth"][:2]))) for r in rows)
     lost = [r["status"] in (LOST, RELOCALIZING) for r in rows]
     res = {"id": seq["id"], "pattern": seq["pattern"], "bin": seq["bin"], "object_m": seq["object_m"],
+           "surface_m": seq.get("surface_m"), "wall_m": seq.get("wall_m"),
+           "sbin": surface_bin(seq["surface_m"]) if seq.get("surface_m") is not None else seq["bin"],
            "position": seq["position"], "replay": replay, "frames": len(rows),
            "e360": e_at(360), "e720": e_at(720),
            "e_end": None if rows[-1]["e"] is None else math.degrees(abs(rows[-1]["e"])),
            "emax": max((math.degrees(abs(r["e"])) for r in trk), default=None),
            "conf_wrong": sum(abs(r["e"]) > math.radians(10) and not r["degraded"] for r in trk),
            "flagged_wrong": sum(abs(r["e"]) > math.radians(10) and r["degraded"] for r in trk),
+           "flagged_ok": sum(abs(r["e"]) < math.radians(3) and r["degraded"] for r in trk),
+           "jump_frames": sum(1 for a, b in zip(rows[:-1], rows[1:]) if a["e"] is not None and b["e"] is not None
+                              and b["status"] == TRACKING and abs(wrap(b["e"] - a["e"])) > math.radians(0.7)),
            "tracking": len(trk), "lost": int(sum(lost)), "predicted": sum(r["status"] == PREDICTED for r in rows),
            "loss_events": sum(1 for a, b in zip(lost[:-1], lost[1:]) if b and not a),
            "ratio": est_rot / tru_rot if tru_rot > 0.3 else None, "true_rot_deg": math.degrees(true_cum[-1]),
@@ -164,6 +169,13 @@ def boot_p90(values, n=1000, seed=0):
     rng = np.random.default_rng(seed)
     s = [np.percentile(rng.choice(v, len(v)), 90) for _ in range(n)]
     return [float(np.percentile(s, 2.5)), float(np.percentile(s, 97.5))]
+
+
+def surface_bin(d, edges=(0.0, 0.4, 0.7, 9.0)):
+    for lo, hi in zip(edges[:-1], edges[1:]):
+        if lo <= d < hi:
+            return f"{lo}-{hi}"
+    return f"{edges[-2]}-{edges[-1]}"
 
 
 def summarise(results):
@@ -219,6 +231,18 @@ def main():
     if args.patterns:
         seqs = [s for s in seqs if s["pattern"] in args.patterns]
     map_dir = args.map or meta["map_dir"]
+    # surface bins (nearest object OR wall), computed from the world config for older captures
+    import sys
+
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import capture_common
+    from amr_rl.sim.world import load_world_config
+
+    wcfg = load_world_config(meta["world"])
+    for s in seqs:
+        if "surface_m" not in s:
+            o, w = capture_common.surface_distances(wcfg, s["xy"])
+            s["surface_m"], s["wall_m"] = min(s["object_m"], w), w
     replays = ["onmap", "fresh"] if args.replay == "both" else [args.replay]
     if map_dir is None:
         replays = [r for r in replays if r != "onmap"]

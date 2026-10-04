@@ -22,7 +22,7 @@ def wrap(a):
     return (a + math.pi) % (2 * math.pi) - math.pi
 
 
-def scene(rng, box_dist=0.35, room=4.0):
+def scene(rng, box_dist=0.35, room=4.0, box_width=0.4, box_height=0.35, n_face=400):
     n = 6000
     r = np.sqrt(rng.uniform(0.04, 1, n)) * room / 2
     a = rng.uniform(-math.pi, math.pi, n)
@@ -36,9 +36,9 @@ def scene(rng, box_dist=0.35, room=4.0):
         walls.append(np.column_stack([side[0], side[1], z]))
     pts, box = [floor] + walls, None
     if box_dist is not None:
-        m = 400
-        box = (box_dist, box_dist + 0.4, -0.2, 0.2, 0.35)
-        pts.append(np.column_stack([np.full(m, box_dist), rng.uniform(-0.2, 0.2, m), rng.uniform(0.01, 0.35, m)]))
+        m, hw = n_face, box_width / 2
+        box = (box_dist, box_dist + 0.4, -hw, hw, box_height)
+        pts.append(np.column_stack([np.full(m, box_dist), rng.uniform(-hw, hw, m), rng.uniform(0.01, box_height, m)]))
     P = np.vstack(pts)
     return P, rng.integers(0, 256, (len(P), 32), dtype=np.uint8), box
 
@@ -66,13 +66,13 @@ def visible(model, pose, P, box):
 
 
 def run_turn(cfg=None, *, box_dist=0.35, slip=0.83, w_cmd=0.45, turn_deg=360.0, seed=0, start_heading=0.0,
-             base_drift=(0.0, 0.0), slam=None, inject=None):
+             base_drift=(0.0, 0.0), slam=None, inject=None, box_width=0.4, box_height=0.35, n_face=400):
     """Turn in place; returns (slam, rows). rows: (t, status, heading error deg relative to
     the start, position error m, result). ``base_drift``: true base velocity (m/s).
     ``inject(k, slam)``: called before frame k (tests inject estimation errors)."""
     rng = np.random.default_rng(seed)
     model = CameraModel.from_spec(RobotSpec.load())
-    P, desc, box = scene(rng, box_dist)
+    P, desc, box = scene(rng, box_dist, box_width=box_width, box_height=box_height, n_face=n_face)
     slam = slam or PlanarVSLAM(model, cfg or VSLAMConfig())
     truth = np.array([0.0, 0.0, start_heading])
     state = {"pose": truth}

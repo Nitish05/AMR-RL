@@ -70,6 +70,10 @@ def main():
     ap.add_argument("--per-bin", type=int, default=6)
     ap.add_argument("--bins", nargs="+", type=float, default=[0.0, 0.4, 0.7, 9.0])
     ap.add_argument("--clearance", type=float, default=0.28)
+    ap.add_argument("--bin-by", default="surface", choices=["surface", "object"],
+                    help="surface: nearest object OR wall (round 8); object: objects only (round 7)")
+    ap.add_argument("--wall-positions", type=int, default=0,
+                    help="extra positions with a wall face within 0.32 m (the round-7 failure tail)")
     ap.add_argument("--max-kf-dist", type=float, default=0.3,
                     help="with --map-dir: only positions within this of a map keyframe (where the robot has been)")
     ap.add_argument("--approach", type=float, default=0.0, help="m driven straight at 0.15 m/s before turning")
@@ -94,16 +98,25 @@ def main():
         kfs = json.loads((Path(args.map_dir) / "map.json").read_text())["keyframes"]
         kf_world = np.array([evaluator.map_to_world(origin, k["pose"][:2]) for k in kfs])
         free = [p for p in free if capture_common.keyframe_distance(kf_world, p) <= args.max_kf_dist]
-    dist = np.array([capture_common.nearest_object(world, p) for p in free])
+    obj = np.array([capture_common.nearest_object(world, p) for p in free])
+    wall = np.array([capture_common.surface_distances(world.config, p)[1] for p in free])
+    dist = np.minimum(obj, wall) if args.bin_by == "surface" else obj
     positions = []
     for lo, hi in zip(args.bins[:-1], args.bins[1:]):
         idx = np.flatnonzero((dist >= lo) & (dist < hi))
         for i in rng.permutation(idx)[:args.per_bin]:
-            positions.append({"xy": list(free[i]), "object_m": float(dist[i]), "bin": f"{lo}-{hi}",
+            positions.append({"xy": list(free[i]), "object_m": float(obj[i]), "wall_m": float(wall[i]),
+                              "surface_m": float(min(obj[i], wall[i])), "bin": f"{lo}-{hi}",
                               "heading0": float(rng.uniform(-math.pi, math.pi))})
+    if args.wall_positions:
+        idx = np.flatnonzero(wall <= 0.32)
+        for i in rng.permutation(idx)[:args.wall_positions]:
+            positions.append({"xy": list(free[i]), "object_m": float(obj[i]), "wall_m": float(wall[i]),
+                              "surface_m": float(min(obj[i], wall[i])), "bin": f"{args.bins[0]}-{args.bins[1]}",
+                              "forced": "wall", "heading0": float(rng.uniform(-math.pi, math.pi))})
     meta = {"world": args.world, "map_dir": args.map_dir, "origin_world": None if origin is None else origin.tolist(),
             "mode": args.mode, "rate": args.rate, "slip": args.slip if args.mode == "reset" else None,
-            "approach": args.approach, "period": PERIOD, "seed": args.seed, "sequences": []}
+            "approach": args.approach, "period": PERIOD, "seed": args.seed, "bin_by": args.bin_by, "sequences": []}
     gen = 0
     for n, pos in enumerate(positions):
         for pattern in args.patterns:
@@ -138,7 +151,8 @@ def main():
                 truth = evaluator.true_pose(world)
                 rec = {"file": f"{seq_id}/{k:04d}.png", "t": round(k * PERIOD, 3), "cmd": [float(cmd_prev[0]), float(cmd_prev[1])],
                        "world": [float(v_) for v_ in truth],
-                       "object_m": capture_common.nearest_object(world, truth[:2], heading=float(truth[2]))}
+                       "object_m": capture_common.nearest_object(world, truth[:2], heading=float(truth[2])),
+                       "wall_m": capture_common.surface_distances(world.config, truth[:2])[1]}
                 if origin is not None:
                     rec["map"] = [float(v_) for v_ in evaluator.to_map_frame(origin, truth)]
                 cv2.imwrite(str(out / rec["file"]), np.asarray(rgb)[..., ::-1])
@@ -161,7 +175,7 @@ def main():
             true_rot = sum(abs(math.atan2(math.sin(b["world"][2] - a["world"][2]), math.cos(b["world"][2] - a["world"][2])))
                            for a, b in zip(frames[:-1], frames[1:]))
             cmd_rot = sum(abs(f["cmd"][1]) * PERIOD for f in frames)
-            print(f"{seq_id} bin {pos['bin']} object {pos['object_m']:.2f} m frames {len(frames)} "
+            print(f"{seq_id} bin {pos['bin']} object {pos['object_m']:.2f} m wall {pos['wall_m']:.2f} m frames {len(frames)} "
                   f"turned {math.degrees(true_rot):.0f} deg (commanded {math.degrees(cmd_rot):.0f})", flush=True)
     (out / "sequences.json").write_text(json.dumps(meta))
     print("done", len(meta["sequences"]))
