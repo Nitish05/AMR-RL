@@ -232,6 +232,18 @@ class VSLAMConfig:
     closure_ratio: float = 1.5
     closure_max_frac: float = 0.08
     closure_confirm_deg: float = 1.0
+    # C8: heading gate in turns. Close to an almost featureless wall (a horizontal
+    # skirting edge) matches slide along the edge and the heading locks onto a wrong
+    # rotation (+10-27 deg per revolution in the benchmark). Each frame's visual
+    # rotation is compared with the commanded one times a slip factor learned from
+    # well-tracked turns (engineered estimate, prior turn_slip_init); a disagreement
+    # above max(turn_gate_deg, turn_gate_frac x the expected step) keeps the commanded
+    # rotation (position held) and makes no keyframe from that frame.
+    turn_heading_gate: bool = False
+    turn_gate_deg: float = 1.2
+    turn_gate_frac: float = 0.5
+    turn_slip_init: float = 0.85
+    turn_slip_min_inliers: int = 150
     # Side fix: count a landmark as "visible" once per frame (not once per hypothesis
     # and search radius), so the cull rule sees the true re-find rate.
     visible_once_per_frame: bool = False
@@ -360,6 +372,7 @@ class PlanarVSLAM:
         self.horizon = model.horizon_row()
         self.frames = 0
         self._turn = None  # in-place turn state (see _update_turn_state)
+        self.turn_slip = None  # learned commanded-to-measured turn ratio (C8); None until configured
         self._turn_count = 0
         self._visible_frame = -1
         self.turn_closures = []  # applied turn closures (operational log)
@@ -693,6 +706,8 @@ class PlanarVSLAM:
             # with growing uncertainty. Beyond the time/uncertainty limits -> LOST.
             if commanded is not None and dt > 0:
                 v, w = commanded
+                if self.cfg.turn_heading_gate and self._turn is not None and self.turn_slip is not None:
+                    w = self.turn_slip * w  # wheel slip: the real turn is smaller than commanded
                 th = self.pose[2] + 0.5 * w * dt
                 self.pose = self.pose + np.array([v * dt * math.cos(th), v * dt * math.sin(th), w * dt])
                 self.pose[2] = wrap(self.pose[2])
@@ -728,6 +743,9 @@ class PlanarVSLAM:
             self._turn, self._turn_count = None, 0
             return TrackResult(LOST, None, None, None, 0, 0, False, timestamp, "visual_motion_inconsistent_with_commands")
         self.failures = 0
+        gated = False
+        if self.cfg.turn_heading_gate and self._turn is not None and commanded is not None and dt > 0:
+            pose, gated = self._heading_gate(pose, commanded, dt, int(inl.sum()))
         if dt > 0:
             step = np.array([pose[0] - self.pose[0], pose[1] - self.pose[1], wrap(pose[2] - self.pose[2])])
             self.velocity = 0.5 * self.velocity + 0.5 * step / dt
@@ -743,9 +761,10 @@ class PlanarVSLAM:
             return TrackResult(TRACKING, pose.copy(), self.position_sigma, self.heading_sigma,
                                int(inl.sum()), len(lm_idx), False, timestamp, "probation",
                                inlier_uv=pts[kp_idx[inl]])
-        self.lm.found[lm_idx[inl]] += 1
+        if not gated:  # matches of a rejected visual heading confirm nothing
+            self.lm.found[lm_idx[inl]] += 1
         centre = self.model.T_world_cam(pose)[:3, 3]
-        tent = lm_idx[inl][~self.lm.confirmed[lm_idx[inl]]]
+        tent = lm_idx[inl][~self.lm.confirmed[lm_idx[inl]]] if not gated else np.zeros(0, int)
         if len(tent):
             moved = np.linalg.norm(self.lm.origin[tent] - centre, axis=1) >= 0.04
             ok = moved & (self.lm.found[tent] >= 3)
@@ -769,7 +788,9 @@ class PlanarVSLAM:
                 if self.cfg.turn_sigma_growth > 0:
                     self.heading_sigma = float(np.hypot(self.heading_sigma, self.cfg.turn_sigma_growth
                                                         * abs(tr["est_rot"] - tr["rot_at_closure"])))
-            info.update({"turn": True, "turn_rot": float(tr["est_rot"]), "degraded": bool(tr["flagged"])})
+            info.update({"turn": True, "turn_rot": float(tr["est_rot"]), "degraded": bool(tr["flagged"] or gated)})
+            if gated:
+                info["heading_gated"] = True
         matched_lm = -np.ones(len(pts), int)
         matched_lm[kp_idx[inl]] = lm_idx[inl]
         kf = False
@@ -974,6 +995,23 @@ class PlanarVSLAM:
                           "cmd_rot": w * dt, "est_rot": 0.0, "last_th": float(self.pose[2]), "max_exc": 0.0,
                           "rot_at_closure": 0.0, "kf_rot": {}, "flagged": False, "pending": None, "closures": 0,
                           "fallbacks": 0}
+
+    def _heading_gate(self, pose, commanded, dt, inliers):
+        """C8: keep the commanded rotation (x slip) when the visual one disagrees."""
+        cfg, tr = self.cfg, self._turn
+        if self.turn_slip is None:
+            self.turn_slip = cfg.turn_slip_init
+        expected = self.turn_slip * commanded[1] * dt
+        visual = wrap(pose[2] - self.pose[2])
+        gate = max(math.radians(cfg.turn_gate_deg), cfg.turn_gate_frac * abs(expected))
+        if abs(visual - expected) > gate:
+            tr["gated"] = tr.get("gated", 0) + 1
+            return np.array([self.pose[0], self.pose[1], wrap(self.pose[2] + expected)]), True
+        # learn the slip factor from confidently tracked turn frames (slow running average)
+        if inliers >= cfg.turn_slip_min_inliers and abs(commanded[1]) * dt > 1e-3:
+            ratio = float(np.clip(visual / (commanded[1] * dt), 0.5, 1.1))
+            self.turn_slip = float(np.clip(0.98 * self.turn_slip + 0.02 * ratio, 0.6, 1.0))
+        return pose, False
 
     def _unconfirmable(self, tent, centre):
         """Tentative landmarks that the 4 cm rule must not confirm (C3 tentative, C2a)."""
