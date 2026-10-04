@@ -49,7 +49,9 @@ Open, in order:
    defaults stay round 5. Correction helps drifted maps and hurts accurate ones;
    the pose-graph-only back-end misses re-anchoring, so global BA is the next step.
 3. **Relocalisation** more than ~0.3 m from keyframes still mostly fails (one start
-   per map).
+   per map). Round 6 (`docs/results/relocalisation.md`): pooling, threshold 50 and
+   the coverage pass evaluated, none adopted. Next: an "explained share" floor
+   against wall-landmark aliases, and fixing heading drift in in-place turns.
 4. **The learning suite** (restart, reversal, inert, noisy) has not been re-run on
    round-4/5 code.
 5. **Perception swap** in simulation.

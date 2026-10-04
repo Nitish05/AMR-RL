@@ -102,6 +102,93 @@ keyframes.
 | free coverage | 0.58 | 0.58 | 0.57 | 0.51 |
 | relocalisations, false | 4, 0 | 1, 0 | 2, 0 | 6, 0 |
 
+## Round 6: extending the range (evaluated, nothing adopted)
+
+Code: `34a8fc2`. Evidence: `work/evidence/item3-offline-20261003/`,
+`work/evidence/i3-{nocov,cov}-*`, `work/evidence/i3-capture-arena-s{2,3}`.
+
+The round-5 diagnosis had two parts:
+- **0.3–0.5 m from keyframes, matching is the bottleneck.** Near-true hypotheses
+  exist in only 14 % of frames.
+- **Beyond 0.5 m, coverage is the bottleneck.** 34–67 % of drivable space is more
+  than 0.5 m from any keyframe.
+
+The pass rule was fixed beforehand:
+- 0 false relocalisations on held-out captures;
+- 0.3–0.5 m recall at least doubled;
+- all 5 learning starts relocalise on at least one new map;
+- map ATE not worse.
+
+### 1. Pooling floor seeds across the relocalisation turn (`reloc_pool_frames`)
+
+Floor correspondences from the last 5 frames, moved into the current frame by the
+commanded rotation, go into one two-point RANSAC.
+
+| capture (turn sequences) | bin | pooling off: good / false / never | pooling on |
+|---|---|---|---|
+| arena v2 map (design) | 0.15–0.3 m | 10 / 0 / 1 | 11 / 0 / 0 |
+| | 0.3–0.5 m | 2 / 0 / 6 | **4** / 0 / 4 |
+| | learning starts | 4 of 5 (start 2 never) | **5 of 5** |
+| home_a (held out) | 0.15–0.3 m | 6 / 0 / 2 | 7 / 0 / 1 |
+| | 0.3–0.5 m | 3 / 0 / 5 | 3 / **1** / 4 |
+
+The held-out false acceptance was 1.08 m and 19° off. It rested on 70–88 inliers,
+mostly wall (triangulated) landmarks, with only 12–16 % of the predicted-visible
+map cells re-found.
+
+**Stop rule applied: off by default.** The same signature (low "explained" share,
+wall inliers) appears in the one false relocalisation during a live build (arena s4,
+t = 97.8 s, 26 cm, rejected in probation after 1.4 s). A floor on the explained
+share is the next candidate. It needs its own calibration and a fresh held-out
+capture.
+
+### 2. Verification threshold 50 instead of 70
+
+On the arena v2 capture, threshold 50:
+- **single frames:** good acceptances go from 573 to 811, but **8 are false** (7 at
+  0.15–0.3 m);
+- **turn sequences:** 0 false, because the 3-candidate confirmation caught them.
+
+The existing calibration rule needs the threshold at 1.5× the strongest false
+acceptance, so 50 is **rejected**, and the threshold stays at 70.
+
+### 3. Coverage pass at the end of map building (`RuntimeConfig.coverage_lattice`)
+
+In the last 150 s of a 420 s build, the robot visits free lattice points more than
+0.3 m from every keyframe and makes a full survey turn at each. Paired builds,
+otherwise identical (`--no-coverage` against `--coverage-seconds 150`):
+
+| scenario | ATE without coverage pass | ATE with coverage pass |
+|---|---|---|
+| arena s2 | 4.9 cm | 8.3 cm |
+| arena s3 | 10.1 cm | 5.3 cm |
+| arena s4 | 4.0 cm | **29.1 cm** |
+| heldout_b s2 (held out) | 2.7 cm | **19.3 cm** (1 false loop closure) |
+
+The error grows only once the coverage pass starts. In arena s4 the heading error
+jumped 14° within one survey turn at t = 290 s and reached 28°, while the VSLAM
+still reported "tracking"; the position error then grew to 72 cm. This is the same
+in-place-turn drift that made frontier panoramas harmful in round 4.
+
+A drifted map also relocalises the robot into wrong places. On the arena s2 coverage
+map, the same captured frames gave 4 positions and 1 start more than 20 cm off
+(5 in all; 0 on the no-coverage map).
+
+**Off by default.** Before more keyframes can be bought with turning, rotation
+tracking during in-place turns needs fixing. Possible fixes:
+- a gyro-free rotation check from the commanded turn;
+- slower turns;
+- no keyframes while rotating.
+
+### What does reach all 5 starts
+
+With the default configuration, the new no-coverage arena s4 map relocalises all
+5 learning starts correctly (`starts-s4-base70.json`; start 1 after 260°). It has
+the best ATE of the new maps (4.0 cm). This comes from the map itself, not from a
+round-6 change. On the s2 map, 3 starts never relocalise. On s3, all 5 relocalise,
+but start 3 is imprecise. The s4 map was chosen for the round-6 learning suite
+before that suite ran.
+
 ## Not done
 
 **Keyframe retrieval** (saving keyframe descriptors and matching a frame against
