@@ -13,6 +13,7 @@ import numpy as np
 
 from ..perception.camera_model import wrap
 from .planner import GoalRejected, Planner
+from .view_check import ViewCheckConfig, plan_turn
 
 
 @dataclass
@@ -34,10 +35,16 @@ class FollowerConfig:
 
 
 class Navigator:
-    def __init__(self, planner: Planner | None = None, config: FollowerConfig | None = None):
+    def __init__(self, planner: Planner | None = None, config: FollowerConfig | None = None, *,
+                 view_aware_turns: bool = False, view: ViewCheckConfig | None = None):
         self.planner = planner or Planner()
         self.cfg = config or FollowerConfig()
         self.guard = None  # optional DepthGuard (navigation/near_field.py): stops for new obstacles
+        # Perception-aware turning (navigation/view_check.py; engineered, off by default).
+        # Also read by the explore look-around and survey activities through rt.nav.
+        self.view_aware_turns = bool(view_aware_turns)
+        self.view = view or ViewCheckConfig()
+        self.view_stats = {"turns_checked": 0, "back_offs": 0, "long_way": 0, "unavoidable": 0}
         self.reset()
 
     def reset(self):
@@ -56,6 +63,7 @@ class Navigator:
         self.holding = False
         self.original_goal = None
         self.goal_snaps = 0
+        self._view_turn = None
 
     def set_goal(self, grid, pose, goal, *, heading=None, now=0.0, avoid=()):
         self.reset_goal_state()
@@ -87,6 +95,7 @@ class Navigator:
         self.holding = False
         self.original_goal = None
         self.goal_snaps = 0
+        self._view_turn = None
 
     def cancel(self, reason="cancelled"):
         self.reset_goal_state()
@@ -108,7 +117,7 @@ class Navigator:
             if abs(err) <= self.cfg.heading_tolerance:
                 self.status = "arrived"
                 return 0.0, 0.0
-            return self._turn_or_back_off(grid, pose, float(np.clip(1.5 * err, -0.6, 0.6)))
+            return self._turn_or_back_off(grid, pose, float(np.clip(1.5 * err, -0.6, 0.6)), err=err, now=now)
         if self.status == "arrived":
             return 0.0, 0.0
         # Every step: the next stretch of path must still be certified; if not, stop
@@ -144,7 +153,8 @@ class Navigator:
         dist_goal = float(np.linalg.norm(to_goal))
         if abs(heading_err) > self.cfg.rotate_threshold:
             return self._turn_or_back_off(grid, pose, float(np.clip(1.8 * heading_err, -self.cfg.w_max,
-                                                                      self.cfg.w_max)))
+                                                                      self.cfg.w_max)), err=heading_err, now=now)
+        self._view_turn = None  # the in-place turn (if any) is over
         v = self.cfg.v_max * max(0.25, math.cos(heading_err)) * min(1.0, dist_goal / 0.35 + 0.15)
         w = float(np.clip(2.2 * heading_err, -self.cfg.w_max, self.cfg.w_max))
         if self.guard is not None:
@@ -197,13 +207,15 @@ class Navigator:
         pts = self._path_points(grid, pose, self.cfg.corridor_skip, self.cfg.corridor)
         return len(pts) == 0 or bool(self.planner.traversable_xy(grid, pts).all())
 
-    def _turn_or_back_off(self, grid, pose, w):
+    def _turn_or_back_off(self, grid, pose, w, err=None, now=None):
         """Turn in place only if no known obstacle lies inside the turning circle;
         otherwise reverse straight (the way the robot came) by at most max_backoff."""
         radius = self.planner.cfg.footprint_radius + self.cfg.turn_margin
         here = float(self.planner.obstacle_clearance_xy(grid, [pose[:2]])[0])
         if here >= radius:
             self._last_xy = None
+            if self.view_aware_turns and err is not None:
+                return self._view_aware_turn(grid, pose, w, err, now)
             return 0.0, w
         if self._last_xy is not None:
             self.backed_off += float(np.linalg.norm(np.asarray(pose[:2]) - self._last_xy))
@@ -215,6 +227,43 @@ class Navigator:
             return 0.0, 0.0
         return -self.cfg.backoff_speed, 0.0
 
+    def _view_aware_turn(self, grid, pose, w, err, now):
+        """ENGINEERED rule (round 9, docs: turn-drift research): before a necessary
+        in-place turn whose short-way sweep would point the camera at a surface closer
+        than ``view.near``, reverse 0.1-0.3 m within the remaining back-off budget, or
+        turn the long way when |err| is about pi and that way is clear. Decided once
+        per turn (navigation/view_check.py plan_turn); otherwise turn as before."""
+        st = self._view_turn
+        if st is None:
+            points = self.guard.view_points(now) if self.guard is not None else None
+            mode, value = plan_turn(grid, self.planner, pose, err, cfg=self.view, points=points,
+                                    budget=max(0.0, self.cfg.max_backoff - self.backed_off),
+                                    clearance_radius=self.planner.cfg.footprint_radius + self.cfg.turn_margin)
+            st = self._view_turn = {"mode": mode, "value": value, "start": np.asarray(pose[:2], float).copy(),
+                                    "t": now}
+            if abs(err) >= self.view.min_turn:
+                self.view_stats["turns_checked"] += 1
+            if mode == "back_off":
+                self.view_stats["back_offs"] += 1
+            elif mode == "long":
+                self.view_stats["long_way"] += 1
+            elif value == "unavoidable":
+                self.view_stats["unavoidable"] += 1
+        if st["mode"] == "back_off":
+            moved = float(np.linalg.norm(np.asarray(pose[:2], float) - st["start"]))
+            slow = now is not None and st["t"] is not None and \
+                now - st["t"] > 2.0 * st["value"] / self.cfg.backoff_speed + 1.0
+            if moved < st["value"] and not slow:
+                return -self.cfg.backoff_speed, 0.0
+            self.backed_off += moved
+            st["mode"] = "turn"
+        if st["mode"] == "long":
+            if (err > 0) == (st["value"] > 0):
+                st["mode"] = "turn"  # past pi: the short way is now the chosen direction
+            else:
+                return 0.0, float(st["value"]) * abs(w)
+        return 0.0, w
+
     def snapshot(self):
         return {
             "goal": None if self.goal is None else [float(v) for v in self.goal],
@@ -223,4 +272,5 @@ class Navigator:
             "reason": self.reason,
             "rejected_goals": self.rejections,
             "goal_snaps": self.goal_snaps,
+            **({"view_aware_turns": dict(self.view_stats)} if self.view_aware_turns else {}),
         }

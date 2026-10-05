@@ -76,6 +76,7 @@ class SimWorld:
         self.config = config
         self.spec = spec or RobotSpec.load()
         self.rng = np.random.default_rng(seed)
+        self.seed = seed
         self.dt = float(config.get("physics", {}).get("dt", 0.01))
         self.consequences = consequences if consequences is not None else config.get("consequences", {})
         self.events: list[WorldEvent] = []
@@ -247,7 +248,12 @@ class SimWorld:
             self.inspection = self.scene.add_camera(res=(480, 360), fov=55, GUI=False, debug=True,
                                                     pos=(-lx / 2 + 0.2, -ly / 2 + 0.2, 2.2),
                                                     lookat=(0.3, 0.2, 0.0))
+        from .sensors import ProprioSensors
+
+        self.sensors = ProprioSensors(spec, seed=self.seed, dt=self.dt, faults=cfg.get("sensor_faults"))
+        self.sensors.attach(self.scene, self.robot)
         self.scene.build()
+        self.sensors.bind()
         # Mount the camera on the chassis link: OpenCV optical -> Genesis (OpenGL) camera axes.
         cv_to_gl = np.diag([1.0, -1.0, -1.0, 1.0])
         self.camera.attach(self.robot.get_link("base_link"), spec.camera_to_base() @ cv_to_gl)
@@ -263,13 +269,45 @@ class SimWorld:
         from ..control.genesis_backend import GenesisWheelBackend
 
         self.backend = GenesisWheelBackend(self.robot, spec)
+        # EVALUATION FAULT INJECTION (world side): floor regions where the wheels lose
+        # grip (spilt liquid, a smooth mat). Genesis combines contact friction as the
+        # larger of the two surfaces' values, so a patch is modelled by lowering the
+        # friction of a wheel while its contact point lies inside the patch.
+        self.slip_patches = [dict(p) for p in cfg.get("slip_patches", [])]
+        self._wheel_links = [self.robot.get_link(n) for n in ("left_wheel", "right_wheel")]
+        # A whole-floor override (``wheel_friction`` in the world config) models a
+        # slippery floor everywhere.
+        self._base_friction = float(cfg.get("wheel_friction", spec.drive["wheel_friction"]))
+        self._wheel_friction = [float(spec.drive["wheel_friction"])] * 2
+        if self._base_friction != self._wheel_friction[0]:
+            for i, link in enumerate(self._wheel_links):
+                link.set_friction(self._base_friction)
+                self._wheel_friction[i] = self._base_friction
+        self.slip_log = []
 
     # --------------------------------------------------------------- stepping
     def step(self):
         self.backend.apply(now=self.time)
+        if self.slip_patches:
+            self._update_slip_patches()
         self.scene.step()
         self.time = round(self.time + self.dt, 9)
+        self.sensors.sample(self.time)
         self._update_fixtures()
+
+    def _update_slip_patches(self):
+        base = self._base_friction
+        for i, link in enumerate(self._wheel_links):
+            xy = np.asarray(link.get_pos()).reshape(3)[:2]
+            mu = base
+            for p in self.slip_patches:
+                c, half = np.asarray(p["xy"], float), np.asarray(p["size"], float) / 2
+                if np.all(np.abs(xy - c) <= half):
+                    mu = min(mu, float(p["friction"]))
+            if mu != self._wheel_friction[i]:
+                link.set_friction(mu)
+                self._wheel_friction[i] = mu
+                self.slip_log.append({"t": self.time, "wheel": i, "friction": mu})
 
     def capture(self, calibration_version: str) -> Frame:
         """Render the robot-mounted camera at its current physical pose."""

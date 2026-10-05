@@ -15,6 +15,7 @@ import numpy as np
 
 from ..learning.identity import appearance_distance
 from ..learning.outcomes import classify
+from ..navigation.view_check import faces_near, plan_sweep, sector_near_fraction
 from ..perception.camera_model import wrap
 from .frontier import frontier_goals
 
@@ -41,6 +42,28 @@ def nudge_creep(contact_range: float | None, centre_range: float | None, radius:
     else:
         creep = (centre_range if centre_range is not None else NUDGE_STANDOFF[0]) - (radius + FRONT_EXTENT) + PUSH_DEPTH
     return float(np.clip(creep, 0.0, MAX_CREEP))
+
+
+def _view_nav(rt):
+    """The navigator when perception-aware turning is on (``Navigator.view_aware_turns``,
+    set once by the runtime), else None: every activity then behaves exactly as before."""
+    nav = getattr(rt, "nav", None)
+    return nav if nav is not None and getattr(nav, "view_aware_turns", False) else None
+
+
+def _view_points(nav, now):
+    return nav.guard.view_points(now) if getattr(nav, "guard", None) is not None else None
+
+
+def _near_ahead(rt, nav, now, direction, limit=math.inf):
+    """(camera faces near now, camera would face near within ``survey_lookahead``
+    (at most ``limit``) in ``direction``): ENGINEERED view check on the robot's own
+    grid + guard points."""
+    cfg, th = nav.view, float(rt.pose[2])
+    pts = _view_points(nav, now)
+    here = faces_near(rt.grid, rt.pose, th, cfg=cfg, points=pts)
+    end = th + direction * min(cfg.survey_lookahead, limit)
+    return here, sector_near_fraction(rt.grid, rt.pose, th, end, cfg.step, cfg=cfg, points=pts) > 0
 
 
 class Activity:
@@ -162,15 +185,20 @@ class Survey(Activity):
 
     def __init__(self, angle=2 * math.pi, rate=0.5, reason="look around"):
         super().__init__(None, reason)
+        self.angle = angle
         self.remaining = angle
         self.rate = rate
         self.last = None
         self.pause_until = None
+        self._phi = None  # view-aware only: signed rotation from the start heading
 
     def step(self, rt, now):
         self.phase = "surveying"
         if rt.pose is None:
             return 0.0, 0.0
+        nav = _view_nav(rt)
+        if nav is not None:
+            return self._step_view_aware(rt, now, nav)
         if self.last is not None:
             self.remaining -= abs(wrap(rt.pose[2] - self.last))
         self.last = rt.pose[2]
@@ -184,6 +212,41 @@ class Survey(Activity):
             self.pause_until = now + 0.4
         return 0.0, self.rate
 
+    def _step_view_aware(self, rt, now, nav):
+        """ENGINEERED (round 9): survey without sweeping the camera across surfaces
+        closer than ``nav.view.near``. Turn in the usual direction; on reaching a
+        near sector, reverse once and survey the other side; on reaching a near sector
+        again (or once ``angle`` is covered) stop. Already inside a near sector (e.g.
+        facing a wall at the start): keep turning out of it. Coverage loses the near
+        sector, which the camera sees at close range anyway."""
+        if self._phi is None:
+            self._phi, self._hi, self._lo = 0.0, 0.0, 0.0
+            self._dir = 1.0 if self.rate >= 0 else -1.0
+            self._flipped = False
+        if self.last is not None:
+            d = wrap(rt.pose[2] - self.last)
+            self.remaining -= abs(d)
+            self._phi += d
+            self._hi, self._lo = max(self._hi, self._phi), min(self._lo, self._phi)
+        self.last = rt.pose[2]
+        covered = self._hi - self._lo
+        if covered >= self.angle or self.remaining <= -self.angle:  # covered, or bounded at 2x the turning
+            self.finish("completed", **({"view_limited": True, "covered_deg": round(math.degrees(covered), 1)}
+                                        if self._flipped else {}))
+            return 0.0, 0.0
+        if self.pause_until is not None and now < self.pause_until:
+            return 0.0, 0.0
+        if int(self.remaining / (math.pi / 4)) != int((self.remaining + 0.05) / (math.pi / 4)):
+            self.pause_until = now + 0.4
+        here, ahead = _near_ahead(rt, nav, now, self._dir)
+        if ahead and not here:
+            if self._flipped:
+                self.finish("completed", view_limited=True, covered_deg=round(math.degrees(covered), 1))
+                return 0.0, 0.0
+            self._flipped = True
+            self._dir = -self._dir
+        return 0.0, self._dir * abs(self.rate)
+
 
 class Explore(Activity):
     name = "explore"
@@ -194,6 +257,7 @@ class Explore(Activity):
         self.key = key
         self.survey = None
         self.free_at_start = None
+        self.view_adjusted = None  # view-aware turns: how the look-around was changed
 
     def finish(self, status, **detail):
         super().finish(status, **detail)
@@ -209,11 +273,26 @@ class Explore(Activity):
                 self.survey.rate = 0.45
                 self._sweep = [math.radians(50), -math.radians(100), math.radians(50)]
                 coverage = isinstance(self.key, tuple) and bool(self.key) and self.key[0] == "cover"
+                nav = _view_nav(rt)
                 if coverage or getattr(rt, "wants_panorama", lambda: False)():
-                    self._sweep = [2 * math.pi]  # full look: keyframes facing every way
-                    rt.note_panorama()
+                    if nav is not None and self._panorama_faces_near(rt, nav, now):
+                        self._note_view("panorama_skipped")  # ENGINEERED: too much of it faces near
+                    else:
+                        self._sweep = [2 * math.pi]  # full look: keyframes facing every way
+                        rt.note_panorama()
+                if nav is not None and len(self._sweep) == 3:
+                    planned = plan_sweep(rt.grid, rt.pose, self._sweep, cfg=nav.view, points=_view_points(nav, now))
+                    if planned != self._sweep:
+                        self._note_view("sweep_shortened" if planned else "sweep_dropped")
+                    self._sweep = planned
                 self._sweep_i = 0
                 self._last = rt.pose[2]
+                self._phi = 0.0
+                if not self._sweep:  # both sides face near: no look-around here
+                    rt.note_frontier_visit(self.key)
+                    rt.note_map_progress(rt.grid.counts()["free"] - self.free_at_start)
+                    self.finish("completed", view_adjusted=self.view_adjusted)
+                    return 0.0, 0.0
                 self._left = self._sweep[0]
             elif self.goto.status in ("rejected", "failed"):
                 rt.note_frontier_failure(self.key)
@@ -227,15 +306,40 @@ class Explore(Activity):
         self._last = rt.pose[2]
         self._left -= turned
         target = self._sweep[self._sweep_i]
+        nav = _view_nav(rt)
+        carry = 0.0
+        if nav is not None:
+            self._phi += turned
+            direction = 1.0 if target > 0 else -1.0
+            # ENGINEERED: while turning outward (never on the final turn back to the
+            # centre), end this side early if the camera is about to face something
+            # near that was not known at arrival; the next turn shrinks by what was skipped.
+            if self._sweep_i < len(self._sweep) - 1 and self._phi * direction >= 0 and self._left * direction > 0:
+                here, ahead = _near_ahead(rt, nav, now, direction, limit=abs(self._left))
+                if ahead and not here:
+                    carry, self._left = self._left, 0.0
+                    self._note_view("sweep_cut")
         if (target > 0 and self._left <= 0) or (target < 0 and self._left >= 0):
             self._sweep_i += 1
             if self._sweep_i >= len(self._sweep):
                 rt.note_frontier_visit(self.key)
                 rt.note_map_progress(rt.grid.counts()["free"] - self.free_at_start)
-                self.finish("completed")
+                if self.view_adjusted is not None:
+                    self.finish("completed", view_adjusted=self.view_adjusted)
+                else:
+                    self.finish("completed")
                 return 0.0, 0.0
-            self._left = self._sweep[self._sweep_i]
+            self._left = self._sweep[self._sweep_i] + carry
         return 0.0, 0.45 if self._sweep[self._sweep_i] > 0 else -0.45
+
+    def _note_view(self, tag):
+        self.view_adjusted = tag if self.view_adjusted is None else f"{self.view_adjusted}+{tag}"
+
+    def _panorama_faces_near(self, rt, nav, now):
+        th = float(rt.pose[2])
+        frac = sector_near_fraction(rt.grid, rt.pose, th, th + 2 * math.pi, nav.view.step, cfg=nav.view,
+                                    points=_view_points(nav, now))
+        return frac > nav.view.panorama_near_fraction
 
 
 class Investigate(Activity):

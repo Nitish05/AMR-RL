@@ -53,6 +53,11 @@ class GuardConfig:
     # each confirmed face, along the camera ray, are lowered to "unknown" (never free).
     shadow_depth: float = 0.35   # m (0 = off)
     observe_only: bool = False   # evaluation: detect and record, change nothing
+    # Perception-aware turns (navigation/view_check.py): the latest world-frame obstacle
+    # points are kept for this long so the view check works while the grid is still
+    # empty (initial survey). Recording them changes no guard decision.
+    view_memory: float = 4.0     # s
+    view_range: float = 1.5      # m; only points this close to the robot are kept
 
 
 class DepthGuard:
@@ -72,6 +77,9 @@ class DepthGuard:
         self.free_run = None
         self.free_run_t = -np.inf
         self.hold_since = None
+        self.last_world = np.zeros((0, 2))  # latest frame's obstacle points, world xy
+        self.last_world_t = -np.inf
+        self.world_history = []             # [(t, world xy)] within view_memory
 
     def reset(self):
         """New goal: forget the hold timer (the latest detection stays valid until stale)."""
@@ -81,7 +89,10 @@ class DepthGuard:
         self.path_ahead = np.asarray(pts, float).reshape(-1, 2)
 
     # ------------------------------------------------------------ detection
-    def maybe_detect(self, now, pose, rgb):
+    def maybe_detect(self, now, pose, rgb, *, record_only=False):
+        """Run the detector at most every ``period``. ``record_only``: only keep the
+        world-frame points for the view check (no free run, nothing written to the
+        grid); for frames outside path following, e.g. survey and look-around turns."""
         if now - self.last_frame < self.cfg.period or pose is None or rgb is None or self.detector is None:
             return None
         self.last_frame = now
@@ -94,11 +105,28 @@ class DepthGuard:
         world = np.column_stack([pose[0] + c * pts[:, 0] - s * pts[:, 1],
                                  pose[1] + s * pts[:, 0] + c * pts[:, 1]]) if len(pts) else np.zeros((0, 2))
         here = np.asarray(pose[:2], float)
+        self._record_world(now, world, here)
+        if record_only:
+            return {"points": len(pts), "free_run": None}
         self.free_run = self._free_run(world, here)
         self.free_run_t = now
         if not self.cfg.observe_only:
             self._confirm_and_assert(now, world, here, heading=float(pose[2]))
         return {"points": len(pts), "free_run": self.free_run}
+
+    def _record_world(self, now, world, here):
+        if len(world):
+            world = world[np.linalg.norm(world - here[None], axis=1) <= self.cfg.view_range]
+        self.last_world, self.last_world_t = world, float(now)
+        self.world_history = [(t, w) for t, w in self.world_history if now - t <= self.cfg.view_memory]
+        self.world_history.append((float(now), world))
+
+    def view_points(self, now=None):
+        """Obstacle points (world xy) from frames within ``view_memory`` of ``now``
+        (default: of the latest frame), for navigation/view_check.py."""
+        ref = self.last_world_t if now is None else now
+        keep = [w for t, w in self.world_history if ref - t <= self.cfg.view_memory and len(w)]
+        return np.vstack(keep) if keep else np.zeros((0, 2))
 
     def _free_run(self, world, here):
         """Along-path distance to the first path point where the footprint would

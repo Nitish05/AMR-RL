@@ -23,7 +23,7 @@
     "screen_link"
   ],
   "schema": "amr_rl.robot-assets.v1",
-  "spec_sha256": "e31f29cb749439aedf6ce23877057999da516bc5a8906aa928b437af5b1daeb6",
+  "spec_sha256": "eda65023780dc42dcb9277758a971f27823823054937889b1430f1823c76157d",
   "total_mass_kg": 5.079999999999999,
   "trimesh_version": "5.1.0"
 }

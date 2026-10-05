@@ -5,7 +5,8 @@ simulation results in simulated time; they do not establish real-time
 performance on hardware.
 
 The harness is the only place where world and runtime meet: frames go from the
-world's onboard camera to the runtime; drive requests go from the runtime's
+world's onboard camera to the runtime; raw IMU and encoder samples from the
+world's sensor models (``sim/sensors.py``) go to the runtime's ``on_proprio``; drive requests go from the runtime's
 supervisor to the world's wheel backend; the runtime's screen image goes to the
 world's display. Ground truth is read only by the evaluator for scoring.
 """
@@ -43,6 +44,7 @@ class Session:
         self.recorder = SessionRecorder(self.run_dir / "recording", mode=recording_mode)
         for _ in range(20):  # settle on the floor before the first frame
             self.world.step()
+        self.world.sensors.drain()  # samples of the settling drop are not delivered
         self.world.backend.reset_clock()
         self.world.time = 0.0
         # Scoring only: the world pose of the map frame. A fresh map starts at the robot's
@@ -53,6 +55,7 @@ class Session:
         self.wall_start = time.time()
         self.steps_per_control = int(round(CONTROL_PERIOD / self.world.dt))
         self.blackouts = []
+        self.proprio_log = None  # set to [] to keep every raw sample batch (live replay)
 
     @property
     def now(self):
@@ -72,6 +75,10 @@ class Session:
             frame.rgb = np.zeros_like(frame.rgb)
         truth_at_frame = evaluator.true_pose(self.world)  # scoring only, same instant as the image
         cmd = self.runtime.last_command  # what on_frame passes to the VSLAM (logged for turn analysis)
+        proprio = self.world.sensors.drain()
+        if self.proprio_log is not None:
+            self.proprio_log.append(proprio)
+        self.runtime.on_proprio(proprio)
         self.runtime.on_frame(frame)
         screen, signal = self.runtime.tick(self.world.time)
         self.world.set_screen(screen, signal_pattern=signal)
@@ -94,6 +101,7 @@ class Session:
                            "sigma": self.runtime.sigma, "status": self.runtime.slam.status,
                            "activity": None if self.runtime.activity is None else self.runtime.activity.name,
                            "cmd": None if cmd is None else [float(cmd[0]), float(cmd[1])],
+                           **_odo_fields(self.runtime.last_odometry, self.runtime.last_track),
                            **_track_fields(self.runtime.last_track)})
         touching = evaluator.robot_contacts(self.world)
         if touching:
@@ -155,6 +163,22 @@ def _track_fields(track):
         info["turn_closure"] = True
     if info:
         out["info"] = info
+    return out
+
+
+def _odo_fields(step, track):
+    """Operational odometry diagnostics per frame (measured motion, slip flags, fusion
+    weights); empty in the command-only configuration."""
+    if step is None:
+        return {}
+    out = {"odo": [round(step.dx, 5), round(step.dy, 5), round(step.dth, 6)], "odo_slip": bool(step.slip),
+           "odo_still": bool(step.stationary), "odo_bias": step.info.get("bias"),
+           "odo_scale": step.info.get("gyro_scale")}
+    if step.info.get("slip_reasons"):
+        out["odo_slip_reasons"] = step.info["slip_reasons"]
+    fusion = (track.info or {}).get("fusion") if track is not None else None
+    if fusion:
+        out["fusion"] = fusion
     return out
 
 

@@ -66,10 +66,13 @@ def visible(model, pose, P, box):
 
 
 def run_turn(cfg=None, *, box_dist=0.35, slip=0.83, w_cmd=0.45, turn_deg=360.0, seed=0, start_heading=0.0,
-             base_drift=(0.0, 0.0), slam=None, inject=None, box_width=0.4, box_height=0.35, n_face=400):
+             base_drift=(0.0, 0.0), slam=None, inject=None, box_width=0.4, box_height=0.35, n_face=400,
+             odometry=None):
     """Turn in place; returns (slam, rows). rows: (t, status, heading error deg relative to
     the start, position error m, result). ``base_drift``: true base velocity (m/s).
-    ``inject(k, slam)``: called before frame k (tests inject estimation errors)."""
+    ``inject(k, slam)``: called before frame k (tests inject estimation errors).
+    ``odometry``: dict(scale=, sigma=) -> measured motion steps (gyro: true rotation x
+    scale, per-frame rotation sigma) are passed to the VSLAM (round 9)."""
     rng = np.random.default_rng(seed)
     model = CameraModel.from_spec(RobotSpec.load())
     P, desc, box = scene(rng, box_dist, box_width=box_width, box_height=box_height, n_face=n_face)
@@ -89,8 +92,18 @@ def run_turn(cfg=None, *, box_dist=0.35, slip=0.83, w_cmd=0.45, turn_deg=360.0, 
         if inject is not None:
             inject(k, slam)
         truth = truth + np.array([base_drift[0] * dt, base_drift[1] * dt, slip * prev[1] * dt])
+        step = None
+        if odometry is not None and k > 0:
+            from amr_rl.odometry.fusion import OdometryStep
+
+            dth = slip * prev[1] * dt * odometry.get("scale", 1.0)
+            sig = odometry.get("sigma", 1e-4)
+            c0, s0 = math.cos(-state["pose"][2]), math.sin(-state["pose"][2])
+            dxy = (base_drift[0] * dt, base_drift[1] * dt)
+            step = OdometryStep(dt, c0 * dxy[0] - s0 * dxy[1], s0 * dxy[0] + c0 * dxy[1], dth,
+                                np.diag([1e-6, 1e-6, sig ** 2]), 0.0, dth / dt, float(np.hypot(*dxy)))
         state["pose"] = truth
-        r = slam.track(None, t, commanded=prev)
+        r = slam.track(None, t, commanded=prev, odometry=step)
         if r.pose is not None and start is None:
             start = (r.pose.copy(), truth.copy())
         if r.pose is None or start is None:

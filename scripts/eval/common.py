@@ -181,3 +181,60 @@ def trajectory_metrics(truth_rows):
         out["sigma_coverage"] = float(np.mean([e <= s for s, e in sig]))
         out["sigma_coverage_2x"] = float(np.mean([e <= 2 * s for s, e in sig]))
     return out
+
+
+# ---------------------------------------------------------------- round 9 options
+def add_runtime_args(parser):
+    """Options shared by build_map / navigation / learning (round 9)."""
+    parser.add_argument("--odometry", default="command", choices=["command", "imu_encoders"],
+                        help="motion source for localisation (RuntimeConfig.odometry)")
+    parser.add_argument("--runtime", nargs="*", default=[], help="RuntimeConfig overrides key=value (JSON values)")
+    parser.add_argument("--odo", nargs="*", default=[], help="OdometryConfig overrides key=value (JSON values)")
+    parser.add_argument("--world-set", nargs="*", default=[],
+                        help="EVALUATION: world config overrides key=value (JSON), e.g. wheel_friction=0.4, "
+                             "slip_patches=[...], sensor_faults={\"imu_off\":true}")
+    parser.add_argument("--record-frames", action="store_true",
+                        help="keep every onboard frame (audit images) and raw sensor batch for live replay")
+
+
+def _kv(items):
+    out = {}
+    for item in items:
+        key, value = item.split("=", 1)
+        out[key] = json.loads(value)
+    return out
+
+
+def apply_runtime_args(cfg, args):
+    cfg.odometry = args.odometry
+    for key, value in _kv(args.runtime).items():
+        if not hasattr(cfg, key):
+            raise SystemExit(f"unknown RuntimeConfig field {key}")
+        setattr(cfg, key, value)
+    for key, value in _kv(args.odo).items():
+        if not hasattr(cfg.odometry_cfg, key):
+            raise SystemExit(f"unknown OdometryConfig field {key}")
+        setattr(cfg.odometry_cfg, key, value)
+    if args.record_frames:
+        cfg.audit_images = True
+    return cfg
+
+
+def world_overrides(args, base=None):
+    return {**(base or {}), **_kv(args.world_set)}
+
+
+def start_recording(session, args):
+    if args.record_frames:
+        session.proprio_log = []
+
+
+def save_recording(session, run_dir: Path):
+    """Raw sensor batches per control step (live replay input); frames are the audit
+    images written by the runtime's evidence archive."""
+    if session.proprio_log is None:
+        return
+    imu = [[s.t, *map(float, s.gyro), *map(float, s.accel)] for b in session.proprio_log for s in b.imu]
+    enc = [[s.t, s.left, s.right] for b in session.proprio_log for s in b.encoders]
+    np.savez_compressed(Path(run_dir) / "proprio.npz", imu=np.asarray(imu, float).reshape(-1, 7),
+                        enc=np.asarray(enc, float).reshape(-1, 3))

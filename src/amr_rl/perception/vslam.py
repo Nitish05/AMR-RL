@@ -50,6 +50,23 @@ def kd_tree(points) -> cKDTree:
     """
     return cKDTree(points, balanced_tree=False)
 TRACKING, LOST, RELOCALIZING, INITIALIZING = "tracking", "lost", "relocalizing", "initializing"
+
+
+def compose(pose, delta):
+    """Planar pose (x, y, theta) moved by ``delta`` given in its own frame."""
+    c, s_ = math.cos(pose[2]), math.sin(pose[2])
+    return np.array([pose[0] + c * delta[0] - s_ * delta[1], pose[1] + s_ * delta[0] + c * delta[1],
+                     wrap(pose[2] + delta[2])])
+
+
+def _propagate(pose, cov, odo):
+    """Covariance of compose(pose, odo) from the pose's covariance and the step's."""
+    c, s_ = math.cos(pose[2]), math.sin(pose[2])
+    F = np.eye(3)
+    F[0, 2] = -s_ * odo.dx - c * odo.dy
+    F[1, 2] = c * odo.dx - s_ * odo.dy
+    G = np.array([[c, -s_, 0.0], [s_, c, 0.0], [0.0, 0.0, 1.0]])
+    return F @ cov @ F.T + G @ odo.cov @ G.T
 PREDICTED = "predicted"  # bounded dead reckoning after brief visual loss (<= 1.5 s, <= 8 cm sigma)
 
 
@@ -291,6 +308,35 @@ class VSLAMConfig:
     # Side fix: count a landmark as "visible" once per frame (not once per hypothesis
     # and search radius), so the cull rule sees the true re-find rate.
     visible_once_per_frame: bool = False
+    # Round 9 (docs/results/heading-r9.md): wheel-inertial odometry fusion, used when
+    # track() receives an ``odometry`` step (IMU gyro + wheel encoders,
+    # amr_rl.odometry.fusion). Vision and odometry are combined by their information
+    # (an iterated-EKF step on the planar pose) with per-axis robust weights chosen by
+    # which sensor has heavy-tailed errors on that axis: heading -> vision (near
+    # surfaces the lifted depth plus the lever arm over-rotate it; the gyro does not
+    # see the view), translation -> odometry (wheel slip). ENGINEERED estimator.
+    odo_fusion: bool = True
+    odo_vision_scale: float = 2.0       # vision covariance = (huber px x this)^2 inv(H)
+    odo_vision_heading_floor: float = 0.004  # rad: smallest vision heading sigma (map-relative error is correlated)
+    odo_old_landmark_s: float = 8.0     # landmarks older than this are "established"
+    odo_min_established: float = 0.02   # heading sigma at most floor / sqrt(this)
+    odo_rot_huber: float = 2.5          # whitened heading innovation -> vision heading down-weighted
+    odo_xy_huber: float = 2.5           # whitened position innovation -> odometry translation down-weighted
+    odo_resync_frames: int = 20         # persistent heading disagreement while not turning -> follow vision
+    odo_resync_max_rot: float = 0.05    # rad of rotation over the resync window that counts as "not turning"
+    odo_max_prediction_s: float = 4.0   # dead reckoning on odometry (bounded by the sigmas below)
+    odo_max_heading_sigma_deg: float = 4.0
+    odo_freeze_ratio: float = 0.25
+    odo_angular_check: float = 0.35     # rad + odo_angular_rel x |rotation|: vision vs gyro over the window
+    odo_angular_rel: float = 0.25
+    # Gyro scale from vision: a full in-place turn that returns to the same view
+    # measures the true angle (same landmarks at both ends); ratio samples go back to
+    # the odometry (WheelInertialOdometry.add_scale_sample).
+    odo_ba: bool = True                 # odometry factors in the local bundle adjustment
+    odo_bias_max_rate: float = 0.25     # rad/s: bias feedback only while turning slower than this
+    odo_scale_calibration: bool = True
+    odo_scale_min_turn: float = 5.8     # rad
+    odo_scale_min_inliers: int = 100
 
 
 # Named turn-handling configurations (docs/results/turn-drift.md). "fam": round-8
@@ -314,6 +360,10 @@ class Keyframe:
     landmark: np.ndarray  # landmark index per feature or -1
     gray: np.ndarray | None = None
     gdesc: np.ndarray | None = None  # whole-image place descriptor (loop closure / retrieval)
+    # Measured motion (odometry) from the previous keyframe and its covariance (round 9;
+    # None without odometry or across a loss of tracking).
+    odo_rel: np.ndarray | None = None
+    odo_cov: np.ndarray | None = None
 
 
 @dataclass
@@ -451,6 +501,17 @@ class PlanarVSLAM:
         self._last_err = None
         self._last_quality = (0, 0.0)
         self.distance_travelled = 0.0
+        self._odo = None          # odometry step of the current frame (fusion mode)
+        self._cov = None          # fused pose covariance (world frame), fusion mode only
+        self._vision_pose = None  # last vision-only pose (fusion mode)
+        self._odo_acc = None      # (relative motion, covariance, keyframe id) since the newest keyframe
+        self._resync = 0
+        self.fusion_log = {"frames": 0, "rot_downweighted": 0, "xy_downweighted": 0, "resyncs": 0,
+                           "predicted_odo": 0}
+        self.last_fusion = None
+        self._scale_anchor = None
+        self.scale_samples = []   # (ratio, sigma) pending for the odometry
+        self.bias_feedback = []   # gyro rate error (rad/s) implied by vision's corrections
 
     # ------------------------------------------------------------ features
     def features(self, rgb: np.ndarray):
@@ -687,7 +748,9 @@ class PlanarVSLAM:
             # Optionally skip "static" while driven (suspected of aliased locks on
             # repetitive texture); benchmarked worse overall, so off by default.
             out.append(("static", self.pose.copy()))
-        if commanded is not None and dt > 0:
+        if self._odo is not None:
+            out.append(("odometry", compose(self.pose, (self._odo.dx, self._odo.dy, self._odo.dth))))
+        elif commanded is not None and dt > 0:
             v, w = commanded
             th = self.pose[2] + 0.5 * w * dt
             cm = self.pose + np.array([v * dt * math.cos(th), v * dt * math.sin(th), w * dt])
@@ -698,28 +761,51 @@ class PlanarVSLAM:
                 h[:2] = self._turn["axis"]
         return out
 
-    def track(self, rgb: np.ndarray, timestamp: float, commanded=None) -> TrackResult:
+    def track(self, rgb: np.ndarray, timestamp: float, commanded=None, odometry=None) -> TrackResult:
+        """``commanded``: the robot's own last (v, w) command. ``odometry``: an optional
+        measured motion step since the previous frame (amr_rl.odometry.fusion.
+        OdometryStep); with ``odo_fusion`` it replaces the command everywhere and is
+        fused with vision (round 9)."""
         self.frames += 1
         gray, pts, desc = self.features(rgb)
         dt = 0.0 if self.last_time is None else max(0.0, timestamp - self.last_time)
         self.last_time = timestamp
         self._now = timestamp
+        odo = odometry if (odometry is not None and self.cfg.odo_fusion and dt > 0) else None
+        self._odo = odo
+        if odo is not None:
+            commanded = odo.as_command()  # measured (v, w) in place of the command
         if self._dr is not None and commanded is not None and dt > 0:
-            v, w = commanded
-            th = self._dr["pose"][2] + 0.5 * w * dt
-            self._dr["pose"] = self._dr["pose"] + np.array([v * dt * math.cos(th), v * dt * math.sin(th), w * dt])
-            self._dr["travel"] += abs(v) * dt + 0.1 * abs(w) * dt
-            self._dr["rot"] += abs(w) * dt
+            if odo is not None:
+                self._dr["pose"] = compose(self._dr["pose"], (odo.dx, odo.dy, odo.dth))
+                self._dr["travel"] += odo.distance + 0.1 * abs(odo.dth)
+                self._dr["rot"] += abs(odo.dth)
+            else:
+                v, w = commanded
+                th = self._dr["pose"][2] + 0.5 * w * dt
+                self._dr["pose"] = self._dr["pose"] + np.array([v * dt * math.cos(th), v * dt * math.sin(th), w * dt])
+                self._dr["travel"] += abs(v) * dt + 0.1 * abs(w) * dt
+                self._dr["rot"] += abs(w) * dt
+        if odo is not None and self._odo_acc is not None and self.status in (TRACKING, PREDICTED):
+            rel, cov, kid = self._odo_acc
+            self._odo_acc = (compose(rel, (odo.dx, odo.dy, odo.dth)), _propagate(rel, cov, odo), kid)
+        elif odo is None:
+            self._odo_acc = None
         if self.status == INITIALIZING:
-            return self._initialize(gray, pts, desc, timestamp)
+            self._cov = None
+            out = self._initialize(gray, pts, desc, timestamp)
+            if self.keyframes:
+                self._odo_acc = (np.zeros(3), np.zeros((3, 3)), self.keyframes[-1].id)
+            return out
         if self.status in (LOST, RELOCALIZING):
             self._turn, self._turn_count = None, 0
+            self._cov, self._scale_anchor, self._resync, self._odo_acc = None, None, 0, None
             return self._relocalize(gray, pts, desc, timestamp, commanded=commanded, dt=dt, rgb=rgb)
         # TRACKING or PREDICTED: try to (re)acquire against the local map.
         self._update_turn_state(commanded, dt, timestamp)
         hypotheses = self._hypotheses(dt, commanded)
         self._motion_prior = None
-        if commanded is not None and dt > 0 and self.cfg.motion_prior:
+        if commanded is not None and dt > 0 and self.cfg.motion_prior and odo is None:
             cmd_pose = dict(hypotheses)["commanded"]
             v, w = commanded
             sig = np.array([0.5 * abs(v) * dt + 0.01, 0.5 * abs(v) * dt + 0.01, 0.5 * abs(w) * dt + 0.02])
@@ -768,6 +854,8 @@ class PlanarVSLAM:
             self.predicted_time += dt
             # Bounded prediction from the robot's own commanded motion (dead reckoning),
             # with growing uncertainty. Beyond the time/uncertainty limits -> LOST.
+            if odo is not None:
+                return self._predict_odometry(odo, timestamp)
             if commanded is not None and dt > 0:
                 v, w = commanded
                 if self.cfg.turn_heading_gate and self._turn is not None and self.turn_slip is not None:
@@ -823,7 +911,9 @@ class PlanarVSLAM:
             return TrackResult(LOST, None, None, None, 0, 0, False, timestamp, "visual_motion_inconsistent_with_commands")
         self.failures = 0
         gated = False
-        if self.cfg.turn_heading_gate and self._turn is not None and commanded is not None and dt > 0:
+        if odo is not None:
+            pose = self._fuse(pose, H, lm_idx[inl], timestamp)
+        elif self.cfg.turn_heading_gate and self._turn is not None and commanded is not None and dt > 0:
             pose, gated = self._heading_gate(pose, commanded, dt, int(inl.sum()))
         if dt > 0:
             step = np.array([pose[0] - self.pose[0], pose[1] - self.pose[1], wrap(pose[2] - self.pose[2])])
@@ -851,6 +941,9 @@ class PlanarVSLAM:
             self.lm.confirmed[tent[ok]] = True
         self._last_quality = (int(inl.sum()), float(np.mean(err[inl])))
         self._set_sigma(H, int(inl.sum()))
+        if odo is not None:
+            self._sigma_from_cov()
+            self._scale_check(timestamp, int(inl.sum()))
         info = {}
         tr = self._turn
         if tr is not None:
@@ -868,6 +961,8 @@ class PlanarVSLAM:
                     self.heading_sigma = float(np.hypot(self.heading_sigma, self.cfg.turn_sigma_growth
                                                         * abs(tr["est_rot"] - tr["rot_at_closure"])))
             info.update({"turn": True, "turn_rot": float(tr["est_rot"]), "degraded": bool(tr["flagged"] or gated)})
+        if odo is not None and self.last_fusion is not None:
+            info["fusion"] = self.last_fusion
             if gated:
                 info["heading_gated"] = True
         matched_lm = -np.ones(len(pts), int)
@@ -933,9 +1028,15 @@ class PlanarVSLAM:
         if commanded is None:
             return True
         v, w = commanded
-        self._motion_log.append((t, np.asarray(pose, float).copy(), v * dt, w * dt))
+        odo = self._odo
+        if odo is not None:  # measured: signed wheel travel, gyro rotation; slip marked
+            self._motion_log.append((t, np.asarray(pose, float).copy(), v * dt, odo.dth, bool(odo.slip)))
+        else:
+            self._motion_log.append((t, np.asarray(pose, float).copy(), v * dt, w * dt))
         while self._motion_log and t - self._motion_log[0][0] > self.cfg.consistency_window:
             self._motion_log.pop(0)
+        if odo is not None:
+            return self._odometry_consistent(t)
         recent = [e for e in self._motion_log if t - e[0] <= self.cfg.freeze_window + 1e-9]
         if self.cfg.freeze_check and len(recent) >= 5 and t - recent[0][0] >= 0.8 * self.cfg.freeze_window:
             cmd_recent = sum(abs(e[2]) for e in recent[1:])
@@ -956,6 +1057,175 @@ class PlanarVSLAM:
         ang_bad = abs(vis_ang) > 2.0 * abs(cmd_ang) + 0.35
         self.inconsistency = "linear" if lin_bad else "angular" if ang_bad else None
         return not (lin_bad or ang_bad)
+
+    def _odometry_consistent(self, t):
+        """Round 9: vision against measured motion. Wheel travel while the wheels are
+        flagged as slipping counts as no travel (being blocked with spinning wheels is
+        not a frozen estimate); rotation is compared signed with the gyro (no cancelling
+        of a left sweep against a right arc, which made 9 of 14 false losses)."""
+        cfg, log = self.cfg, self._motion_log
+        recent = [e for e in log if t - e[0] <= cfg.freeze_window + 1e-9]
+        if cfg.freeze_check and len(recent) >= 5 and t - recent[0][0] >= 0.8 * cfg.freeze_window:
+            travel = sum(abs(e[2]) for e in recent[1:] if not e[4])
+            vis = float(np.hypot(*(recent[-1][1][:2] - recent[0][1][:2])))
+            if travel >= cfg.freeze_min_cmd and vis < cfg.odo_freeze_ratio * travel:
+                self.inconsistency = "frozen"
+                return False
+        if len(log) < 10 or t - log[0][0] < 0.8 * cfg.consistency_window:
+            return True
+        travel = sum(abs(e[2]) for e in log[1:] if not e[4])
+        slipped = any(e[4] for e in log[1:])
+        rot = sum(e[3] for e in log[1:])
+        rot_abs = sum(abs(e[3]) for e in log[1:])
+        p0, p1 = log[0][1], log[-1][1]
+        vis_lin = float(np.hypot(*(p1[:2] - p0[:2])))
+        vis_ang = wrap(p1[2] - p0[2])
+        lin_bad = (travel >= 0.3 and vis_lin < 0.3 * travel) or (not slipped and vis_lin > 2.0 * travel + 0.12)
+        ang_bad = abs(wrap(vis_ang - rot)) > cfg.odo_angular_check + cfg.odo_angular_rel * rot_abs
+        self.inconsistency = "linear" if lin_bad else "angular" if ang_bad else None
+        return not (lin_bad or ang_bad)
+
+    # ------------------------------------------------------------ odometry fusion
+    def _fuse(self, z, H, ids, t):
+        """Combine the vision-only pose ``z`` (information H from the reprojection
+        fit) with the odometry prediction. See VSLAMConfig.odo_* for the rules.
+        ``ids``: the inlier landmarks. Vision's heading is an absolute measurement only
+        through established landmarks (older than odo_old_landmark_s or from a loaded
+        map); against landmarks the robot has just made it is visual odometry with the
+        lever-arm/depth bias, so its heading variance grows as 1 / (established share)."""
+        cfg, odo = self.cfg, self._odo
+        self._vision_pose = np.asarray(z, float).copy()
+        try:
+            lam_v = H / (cfg.huber_px * cfg.odo_vision_scale) ** 2
+            cov_v = np.linalg.inv(lam_v)
+        except np.linalg.LinAlgError:
+            self._cov = None
+            return z
+        created = self.lm.created[ids] if len(ids) else np.zeros(0)
+        share = float(np.mean(created < t - cfg.odo_old_landmark_s)) if len(created) else 0.0
+        floor = cfg.odo_vision_heading_floor / math.sqrt(max(share, cfg.odo_min_established))
+        if cov_v[2, 2] < floor ** 2:
+            f = floor / math.sqrt(max(cov_v[2, 2], 1e-18))
+            D = np.diag([1.0, 1.0, f])
+            cov_v = D @ cov_v @ D
+            lam_v = np.linalg.inv(cov_v)
+        self.fusion_log["frames"] += 1
+        if self._cov is None:  # (re)start: the vision pose with its own uncertainty
+            self._cov = cov_v
+            self.last_fusion = {"init": True}
+            return z
+        xp = compose(self.pose, (odo.dx, odo.dy, odo.dth))
+        Pp = _propagate(self.pose, self._cov, odo)
+        nu = np.array([z[0] - xp[0], z[1] - xp[1], wrap(z[2] - xp[2])])
+        S = Pp + cov_v
+        nis_th = nu[2] ** 2 / max(S[2, 2], 1e-18)
+        try:
+            nis_xy = float(nu[:2] @ np.linalg.solve(S[:2, :2], nu[:2]))
+        except np.linalg.LinAlgError:
+            nis_xy = 0.0
+        w_th = 1.0 if nis_th <= cfg.odo_rot_huber ** 2 else cfg.odo_rot_huber / math.sqrt(nis_th)
+        w_xy = 1.0 if nis_xy <= cfg.odo_xy_huber ** 2 else cfg.odo_xy_huber / math.sqrt(nis_xy)
+        # Persistent heading disagreement while hardly rotating (vision is reliable
+        # there): the reference has moved (map correction, wrong gyro bias) -> follow vision.
+        recent_rot = sum(abs(e[3]) for e in self._motion_log[-cfg.odo_resync_frames:])
+        self._resync = self._resync + 1 if w_th < 1.0 else 0
+        if self._resync >= cfg.odo_resync_frames and recent_rot < cfg.odo_resync_max_rot:
+            self._resync = 0
+            self._cov = cov_v
+            self.fusion_log["resyncs"] += 1
+            self.last_fusion = {"resync": True, "nis_th": float(nis_th)}
+            return z
+        if w_th < 1.0:
+            self.fusion_log["rot_downweighted"] += 1
+        if w_xy < 1.0:
+            self.fusion_log["xy_downweighted"] += 1
+        Dv = np.diag([1.0, 1.0, math.sqrt(w_th)])
+        try:
+            lam_p = np.linalg.inv(Pp)
+        except np.linalg.LinAlgError:
+            self._cov = cov_v
+            return z
+        Dp = np.diag([math.sqrt(w_xy), math.sqrt(w_xy), 1.0])
+        lv, lp = Dv @ lam_v @ Dv, Dp @ lam_p @ Dp
+        lam = lv + lp
+        delta = np.linalg.solve(lam, lv @ nu)
+        x = xp + delta
+        x[2] = wrap(x[2])
+        self._cov = np.linalg.inv(lam)
+        self._cov = 0.5 * (self._cov + self._cov.T)
+        # Vision's heading correction while hardly turning (no lever-arm effect) is a
+        # measurement of the gyro's rate error: fed back to the bias estimate.
+        if w_th == 1.0 and abs(odo.w) < cfg.odo_bias_max_rate and odo.dt > 0:
+            self.bias_feedback.append(-float(delta[2]) / odo.dt)
+        self.last_fusion = {"nis_th": float(nis_th), "nis_xy": float(nis_xy), "w_th": float(w_th), "est": share,
+                            "w_xy": float(w_xy), "vision_th": float(z[2]), "slip": bool(odo.slip)}
+        return x
+
+    def _sigma_from_cov(self):
+        if self._cov is None:
+            return
+        xy = float(np.sqrt(max(np.linalg.eigvalsh(self._cov[:2, :2]).max(), 0.0)))
+        self.position_sigma = max(xy, self.cfg.sigma_floor)
+        self.heading_sigma = float(math.sqrt(max(self._cov[2, 2], 0.0))) + 0.001
+
+    def _predict_odometry(self, odo, t):
+        """No visual fix this frame: dead-reckon on the measured motion with the
+        propagated covariance; LOST when the time or the uncertainty limits are hit."""
+        cfg = self.cfg
+        cov = self._cov if self._cov is not None else np.diag([
+            (self.position_sigma or cfg.sigma_floor) ** 2, (self.position_sigma or cfg.sigma_floor) ** 2,
+            (self.heading_sigma or 0.002) ** 2])
+        self._cov = _propagate(self.pose, cov, odo)
+        self.pose = compose(self.pose, (odo.dx, odo.dy, odo.dth))
+        self._sigma_from_cov()
+        self.fusion_log["predicted_odo"] += 1
+        expired = (self.predicted_time > cfg.odo_max_prediction_s + 1e-9
+                   or (self.position_sigma or 0.0) > cfg.max_prediction_sigma
+                   or (self.heading_sigma or 0.0) > math.radians(cfg.odo_max_heading_sigma_deg))
+        if expired:
+            self._arm_dead_reckoning(t, remove_landmarks=True)
+            self.status = LOST
+            self.position_sigma = self.heading_sigma = None
+            self.velocity[:] = 0
+            self._motion_log.clear()
+            self._turn, self._turn_count = None, 0
+            self._cov = None
+            return TrackResult(LOST, None, None, None, 0, 0, False, t, "tracking_failed")
+        self.status = PREDICTED
+        return TrackResult(PREDICTED, self.pose.copy(), self.position_sigma, self.heading_sigma,
+                           0, 0, False, t, "visual_tracking_interrupted", info={"degraded": True})
+
+    def _scale_check(self, t, inliers):
+        """Gyro scale from vision on full turns that come back to the same view."""
+        cfg, odo = self.cfg, self._odo
+        if not cfg.odo_scale_calibration or self._vision_pose is None:
+            return
+        z = self._vision_pose
+        healthy = inliers >= cfg.odo_scale_min_inliers and self._probation == 0
+        a = self._scale_anchor
+        if a is not None:
+            a["rot"] += odo.dth
+            a["travel"] += odo.distance
+            if abs(a["rot"]) > 4 * math.pi or a["travel"] > 0.15:
+                a = self._scale_anchor = None
+        if a is not None and healthy and abs(a["rot"]) >= cfg.odo_scale_min_turn:
+            off = wrap(z[2] - a["th"] - a["rot"])
+            if abs(wrap(z[2] - a["th"])) < 0.12 and abs(off) < 0.15:  # back at the anchor's view
+                true_rot = a["rot"] + off
+                sig = math.sqrt(2) * math.sqrt(max(self._cov[2, 2], 1e-8)) / abs(a["rot"]) if self._cov is not None \
+                    else 0.002
+                self.scale_samples.append((true_rot / a["rot"], sig))
+                a = self._scale_anchor = None
+        if a is None and healthy:
+            self._scale_anchor = {"th": float(z[2]), "rot": 0.0, "travel": 0.0, "t": t}
+
+    def pop_bias_feedback(self):
+        out, self.bias_feedback = self.bias_feedback, []
+        return out
+
+    def pop_scale_samples(self):
+        out, self.scale_samples = self.scale_samples, []
+        return out
 
     def _plausible(self, pose, previous, dt):
         # Planar robot at <= 0.4 m/s, <= 2 rad/s: reject teleport-like solutions.
@@ -1011,6 +1281,9 @@ class PlanarVSLAM:
         if n_inl < 30 or mean_err > 2.5:
             return False  # never extend the map from a weakly constrained pose
         kf = Keyframe(len(self.keyframes), timestamp, self.pose.copy(), pts, desc, matched_lm.copy(), gray)
+        if self._odo_acc is not None and self._odo_acc[2] == last.id:
+            kf.odo_rel, kf.odo_cov = self._odo_acc[0].copy(), self._odo_acc[1].copy()
+        self._odo_acc = (np.zeros(3), np.zeros((3, 3)), kf.id)
         self._triangulate(kf, last)
         if self.cfg.floor_validation != "off":
             self._validate_floor(kf)
@@ -1452,7 +1725,24 @@ class PlanarVSLAM:
             pts = x[3 * n_free:].reshape(-1, 3)
             return poses, pts
 
-        def residuals(x):
+        # Round 9: measured motion between consecutive keyframes as relative-pose
+        # factors (visual-inertial BA), whitened by the odometry covariance and scaled
+        # to pixel units like the vision terms; without them the window re-fits the
+        # keyframe poses from vision alone and brings back its turn bias.
+        odo_pairs = []
+        if self.cfg.odo_ba:
+            unit = self.cfg.huber_px * self.cfg.odo_vision_scale
+            for i in range(1, len(window)):
+                kf = window[i]
+                if i >= fixed_n and kf.odo_rel is not None and kf.odo_cov is not None:
+                    cov = kf.odo_cov + np.diag([1e-6, 1e-6, 1e-8])
+                    try:
+                        L = np.linalg.cholesky(np.linalg.inv(cov)).T * unit
+                    except np.linalg.LinAlgError:
+                        continue
+                    odo_pairs.append((i - 1, i, kf.odo_rel, L))
+
+        def residuals(x, vision_only=False):
             poses, pts = unpack(x)
             r = np.empty((len(obs_kf), 2))
             for i, pose in enumerate(poses):
@@ -1462,9 +1752,20 @@ class PlanarVSLAM:
                     rr = uv - obs_uv[m]
                     rr[z <= 0.02] = 50.0
                     r[m] = rr
-            return r.ravel()
+            if vision_only or not odo_pairs:
+                return r.ravel()
+            extra = []
+            for a, b, rel, L in odo_pairs:
+                pa, pb = poses[a], poses[b]
+                c, s_ = math.cos(pa[2]), math.sin(pa[2])
+                d = pb[:2] - pa[:2]
+                est = np.array([c * d[0] + s_ * d[1], -s_ * d[0] + c * d[1], wrap(pb[2] - pa[2])])
+                e = est - rel
+                e[2] = wrap(e[2])
+                extra.append(L @ e)
+            return np.concatenate([r.ravel(), np.concatenate(extra)])
 
-        A = lil_matrix((2 * len(obs_kf), len(x0)), dtype=int)
+        A = lil_matrix((2 * len(obs_kf) + 3 * len(odo_pairs), len(x0)), dtype=int)
         rows = np.arange(len(obs_kf))
         for k in range(3):
             A[2 * rows, 3 * n_free + 3 * obs_j + k] = 1
@@ -1474,7 +1775,12 @@ class PlanarVSLAM:
             cols = 3 * (obs_kf[movable] - fixed_n) + k
             A[2 * rows[movable], cols] = 1
             A[2 * rows[movable] + 1, cols] = 1
-        before = residuals(x0)
+        for n, (a, b, _, _) in enumerate(odo_pairs):
+            for kfi in (a, b):
+                if kfi >= fixed_n:
+                    for k in range(3):
+                        A[2 * len(obs_kf) + 3 * n:2 * len(obs_kf) + 3 * n + 3, 3 * (kfi - fixed_n) + k] = 1
+        before = residuals(x0, vision_only=True)
         try:
             res = least_squares(residuals, x0, jac_sparsity=A, loss="huber", f_scale=2.0, max_nfev=8,
                                 x_scale="jac", method="trf")
@@ -1483,7 +1789,9 @@ class PlanarVSLAM:
         poses, pts = unpack(res.x)
         # Sanity: accept only if the robust cost fell and no pose jumped implausibly.
         jumps = [np.hypot(*(p[:2] - kf.pose[:2])) for p, kf in zip(poses[fixed_n:], free)]
-        if res.cost > 0.5 * np.sum(np.minimum(before ** 2, 4.0)) * 1.0 or max(jumps, default=0) > 0.1:
+        after = residuals(res.x, vision_only=True) if odo_pairs else None
+        cost = res.cost if after is None else 0.5 * float(np.sum(np.minimum(after ** 2, 4.0)))
+        if cost > 0.5 * np.sum(np.minimum(before ** 2, 4.0)) * 1.0 or max(jumps, default=0) > 0.1:
             return None
         for p, kf in zip(poses[fixed_n:], free):
             kf.pose = np.array([p[0], p[1], wrap(p[2])])

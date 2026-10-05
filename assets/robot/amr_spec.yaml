@@ -32,7 +32,12 @@ caster:
   friction: 0.02
   color: [0.55, 0.56, 0.58, 1.0]
 camera:
-  # Front-facing RGB camera, rigidly mounted at the chassis nose.
+  # Front-facing RGB camera, rigidly mounted at the chassis nose. Part: Arducam
+  # B0394 (Sony IMX219, low-distortion M12 lens; vendor FOV 88 D x 75 H x 60 V deg,
+  # < 3 % distortion), 1640x1232 binned mode downscaled to 320x240 at 10 Hz. The
+  # vendor's FOV and focal length disagree (2.8 mm gives ~67 x 53 deg): verify with
+  # a checkerboard calibration before relying on the intrinsics below.
+  part: Arducam B0394 (IMX219, 88 deg D low-distortion M12 lens)
   forward_from_axle: 0.125   # x offset of the optical centre from base_link
   height_above_ground: 0.155 # z of the optical centre above the floor (scale prior)
   pitch_down: 12.0
@@ -53,3 +58,41 @@ screen:
   mass: 0.35
   bezel_color: [0.16, 0.17, 0.19, 1.0]
   display_color: [0.02, 0.03, 0.05, 1.0]
+imu:
+  # ST LSM6DSOX 6-axis MEMS IMU on the Adafruit breakout, product 4438
+  # (STEMMA QT/Qwiic, I2C/SPI). Datasheet: ST DS12814 Rev 3 (Jan 2019), Table 2.
+  # Datasheet values are "typ" (not guaranteed); the simulation draws each unit's
+  # errors with sigma = the typ value and clips at 3x it (assumption). Items the
+  # datasheet does not specify are marked ASSUMED.
+  part: ST LSM6DSOX on Adafruit 4438 breakout
+  unit_serial: 1                  # the simulated unit (fixes its sensitivity/cross-axis errors)
+  mount_xyz: [-0.04, 0.0, 0.03]   # on base_link: chassis centre, on the chassis floor
+  output_rate_hz: 104.0           # ODR 104 Hz (sampled at the 100 Hz physics step)
+  bandwidth_hz: 33.0              # gyro LPF2 at ODR 104 Hz
+  gyro:
+    full_scale_dps: 250.0
+    lsb_mdps: 8.75                # sensitivity at +-250 dps
+    noise_density_dps_rthz: 0.0038  # high-performance mode
+    offset_sigma_dps: 1.0         # zero-rate offset +-1 dps typ
+    offset_max_dps: 3.0
+    bias_random_walk_dps_rts: 0.002  # ASSUMED (not specified)
+    sensitivity_sigma: 0.01       # sensitivity tolerance +-1 % typ
+    sensitivity_max: 0.03
+    cross_axis_sigma: 0.01        # ASSUMED (not specified)
+  accel:
+    full_scale_g: 4.0
+    lsb_mg: 0.122                 # sensitivity at +-4 g
+    noise_density_ug_rthz: 75.0
+    offset_sigma_mg: 20.0         # zero-g offset +-20 mg typ
+    offset_max_mg: 60.0
+    sensitivity_sigma: 0.01       # ASSUMED (not listed separately)
+    sensitivity_max: 0.03
+    cross_axis_sigma: 0.01        # ASSUMED
+encoders:
+  # Pololu item 4754: 70:1 Metal Gearmotor 37Dx70L mm 12V with 64 CPR Encoder
+  # (Hall-effect quadrature on the motor shaft). Gear ratio exactly 70:1, so
+  # 64 x 70 = 4480 counts per wheel revolution (1.40 mrad, 0.070 mm per count).
+  part: Pololu 4754 (70:1 37D gearmotor, 64 CPR encoder)
+  counts_per_wheel_rev: 4480
+  backlash_deg: 1.0               # ASSUMED: Pololu gives no backlash figure
+  sample_rate_hz: 100.0

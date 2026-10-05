@@ -7,8 +7,10 @@
 - Genesis World owns physics and rendering. Only `src/amr_rl/control/genesis_backend.py`
   commands the robot's actuators. Body pose/velocity setters are for explicit
   resets (`initialize_pose`) only. World fixture mechanisms live in `sim/world.py`.
-- Operational perception uses ONLY the robot-mounted RGB camera + its calibration
-  + the robot's own commanded motion. Simulator ground truth is for
+- Operational perception uses ONLY the robot-mounted RGB camera + its calibration,
+  the raw samples of its IMU and wheel encoders (``on_proprio``; parts modelled on
+  purchasable hardware, see ``assets/robot/amr_spec.yaml``) + the robot's own
+  commanded motion. Simulator ground truth is for
   `amr_rl.sim.evaluator` and evaluation scripts only (enforced by
   `tests/test_privilege_boundary.py`).
 - Importing modules or running simulation must never connect to hardware.

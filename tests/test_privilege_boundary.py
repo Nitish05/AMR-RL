@@ -12,7 +12,8 @@ from pathlib import Path
 import pytest
 
 SRC = Path(__file__).resolve().parents[1] / "src" / "amr_rl"
-RUNTIME_PACKAGES = ["perception", "mapping", "navigation", "learning", "behavior", "runtime", "expression"]
+RUNTIME_PACKAGES = ["perception", "mapping", "navigation", "learning", "behavior", "runtime", "expression",
+                    "odometry"]
 RUNTIME_FILES = ["control/supervisor.py", "control/contract.py"]
 FORBIDDEN = ("amr_rl.sim", "genesis", "..sim", ".sim")
 
@@ -60,3 +61,16 @@ def test_harness_passes_only_frames_backend_and_commands_to_runtime():
     text = (SRC / "sim" / "harness.py").read_text()
     assert "RobotRuntime(spec, self.world.backend" in text
     assert "runtime.on_frame(frame)" in text
+    # proprioception: only the raw sample batches of the sensor models
+    assert "self.runtime.on_proprio(proprio)" in text
+    assert "proprio = self.world.sensors.drain()" in text
+
+
+def test_sensor_samples_carry_no_ground_truth():
+    """The proprioceptive samples are counts and quantised IMU readings only."""
+    from dataclasses import fields
+
+    from amr_rl.odometry.samples import EncoderSample, ImuSample
+
+    assert [f.name for f in fields(ImuSample)] == ["t", "gyro", "accel"]
+    assert [f.name for f in fields(EncoderSample)] == ["t", "left", "right"]

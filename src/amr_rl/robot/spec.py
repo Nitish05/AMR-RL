@@ -70,6 +70,14 @@ class RobotSpec:
         top = c["ground_clearance"] + c["height"]
         if cam["height_above_ground"] <= top:
             raise ValueError("Camera optical centre must clear the chassis top")
+        # Proprioceptive sensors (round 9): datasheet-modelled parts.
+        if "imu" in self.raw:
+            imu = self.raw["imu"]
+            _positive(imu, "output_rate_hz", "bandwidth_hz")
+            _positive(imu["gyro"], "full_scale_dps", "lsb_mdps", "noise_density_dps_rthz")
+            _positive(imu["accel"], "full_scale_g", "lsb_mg", "noise_density_ug_rthz")
+        if "encoders" in self.raw:
+            _positive(self.raw["encoders"], "counts_per_wheel_rev", "sample_rate_hz")
         # Caster must reach the floor from the chassis underside.
         if k["radius"] * 2 < c["ground_clearance"] - 1e-6:
             raise ValueError("Caster cannot reach the floor")

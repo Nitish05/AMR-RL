@@ -13,13 +13,18 @@ import cv2
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from common import (  # noqa: E402
+    add_runtime_args,
+    apply_runtime_args,
     dump,
     fresh_dir,
     keyframe_map_error,
     operator_turn_until_tracking,
     provenance,
+    save_recording,
     score_loops,
+    start_recording,
     trajectory_metrics,
+    world_overrides,
 )
 
 from amr_rl.control.supervisor import SupervisorConfig  # noqa: E402
@@ -40,6 +45,7 @@ def main():
                         help="finish with the coverage pass for this many seconds (survey turns far from keyframes)")
     parser.add_argument("--vslam", nargs="*", default=[], help="A/B: VSLAMConfig overrides key=value (JSON values)")
     parser.add_argument("--turn-preset", default="none", help="A/B: named turn-handling preset (vslam.TURN_PRESETS)")
+    add_runtime_args(parser)
     parser.add_argument("--no-coverage", action="store_true",
                         help="A/B: no coverage pass at all (also not when frontiers run out)")
     parser.add_argument("--loop-shadow", action="store_true",
@@ -56,6 +62,7 @@ def main():
         cfg.vslam.loop_shadow, cfg.vslam.loop_top_k, cfg.vslam.loop_uncertain_k, cfg.revisit_sigma = True, 3, 3, 0.0
         cfg.vslam.covis_max_per_kf = 3  # recorded for the offline comparison only
     apply_turn_preset(cfg, args.turn_preset)
+    apply_runtime_args(cfg, args)
     for item in args.vslam:
         key, value = item.split("=", 1)
         if not hasattr(cfg.vslam, key):
@@ -71,7 +78,8 @@ def main():
     start = list(load_world_config(args.world)["robot_start"])
     start[2] = float(start[2] + args.seed * 2 * math.pi / 5)
     s = Session(args.world, run_dir=out / "session", memory_path=out / "throwaway-memory.sqlite", config=cfg,
-                seed=args.seed, inspection=False, world_overrides={"robot_start": start})
+                seed=args.seed, inspection=False, world_overrides=world_overrides(args, {"robot_start": start}))
+    start_recording(s, args)
     s.control_step()
     s.enable_autonomy()
     reenable = 0
@@ -112,6 +120,7 @@ def main():
               "origin_world": [float(v) for v in s.origin]}  # evaluation-only: world pose of the map frame
     dump(out / "result.json", result)
     s.save_summary()
+    save_recording(s, out / "session")
     s.close()
     print(result)
     print(f"MAP_DIR={out / 'map'}")
