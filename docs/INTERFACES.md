@@ -23,7 +23,16 @@ never simulator ground truth. `null` means unavailable/unknown, never zero.
     "pose": [0.4, -0.2, 1.57],      // x, y, theta or null
     "position_sigma": 0.03,         // 1-sigma metres or null
     "inliers": 85, "landmarks": 1200, "keyframes": 34,
-    "map_version": "map-1a2b3c"
+    "map_version": "map-1a2b3c",
+    "odometry": {                   // round 9; {"source": "command"} for the camera-only robot
+      "source": "imu_encoders",     // command | imu_encoders | command_model
+      "calibration": "loaded (imu.yaml, scale 1.00249)",
+      "gyro_bias_dps": 1.07, "gyro_bias_sigma_dps": 0.002, "bias_calibrated": true,
+      "gyro_scale": 1.00249, "gyro_scale_sigma": 0.0002, "track_scale": 0.97,
+      "slip": false, "slip_counts": {"zupt": 40, "slip_yaw": 1, "slip_accel": 0, "slip_cmd": 0},
+      "fusion": {"frames": 600, "rot_downweighted": 3, "xy_downweighted": 9, "resyncs": 0, "predicted_odo": 0},
+      "command_model_fallback_frames": 0
+    }
   },
   "camera": {"frame_index": 120, "timestamp": 12.3, "age": 0.0, "fresh": true},
   "activity": {
@@ -84,6 +93,17 @@ Commands: `POST /api/command` JSON `{"action": ..., ...}`; response
 | `disable_autonomy` | – | Revokes autonomy (like stop, keeps manual idle). |
 | `goal` | `x`, `y`, `generation` | Navigate to an estimated-map point; rejected when unsupported. |
 | `reset_memory` | `confirm: "RESET"` | Deletes learned memory for this agent (explicit). |
+
+## Proprioceptive input (round 9)
+
+`RobotRuntime.on_proprio(ProprioBatch)` receives the raw samples that arrived since
+the previous call, before each `on_frame`:
+
+- `ImuSample(t, gyro[3] rad/s, accel[3] m/s²)`: quantised readings in the IMU frame;
+- `EncoderSample(t, left, right)`: cumulative signed quadrature counts.
+
+They are never poses or velocities from the simulator (`tests/test_privilege_boundary.py`).
+The parts and their error models are in [ROBOT.md](ROBOT.md).
 
 ## Screen expression
 

@@ -37,7 +37,7 @@ with a blue lens, dark bezel and display.
 
 The screen sits 0.2 m behind the camera, so it never enters the camera view.
 
-## Onboard camera (the only exteroceptive sensor)
+## Onboard camera (the only exteroceptive sensor; purchasable part in the next section)
 
 | Property | Value |
 |---|---|
@@ -56,6 +56,31 @@ uses the equivalent OpenCV integer-centre value (159.5, 119.5), the same
 half-pixel conversion BB8-RL established. The camera is attached to
 `base_link` with `camera.attach()` and re-posed from the physical link pose at
 every capture, so it moves with the body.
+
+## Proprioceptive sensors (round 9): IMU and wheel encoders
+
+Added on 2026-10-05 at the owner's request. Every sensor is a real part that can be bought today. The simulation models each part from its datasheet: `sim/sensors.py` applies the errors to the physical signal Genesis computes. The runtime receives only raw samples (`RobotRuntime.on_proprio`): integer encoder counts, and quantised gyro and accelerometer readings.
+
+| Sensor | Part (where to buy, approx. price) | Modelled |
+|---|---|---|
+| IMU | ST LSM6DSOX 6-axis, Adafruit breakout 4438 (STEMMA QT/Qwiic, I2C/SPI; Adafruit, DigiKey, Mouser, The Pi Hut), about $12 | Datasheet DS12814 Rev 3, all "typ": ±250 dps range, 8.75 mdps/LSB, noise 3.8 mdps/√Hz, ODR 104 Hz with a 33 Hz filter, zero-rate offset ±1 dps, sensitivity ±1 %; accelerometer ±4 g, 75 µg/√Hz, offset ±20 mg. **Assumed** (not specified): cross-axis 1 %, bias random walk 0.002 dps/√s. Each unit's sensitivity and cross-axis errors are fixed by `imu.unit_serial`; offset and noise change per run |
+| Wheel encoders | Pololu 4754: 70:1 metal gearmotor 37D×70L mm, 12 V, with a 64 CPR Hall-effect quadrature encoder, about $61 each | 4480 counts per wheel revolution (64 × 70, exact): 1.40 mrad and 0.070 mm of travel per count. Gearbox backlash 1° (**assumed**; Pololu gives no figure). 100 Hz sampling |
+| Camera | Arducam B0394 (Sony IMX219 with an 88° diagonal, low-distortion M12 lens) matches the simulated 75° × 60° field of view | The vendor's FOV and focal length disagree, so calibrate with a checkerboard before relying on the intrinsics |
+
+**Mounting.** The IMU sits on `base_link` at (−0.04, 0, 0.03), the chassis centre, with its z axis vertical.
+
+**Calibration.** The gyro sensitivity tolerance (±1 %) would cost up to 3.6° per full turn, so the gyro scale is calibrated once per unit. `scripts/calibrate_imu.py` has the robot:
+1. stand still to measure the offset;
+2. turn in place 5 times each way;
+3. measure the true total angle with the camera (the planar epipolar residual between the start and end images; no ground truth);
+4. write `configs/calibration/imu.yaml`.
+
+For unit 1 the calibration gives 1.00249 ± 0.0002. The same turns scored against simulator truth (evaluation only) give 1.00248. At runtime the robot also:
+- stands still for 1 s at boot to measure the zero-rate offset;
+- updates the offset whenever it stands still;
+- refines the scale from full in-place turns that vision closes on the same view.
+
+**Caveat (motor model).** The simulated drive still has a flat ±1.5 N·m torque limit. The Pololu 4754 stalls at 2.65 N·m at 12 V; on a linear speed–torque curve it gives about 0.63 N·m at 12 rad/s, and it is rated for 0.98 N·m continuous. The motor's speed–torque line is not modelled yet.
 
 ## Screen
 

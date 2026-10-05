@@ -53,7 +53,7 @@ def still(s, seconds):
         s.control_step()
 
 
-def one_direction(s, turns, w, est):
+def one_direction(s, turns, w, est, scale_hint=1.0):
     rt = s.runtime
     still(s, 1.0)
     ref = rt.slam.features(rt.last_frame.rgb)
@@ -76,7 +76,7 @@ def one_direction(s, turns, w, est):
     yaws = np.unwrap([row["gt"][2] for row in s.truth[i_ref:]])
     evaluation_true = float(yaws[-1] - yaws[0])  # EVALUATION ONLY, not used for the result
     pairs = match_orb(ref[2], end[2])
-    hint = wrap(gyro)
+    hint = wrap(scale_hint * gyro)  # predicted residual after whole turns
     r = est.estimate(ref[1][pairs[:, 0]], end[1][pairs[:, 1]], theta_hint=hint)
     if not r.ok:
         return {"ok": False, "reason": r.reason, "gyro": gyro, "evaluation_true": evaluation_true}
@@ -96,6 +96,7 @@ def main():
     ap.add_argument("--w", type=float, default=0.45)
     ap.add_argument("--still", type=float, default=3.0)
     ap.add_argument("--out", default=None)
+    ap.add_argument("--unit", type=int, default=None, help="EVALUATION: calibrate another simulated IMU unit")
     ap.add_argument("--write", default=str(PROJECT_ROOT / "configs" / "calibration" / "imu.yaml"))
     args = ap.parse_args()
     out = Path(args.out).resolve() if args.out else fresh_dir("imu-calibration")
@@ -104,15 +105,22 @@ def main():
                         imu_calibration=None, place_descriptor=None, initial_survey=False, semantic=False,
                         near_field_guard=False)
     cfg.vslam.odo_scale_calibration = False  # the gyro must stay at nominal sensitivity here
+    overrides = None if args.unit is None else {"sensor_faults": {"imu_unit": args.unit}}
     s = Session(args.world, run_dir=out / "session", memory_path=out / "throwaway-memory.sqlite", config=cfg,
-                seed=args.seed, inspection=False)
+                seed=args.seed, inspection=False, world_overrides=overrides)
     rt = s.runtime
     still(s, args.still)
     est = TurnEpipolar(rt.model)
+    # Coarse pass: one turn each way (a 3 % sensitivity error leaves <= 11 deg, inside
+    # the estimator's window), then the long turns with the residual predicted from it.
+    coarse = [one_direction(s, 1, w, est) for w in (args.w, -args.w)]
+    print("coarse", coarse, flush=True)
+    good = [c["ratio"] for c in coarse if c["ok"]]
+    scale_hint = float(np.mean(good)) if good else 1.0
     runs = []
     for _ in range(args.repeats):
         for w in (args.w, -args.w):
-            r = one_direction(s, args.turns, w, est)
+            r = one_direction(s, args.turns, w, est, scale_hint=scale_hint)
             runs.append({"w": w, **r})
             print(runs[-1], flush=True)
     ok = [r for r in runs if r["ok"]]
@@ -126,7 +134,8 @@ def main():
     per = [r["residual_sigma"] / abs(r["gyro"]) for r in ok]
     sigma = float(max(np.std(ratios) / math.sqrt(len(ratios)) if len(ratios) > 1 else 0.0,
                       math.sqrt(np.mean(np.square(per)) / len(ok)), 2e-4))
-    cal = {"unit_serial": int(rt.spec.imu["unit_serial"]), "part": rt.spec.imu["part"],
+    cal = {"unit_serial": int(args.unit if args.unit is not None else rt.spec.imu["unit_serial"]),
+           "part": rt.spec.imu["part"],
            "gyro_scale": scale, "gyro_scale_sigma": sigma,
            "gyro_offset_dps_at_calibration": math.degrees(rt.odo.bias),
            "method": f"{args.turns} in-place turns each way x {args.repeats}, closed by planar epipolar "

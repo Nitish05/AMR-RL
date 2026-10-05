@@ -47,7 +47,7 @@ class OdometryConfig:
     track_scale_init: float = 1.0    # gyro yaw / encoder yaw (scrub of a skid-steered turn)
     track_scale_gain: float = 0.05
     track_scale_bounds: tuple = (0.6, 1.4)
-    radius_scale_sigma: float = 0.02  # effective wheel radius vs the spec (tyre, load)
+    radius_scale_sigma: float = 0.10  # prior: effective rolling radius vs the spec (tyre, load, floor)
     slip_floor: float = 0.03          # relative distance error without detected slip
     yaw_slip_k: float = 4.0           # differential slip: |residual| > k sigma
     yaw_slip_rel: float = 0.06
@@ -56,7 +56,11 @@ class OdometryConfig:
     accel_slip_samples: int = 3
     slip_hold_s: float = 0.6
     tilt_yaw_error: float = 0.0005    # relative yaw error from caster rocking (body z vs vertical)
-    bias_feedback_sigma: float = 0.1  # rad/s per frame of vision-implied rate error (weak)
+    # rad/s per frame of vision-implied rate error (weak). A strong feedback (0.003)
+    # learned the map's own slow heading drift into the offset (development run arena
+    # s0: offset wandered 1.01-1.05 dps, heading 3.7 deg); the runtime's periodic
+    # zero-velocity stops (RuntimeConfig.imu_zupt_interval_s) measure it instead.
+    bias_feedback_sigma: float = 0.02
 
 
 @dataclass
@@ -74,8 +78,9 @@ class OdometryStep:
     slip: bool = False
     stationary: bool = False
     rotation_source: str = "gyro"  # gyro | encoders
-    translation_source: str = "encoders"  # encoders | command
+    translation_source: str = "encoders"  # encoders | command | command_model
     info: dict = field(default_factory=dict)
+    trust_rotation: bool = True    # the gyro is trusted over vision on rotation; a command model is not
 
     def as_command(self):
         """(v, w) in the form the command-driven code paths expect."""
@@ -99,12 +104,18 @@ class WheelInertialOdometry:
         self.bias = 0.0
         self.bias_var = (float(g["offset_sigma_dps"]) * DPS) ** 2
         self.bias_calibrated = False
+        self.last_zupt_t = -math.inf
         # gyro scale: true rate = gyro_scale x measured. Prior from the datasheet's
         # sensitivity tolerance; refined from full in-place turns that vision closes
         # (``add_scale_sample``).
         self.gyro_scale = 1.0
         self.scale_var0 = self.scale_var = float(g["sensitivity_sigma"]) ** 2
         self.scale_samples: list[float] = []
+        # Effective rolling radius / spec radius: distance travelled over the floor per
+        # wheel revolution; measured from vision on straight stretches (add_radius_sample).
+        self.radius_scale = 1.0
+        self.radius_var = self.cfg.radius_scale_sigma ** 2
+        self.radius_samples: list[float] = []
         self.calibration = None
         self.scale_prior = 1.0
         if calibration:
@@ -139,6 +150,22 @@ class WheelInertialOdometry:
         self.bias_var *= (1 - k)
         self.log["bias_feedback"] = self.log.get("bias_feedback", 0) + 1
 
+    def add_radius_sample(self, ratio: float):
+        """Vision distance / encoder distance (at the current scale) over a straight,
+        non-slipping stretch. Robust median of the recent samples; ratios outside
+        0.7-1.3 are ignored (slip or a vision fault)."""
+        value = ratio * self.radius_scale
+        if not math.isfinite(value) or not 0.7 <= value <= 1.3:
+            return False
+        self.radius_samples = (self.radius_samples + [value])[-21:]
+        x = np.asarray(self.radius_samples)
+        if len(x) >= 3:
+            med = float(np.median(x))
+            mad = float(np.median(np.abs(x - med))) * 1.4826
+            self.radius_scale = med
+            self.radius_var = max((max(mad, 0.02) ** 2) / len(x), 0.005 ** 2)
+        return True
+
     def add_scale_sample(self, ratio: float, sigma: float):
         """A measured (true / gyro) turn ratio from vision (a full turn closed on the
         same view). Robust: the scale is the median of the accepted samples, its
@@ -152,6 +179,15 @@ class WheelInertialOdometry:
         mad = float(np.median(np.abs(x - med))) * 1.4826 if len(x) >= 3 else 0.0
         var = max(mad, sigma) ** 2 / len(x)
         p0, m0 = self.scale_var0, self.scale_prior
+        if self.calibration is not None:
+            # A unit calibration (10 closed turns, ~0.02 %) is far better than in-run
+            # samples (~0.1 % each, near views included): they only monitor it, and
+            # replace it when >= 5 of them disagree beyond 3 sigma (e.g. temperature).
+            if len(x) < 5 or abs(med - m0) <= 3 * math.sqrt(p0 + var):
+                return True
+            self.log["scale_recalibrated"] = self.log.get("scale_recalibrated", 0) + 1
+            self.gyro_scale, self.scale_var = med, max(var, 0.0001 ** 2)
+            return True
         self.gyro_scale = m0 + p0 / (p0 + var) * (med - m0)
         self.scale_var = max(p0 * var / (p0 + var), 0.0001 ** 2)
         return True
@@ -189,7 +225,7 @@ class WheelInertialOdometry:
             if last is not None:
                 dl = (s.left - last.left) * 2 * math.pi / self.cpr
                 dr = (s.right - last.right) * 2 * math.pi / self.cpr
-                ds = self.r * (dl + dr) / 2
+                ds = self.radius_scale * self.r * (dl + dr) / 2
                 th = float(np.interp(s.t, yaw_t, yaw_c)) if have_imu else \
                     self.r * (dr_tot + dl_tot * 0 + dr - dl) / self.track  # fallback: encoder heading
                 x += ds * math.cos(th)
@@ -202,7 +238,7 @@ class WheelInertialOdometry:
             last = s
         self._last_enc = last
         have_enc = len(enc) > 0
-        dist_signed = self.r * (dl_tot + dr_tot) / 2
+        dist_signed = self.radius_scale * self.r * (dl_tot + dr_tot) / 2
         enc_yaw = self.r * (dr_tot - dl_tot) / self.track
         if not have_imu and not have_enc:
             return None
@@ -229,6 +265,7 @@ class WheelInertialOdometry:
                     self.bias += k * (mean - self.bias)
                     self.bias_var = (1 - k) * self.bias_var
                     self.bias_calibrated = True
+                    self.last_zupt_t = t
                     self.log["zupt"] += 1
                     ax = float(np.mean([s_.accel[0] for s_ in imu]))
                     self.rest_ax = ax if self.rest_ax is None else 0.9 * self.rest_ax + 0.1 * ax
@@ -271,7 +308,7 @@ class WheelInertialOdometry:
             var_th = (0.15 * abs(yaw) + 0.01) ** 2
             rot_src = "encoders"
         if have_enc:
-            rel = math.hypot(cfg.radius_scale_sigma, cfg.slip_floor)
+            rel = math.hypot(math.sqrt(self.radius_var), cfg.slip_floor)
             var_s = (rel * dist) ** 2 + (self.r * 2 * math.pi / self.cpr) ** 2
             if slip:
                 var_s += (dist + 0.03) ** 2
@@ -294,6 +331,7 @@ class WheelInertialOdometry:
                             translation_source=trans_src,
                             info={"bias": self.bias, "bias_sigma": math.sqrt(self.bias_var),
                                   "track_scale": self.track_scale, "gyro_scale": self.gyro_scale,
+                                  "radius_scale": self.radius_scale,
                                   "scale_sigma": math.sqrt(self.scale_var), "enc_yaw": enc_yaw,
                                   "slip_reasons": slip_reasons})
 

@@ -35,3 +35,29 @@ Development runs used only arena seed 0 and arena_textured seed 2, both 60 s bui
 - the command-model fallback.
 
 **Stop rule.** Stop at the first failed required check, document it, and do not tune on held-out results.
+
+## Addendum A: candidate R9b (written after validation 1 stopped and before any R9b validation run)
+
+**Validation 1** (frozen candidate ce39b72) stopped at its first failed required check:
+- P4 failed on pair home_a seed 0: ATE 2.0 cm camera-only against 6.0 cm with the IMU, worse by more than 3 cm.
+- **Cause, found on development data:** the encoders over-read distance by about 10 % (simulated rolling radius below the spec), and the fusion trusted them at a fixed ±3.6 %.
+
+**R9b** is R9 plus these changes. All were found and fixed on development runs only (arena seed 0 and arena_textured seed 2), with the reasons in [heading-r9.md](heading-r9.md):
+1. An online wheel-radius scale learned from vision. The encoder distance uncertainty stays wide (±10 %) until that scale is learned.
+2. A loaded unit calibration is only monitored by in-run gyro-scale samples; it is replaced only when at least 5 samples disagree beyond 3σ. Each sample now carries vision's own uncertainty, not the fused one.
+3. **Periodic zero-velocity stops:** the robot pauses 0.8 s when its last stand-still is older than 30 s, and the vision bias feedback is weak. On development data, an exploring robot never stood still, so the gyro offset random-walked (gyro alone: 6° in 390 s), and a strong vision feedback learned the map's own drift instead.
+4. `calibrate_imu.py` gains a 1-turn coarse pass, needed for units with about 1 % sensitivity error.
+
+Development results (arena seed 0 / arena_textured seed 2, 420 s builds with the coverage pass):
+
+| | Max heading error | Map ATE |
+|---|---|---|
+| R9b | 1.27° / 0.57° | 0.58 / 1.07 cm |
+| R9 | 0.75° / 5.23° | 1.15 / 3.03 cm |
+| Camera only | 7.76° / 14.17° | 7.61 / 9.75 cm |
+
+The R9b commit is named in [heading-r9.md](heading-r9.md) before its runs start.
+
+**Fresh starts:** the same checks as above with seeds 5–9 and `--heading-offset 36`, so no start pose of validation 1 repeats. Worlds, durations and criteria are unchanged.
+
+**Correction to L1-slip** (a mechanism fix, not a criterion change): `wheel_friction` had no physical effect, because Genesis takes the higher friction of the two surfaces. It is replaced by `floor_friction=0.45`, and the slip patches are now low-friction plates.

@@ -22,13 +22,24 @@ from pathlib import Path
 import numpy as np
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from common import dump, fresh_dir, provenance, score_loops, trajectory_metrics  # noqa: E402
+from common import (  # noqa: E402
+    add_runtime_args,
+    apply_runtime_args,
+    dump,
+    fresh_dir,
+    provenance,
+    score_loops,
+    trajectory_metrics,
+    world_overrides,
+)
 
 from amr_rl.control.supervisor import SupervisorConfig  # noqa: E402
 from amr_rl.runtime.robot import RuntimeConfig, apply_turn_preset  # noqa: E402
 from amr_rl.sim import evaluator  # noqa: E402
 from amr_rl.sim.harness import Session  # noqa: E402
 from amr_rl.sim.world import WORLD_DIR, load_world_config  # noqa: E402
+
+RUNTIME_ARGS = None  # round-9 options (common.add_runtime_args), set in main()
 
 ARRIVAL_TOLERANCE = 0.15  # true distance for a successful arrival
 
@@ -255,8 +266,12 @@ def evaluate_world(name, out_root, map_seconds, seed, loop_closure=True, turn_pr
     config = RuntimeConfig(supervisor=SupervisorConfig(require_heartbeat=False), policy="explore_only", seed=seed,
                            place_descriptor="megaloc" if loop_closure else None)
     apply_turn_preset(config, turn_preset)
+    if RUNTIME_ARGS is not None:
+        apply_runtime_args(config, RUNTIME_ARGS)
     session = Session(name, run_dir=run_dir, memory_path=run_dir / "throwaway-memory.sqlite", config=config,
-                      seed=seed, inspection=False, world_overrides={"robot_start": start})
+                      seed=seed, inspection=False,
+                      world_overrides=world_overrides(RUNTIME_ARGS, {"robot_start": start}) if RUNTIME_ARGS
+                      else {"robot_start": start})
     log = []
     session.control_step()
     session.control_step()
@@ -382,7 +397,10 @@ def main():
     parser.add_argument("--out", default=None)
     parser.add_argument("--no-loop-closure", action="store_true", help="A/B: run without loop closure")
     parser.add_argument("--turn-preset", default="none", help="A/B: named turn-handling preset (vslam.TURN_PRESETS)")
+    add_runtime_args(parser)
     args = parser.parse_args()
+    global RUNTIME_ARGS
+    RUNTIME_ARGS = args
     out = Path(args.out) if args.out else fresh_dir("navigation")
     out.mkdir(parents=True, exist_ok=True)
     provenance(out, configs=[WORLD_DIR / f"{w}.yaml" for w in args.worlds], extra={"args": vars(args)})

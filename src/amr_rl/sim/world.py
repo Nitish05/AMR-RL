@@ -126,7 +126,19 @@ class SimWorld:
                                            palette=palette)
             assets.export_glb(assets.textured_quad(lx + 2 * wall_t, ly + 2 * wall_t, image), floor_path, y_up=True)
         self.entity_names = {}
-        plane = self.scene.add_entity(gs.morphs.Plane(visualization=False))
+        if "floor_friction" in cfg:  # EVALUATION: a slippery floor everywhere (polished, wet)
+            plane = self.scene.add_entity(gs.morphs.Plane(visualization=False),
+                                          material=gs.materials.Rigid(friction=float(cfg["floor_friction"])))
+        else:
+            plane = self.scene.add_entity(gs.morphs.Plane(visualization=False))
+        # EVALUATION: slippery patches (spilt liquid, a smooth mat) as 1 mm plates of their
+        # own friction, invisible to the camera.
+        for item in cfg.get("slip_patches", []):
+            sx, sy = item["size"]
+            self.scene.add_entity(gs.morphs.Box(size=(float(sx), float(sy), 0.001),
+                                                pos=(float(item["xy"][0]), float(item["xy"][1]), 0.0005),
+                                                fixed=True, visualization=False),
+                                  material=gs.materials.Rigid(friction=float(item["friction"])))
         self.plane = plane
         self.scene.add_entity(gs.morphs.Mesh(file=str(floor_path), fixed=True, collision=False,
                                              pos=(0, 0, 0.0005)))
@@ -270,14 +282,13 @@ class SimWorld:
 
         self.backend = GenesisWheelBackend(self.robot, spec)
         # EVALUATION FAULT INJECTION (world side): floor regions where the wheels lose
-        # grip (spilt liquid, a smooth mat). Genesis combines contact friction as the
-        # larger of the two surfaces' values, so a patch is modelled by lowering the
-        # friction of a wheel while its contact point lies inside the patch.
+        # grip. Genesis combines contact friction as the larger of the two surfaces'
+        # values, so besides the patch plate (above) a wheel's own friction is lowered
+        # while its contact point lies inside a patch (and everywhere with floor_friction).
         self.slip_patches = [dict(p) for p in cfg.get("slip_patches", [])]
         self._wheel_links = [self.robot.get_link(n) for n in ("left_wheel", "right_wheel")]
-        # A whole-floor override (``wheel_friction`` in the world config) models a
-        # slippery floor everywhere.
-        self._base_friction = float(cfg.get("wheel_friction", spec.drive["wheel_friction"]))
+        # A whole-floor override (``floor_friction``) models a slippery floor everywhere.
+        self._base_friction = float(cfg.get("floor_friction", spec.drive["wheel_friction"]))
         self._wheel_friction = [float(spec.drive["wheel_friction"])] * 2
         if self._base_friction != self._wheel_friction[0]:
             for i, link in enumerate(self._wheel_links):

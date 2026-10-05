@@ -308,6 +308,14 @@ class VSLAMConfig:
     # Side fix: count a landmark as "visible" once per frame (not once per hypothesis
     # and search radius), so the cull rule sees the true re-find rate.
     visible_once_per_frame: bool = False
+    # Round 9 WS1 (camera-only robot): compare vision with the wheel response model's
+    # motion (odometry/wheel_model.py, engineered + fitted offline) instead of the raw
+    # command, with a signed rotation check. off | consistency
+    wheel_model: str = "off"
+    # Round 9 WS4: at keyframes, drop floor-lifting candidates that the depth model
+    # (``PlanarVSLAM.floor_mask``: near_depth.MonoDepthObstacles) sees clearly nearer
+    # than the floor (a wall or box face). off | turn | always
+    depth_floor_mask: str = "off"
     # Round 9 (docs/results/heading-r9.md): wheel-inertial odometry fusion, used when
     # track() receives an ``odometry`` step (IMU gyro + wheel encoders,
     # amr_rl.odometry.fusion). Vision and odometry are combined by their information
@@ -335,6 +343,9 @@ class VSLAMConfig:
     odo_ba: bool = True                 # odometry factors in the local bundle adjustment
     odo_bias_max_rate: float = 0.25     # rad/s: bias feedback only while turning slower than this
     odo_scale_calibration: bool = True
+    # Wheel rolling radius from vision: distance on straight stretches of this length.
+    odo_radius_calibration: bool = True
+    odo_radius_stretch: float = 0.3
     odo_scale_min_turn: float = 5.8     # rad
     odo_scale_min_inliers: int = 100
 
@@ -505,6 +516,10 @@ class PlanarVSLAM:
         self._cov = None          # fused pose covariance (world frame), fusion mode only
         self._vision_pose = None  # last vision-only pose (fusion mode)
         self._odo_acc = None      # (relative motion, covariance, keyframe id) since the newest keyframe
+        self.wheel_model = None   # WheelResponse for the wheel_model="consistency" check (camera-only)
+        self._wm_delta = None
+        self.floor_mask = None    # MonoDepthObstacles shared with the near-field guard (WS4)
+        self.floor_mask_stats = {"keyframes": 0, "masked": 0}
         self._resync = 0
         self.fusion_log = {"frames": 0, "rot_downweighted": 0, "xy_downweighted": 0, "resyncs": 0,
                            "predicted_odo": 0}
@@ -512,6 +527,8 @@ class PlanarVSLAM:
         self._scale_anchor = None
         self.scale_samples = []   # (ratio, sigma) pending for the odometry
         self.bias_feedback = []   # gyro rate error (rad/s) implied by vision's corrections
+        self.radius_samples = []  # vision / encoder distance over straight stretches
+        self._radius_acc = None
 
     # ------------------------------------------------------------ features
     def features(self, rgb: np.ndarray):
@@ -775,6 +792,13 @@ class PlanarVSLAM:
         self._odo = odo
         if odo is not None:
             commanded = odo.as_command()  # measured (v, w) in place of the command
+        self._wm_delta = None
+        if odo is None and self.cfg.wheel_model == "consistency" and dt > 0:
+            if self.wheel_model is None:
+                from ..odometry.wheel_model import WheelResponse
+
+                self.wheel_model = WheelResponse()
+            self._wm_delta, _ = self.wheel_model.step(commanded, dt)
         if self._dr is not None and commanded is not None and dt > 0:
             if odo is not None:
                 self._dr["pose"] = compose(self._dr["pose"], (odo.dx, odo.dy, odo.dth))
@@ -971,7 +995,7 @@ class PlanarVSLAM:
         allow = not info.get("degraded") or (gated and not (tr is not None and tr["flagged"])
                                               and self.cfg.turn_gate_keyframes)
         if allow:  # never extend the map from a flagged turn (gated frames only with C8b + C9)
-            kf = self._maybe_keyframe(gray, pts, desc, matched_lm, int(inl.sum()), timestamp)
+            kf = self._maybe_keyframe(gray, pts, desc, matched_lm, int(inl.sum()), timestamp, rgb=rgb)
         if kf and self.place is not None and self.cfg.loop_closure:
             self._loop_check(rgb, timestamp)
         return TrackResult(TRACKING, self.pose.copy(), self.position_sigma, self.heading_sigma,
@@ -1029,6 +1053,12 @@ class PlanarVSLAM:
             return True
         v, w = commanded
         odo = self._odo
+        if odo is None and self.cfg.wheel_model == "consistency" and self._wm_delta is not None:
+            delta = self._wm_delta
+            self._motion_log.append((t, np.asarray(pose, float).copy(), float(delta[0]), float(delta[2]), False))
+            while self._motion_log and t - self._motion_log[0][0] > self.cfg.consistency_window:
+                self._motion_log.pop(0)
+            return self._odometry_consistent(t, modelled=True)
         if odo is not None:  # measured: signed wheel travel, gyro rotation; slip marked
             self._motion_log.append((t, np.asarray(pose, float).copy(), v * dt, odo.dth, bool(odo.slip)))
         else:
@@ -1058,7 +1088,7 @@ class PlanarVSLAM:
         self.inconsistency = "linear" if lin_bad else "angular" if ang_bad else None
         return not (lin_bad or ang_bad)
 
-    def _odometry_consistent(self, t):
+    def _odometry_consistent(self, t, modelled=False):
         """Round 9: vision against measured motion. Wheel travel while the wheels are
         flagged as slipping counts as no travel (being blocked with spinning wheels is
         not a frozen estimate); rotation is compared signed with the gyro (no cancelling
@@ -1081,7 +1111,10 @@ class PlanarVSLAM:
         vis_lin = float(np.hypot(*(p1[:2] - p0[:2])))
         vis_ang = wrap(p1[2] - p0[2])
         lin_bad = (travel >= 0.3 and vis_lin < 0.3 * travel) or (not slipped and vis_lin > 2.0 * travel + 0.12)
-        ang_bad = abs(wrap(vis_ang - rot)) > cfg.odo_angular_check + cfg.odo_angular_rel * rot_abs
+        if modelled:  # wheel model: thresholds from the round-9 live analysis
+            ang_bad = abs(wrap(vis_ang - rot)) > 0.30 + 0.2 * rot_abs
+        else:
+            ang_bad = abs(wrap(vis_ang - rot)) > cfg.odo_angular_check + cfg.odo_angular_rel * rot_abs
         self.inconsistency = "linear" if lin_bad else "angular" if ang_bad else None
         return not (lin_bad or ang_bad)
 
@@ -1094,7 +1127,10 @@ class PlanarVSLAM:
         map); against landmarks the robot has just made it is visual odometry with the
         lever-arm/depth bias, so its heading variance grows as 1 / (established share)."""
         cfg, odo = self.cfg, self._odo
+        z_prev = self._vision_pose
         self._vision_pose = np.asarray(z, float).copy()
+        if cfg.odo_radius_calibration and self._probation == 0:
+            self._radius_check(z_prev, self._vision_pose)
         try:
             lam_v = H / (cfg.huber_px * cfg.odo_vision_scale) ** 2
             cov_v = np.linalg.inv(lam_v)
@@ -1103,6 +1139,8 @@ class PlanarVSLAM:
             return z
         created = self.lm.created[ids] if len(ids) else np.zeros(0)
         share = float(np.mean(created < t - cfg.odo_old_landmark_s)) if len(created) else 0.0
+        if not odo.trust_rotation:
+            share = 1.0  # a command model is no better a heading reference than visual odometry
         floor = cfg.odo_vision_heading_floor / math.sqrt(max(share, cfg.odo_min_established))
         if cov_v[2, 2] < floor ** 2:
             f = floor / math.sqrt(max(cov_v[2, 2], 1e-18))
@@ -1125,6 +1163,9 @@ class PlanarVSLAM:
             nis_xy = 0.0
         w_th = 1.0 if nis_th <= cfg.odo_rot_huber ** 2 else cfg.odo_rot_huber / math.sqrt(nis_th)
         w_xy = 1.0 if nis_xy <= cfg.odo_xy_huber ** 2 else cfg.odo_xy_huber / math.sqrt(nis_xy)
+        w_prior_th = 1.0
+        if not odo.trust_rotation:  # command model: on disagreement distrust the model, not vision
+            w_prior_th, w_th = w_th, 1.0
         # Persistent heading disagreement while hardly rotating (vision is reliable
         # there): the reference has moved (map correction, wrong gyro bias) -> follow vision.
         recent_rot = sum(abs(e[3]) for e in self._motion_log[-cfg.odo_resync_frames:])
@@ -1145,7 +1186,7 @@ class PlanarVSLAM:
         except np.linalg.LinAlgError:
             self._cov = cov_v
             return z
-        Dp = np.diag([math.sqrt(w_xy), math.sqrt(w_xy), 1.0])
+        Dp = np.diag([math.sqrt(w_xy), math.sqrt(w_xy), math.sqrt(w_prior_th)])
         lv, lp = Dv @ lam_v @ Dv, Dp @ lam_p @ Dp
         lam = lv + lp
         delta = np.linalg.solve(lam, lv @ nu)
@@ -1155,7 +1196,7 @@ class PlanarVSLAM:
         self._cov = 0.5 * (self._cov + self._cov.T)
         # Vision's heading correction while hardly turning (no lever-arm effect) is a
         # measurement of the gyro's rate error: fed back to the bias estimate.
-        if w_th == 1.0 and abs(odo.w) < cfg.odo_bias_max_rate and odo.dt > 0:
+        if odo.trust_rotation and w_th == 1.0 and abs(odo.w) < cfg.odo_bias_max_rate and odo.dt > 0:
             self.bias_feedback.append(-float(delta[2]) / odo.dt)
         self.last_fusion = {"nis_th": float(nis_th), "nis_xy": float(nis_xy), "w_th": float(w_th), "est": share,
                             "w_xy": float(w_xy), "vision_th": float(z[2]), "slip": bool(odo.slip)}
@@ -1198,7 +1239,7 @@ class PlanarVSLAM:
     def _scale_check(self, t, inliers):
         """Gyro scale from vision on full turns that come back to the same view."""
         cfg, odo = self.cfg, self._odo
-        if not cfg.odo_scale_calibration or self._vision_pose is None:
+        if not cfg.odo_scale_calibration or self._vision_pose is None or odo.rotation_source != "gyro":
             return
         z = self._vision_pose
         healthy = inliers >= cfg.odo_scale_min_inliers and self._probation == 0
@@ -1212,12 +1253,35 @@ class PlanarVSLAM:
             off = wrap(z[2] - a["th"] - a["rot"])
             if abs(wrap(z[2] - a["th"])) < 0.12 and abs(off) < 0.15:  # back at the anchor's view
                 true_rot = a["rot"] + off
-                sig = math.sqrt(2) * math.sqrt(max(self._cov[2, 2], 1e-8)) / abs(a["rot"]) if self._cov is not None \
-                    else 0.002
+                # vision-only heading uncertainty at both ends (not the fused one)
+                sig = math.sqrt(2) * cfg.odo_vision_heading_floor / abs(a["rot"])
                 self.scale_samples.append((true_rot / a["rot"], sig))
                 a = self._scale_anchor = None
         if a is None and healthy:
             self._scale_anchor = {"th": float(z[2]), "rot": 0.0, "travel": 0.0, "t": t}
+
+    def _radius_check(self, z_prev, z):
+        """Driving, non-slipping, well-tracked stretches: vision's metric distance (floor
+        scale from the camera height) against the wheels' distance."""
+        odo = self._odo
+        # driving (>= 0.1 m/s), not turning sharply: the 0.1 s chord equals the arc length
+        if z_prev is None or odo.slip or odo.translation_source != "encoders":
+            self._radius_acc = None  # slip or a gap in tracking: start again
+            return
+        if abs(odo.dth) >= 0.06 or odo.distance < 0.01:
+            return  # not driving (frames are summed across such gaps)
+        vis = float(np.hypot(z[0] - z_prev[0], z[1] - z_prev[1]))
+        a = self._radius_acc or [0.0, 0.0]
+        a[0] += vis
+        a[1] += odo.distance
+        self._radius_acc = a
+        if a[1] >= self.cfg.odo_radius_stretch:
+            self.radius_samples.append(a[0] / a[1])
+            self._radius_acc = None
+
+    def pop_radius_samples(self):
+        out, self.radius_samples = self.radius_samples, []
+        return out
 
     def pop_bias_feedback(self):
         out, self.bias_feedback = self.bias_feedback, []
@@ -1269,7 +1333,7 @@ class PlanarVSLAM:
         world, ok = self.model.ground_points_world(pts, pose, self.cfg.ipm_max_range)
         return world, ok & below
 
-    def _maybe_keyframe(self, gray, pts, desc, matched_lm, inliers, timestamp):
+    def _maybe_keyframe(self, gray, pts, desc, matched_lm, inliers, timestamp, rgb=None):
         last = self.keyframes[-1]
         moved = np.hypot(*(self.pose[:2] - last.pose[:2]))
         turned = abs(wrap(self.pose[2] - last.pose[2]))
@@ -1291,6 +1355,14 @@ class PlanarVSLAM:
         free = kf.landmark < 0
         world, ok = self._ipm(pts, self.pose)
         ok &= free
+        mode = self.cfg.depth_floor_mask
+        if self.floor_mask is not None and rgb is not None and (
+                mode == "always" or (mode == "turn" and self._turn is not None)):
+            # WS4: never lift to the floor what the depth model sees nearer than the floor
+            not_floor = self.floor_mask.mask_points(rgb, pts)
+            self.floor_mask_stats["masked"] += int((ok & not_floor).sum())
+            self.floor_mask_stats["keyframes"] += 1
+            ok &= ~not_floor
         validated = np.zeros(len(pts), bool)
         if self.cfg.c9_parallax_check == "always" or (self.cfg.c9_parallax_check == "turn" and self._turn is not None):
             ok, validated = self._parallax_check(kf, last, world, ok)

@@ -46,6 +46,8 @@ def main():
     parser.add_argument("--vslam", nargs="*", default=[], help="A/B: VSLAMConfig overrides key=value (JSON values)")
     parser.add_argument("--turn-preset", default="none", help="A/B: named turn-handling preset (vslam.TURN_PRESETS)")
     add_runtime_args(parser)
+    parser.add_argument("--heading-offset", type=float, default=0.0,
+                        help="extra start heading (deg) on top of seed x 72 deg (fresh evaluation starts)")
     parser.add_argument("--no-coverage", action="store_true",
                         help="A/B: no coverage pass at all (also not when frontiers run out)")
     parser.add_argument("--loop-shadow", action="store_true",
@@ -76,7 +78,7 @@ def main():
         cfg.vslam.loop_top_k, cfg.vslam.loop_uncertain_k, cfg.revisit_sigma = 3, 0, 0.0
     # Seed k turns the configured start heading by k x 72 deg (seed 0 = configured start).
     start = list(load_world_config(args.world)["robot_start"])
-    start[2] = float(start[2] + args.seed * 2 * math.pi / 5)
+    start[2] = float(start[2] + args.seed * 2 * math.pi / 5 + math.radians(args.heading_offset))
     s = Session(args.world, run_dir=out / "session", memory_path=out / "throwaway-memory.sqlite", config=cfg,
                 seed=args.seed, inspection=False, world_overrides=world_overrides(args, {"robot_start": start}))
     start_recording(s, args)

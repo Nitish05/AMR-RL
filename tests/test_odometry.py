@@ -84,10 +84,17 @@ def test_missing_sensors_degrade_gracefully():
 def test_gyro_scale_samples_and_calibration_prior():
     odo = WheelInertialOdometry(SPEC, calibration={"gyro_scale": 1.0025, "gyro_scale_sigma": 0.0002})
     assert odo.gyro_scale == 1.0025
-    for _ in range(5):
+    for _ in range(5):  # in-run samples consistent with the calibration only monitor it
         odo.add_scale_sample(1.0027, 0.0005)
-    assert 1.0025 < odo.gyro_scale < 1.0027 and math.sqrt(odo.scale_var) < 0.0002
+    assert odo.gyro_scale == 1.0025
+    for _ in range(10):  # a clear, repeated disagreement (e.g. temperature) replaces it
+        odo.add_scale_sample(1.0060, 0.0005)
+    assert abs(odo.gyro_scale - 1.0060) < 1e-9 and odo.log["scale_recalibrated"] >= 1
     assert not odo.add_scale_sample(1.2, 0.001)  # implausible: ignored
+    free = WheelInertialOdometry(SPEC)  # no calibration: samples refine the datasheet prior
+    for _ in range(5):
+        free.add_scale_sample(1.0027, 0.0005)
+    assert 1.002 < free.gyro_scale < 1.0028
 
 
 def test_imu_model_quantises_bounds_and_keeps_the_unit_fixed():
@@ -129,3 +136,77 @@ def test_fusion_keeps_a_near_box_turn_on_the_gyro():
 def test_fusion_is_inert_without_odometry():
     slam, rows = run_turn(VSLAMConfig(), box_dist=None, turn_deg=90)
     assert slam.fusion_log["frames"] == 0 and slam._cov is None
+
+
+def test_wheel_model_reproduces_the_measured_turn_responses():
+    """Live ratios of true to commanded yaw per 0.1 s frame (round-9 analysis):
+    from rest 0.27 / 0.76 / 0.83; after a reversal -0.36 / 0.36 / 0.79."""
+    from amr_rl.odometry.wheel_model import WheelResponse
+
+    m = WheelResponse.from_spec(SPEC)
+    ratios = [m.step((0.0, 0.45), 0.1)[0][2] / 0.045 for _ in range(4)]
+    assert abs(ratios[0] - 0.27) < 0.05 and abs(ratios[1] - 0.76) < 0.06 and abs(ratios[3] - 0.83) < 0.01
+    rev = [m.step((0.0, -0.45), 0.1)[0][2] / -0.045 for _ in range(3)]
+    assert abs(rev[0] + 0.36) < 0.1 and abs(rev[1] - 0.36) < 0.12 and abs(rev[2] - 0.79) < 0.05
+
+
+def test_wheel_model_does_not_cancel_a_sweep_against_a_sharp_arc():
+    """The false 'angular' losses: a left survey sweep, then a sharp right arc. Signed
+    commands nearly cancel over the 3 s window; the modelled motion follows the real
+    (lagged, slipped) yaw, so vision agrees with it."""
+    from amr_rl.odometry.wheel_model import WheelResponse
+
+    truth, model = WheelResponse.from_spec(SPEC), WheelResponse.from_spec(SPEC)
+    cmds = [(0.0, 0.45)] * 20 + [(0.2, -0.87)] * 10
+    true_rot = sum(truth.step(c, 0.1)[0][2] for c in cmds)
+    mod_rot = sum(model.step(c, 0.1)[0][2] for c in cmds)
+    cmd_rot = sum(c[1] * 0.1 for c in cmds)
+    assert abs(true_rot - mod_rot) < 1e-9
+    assert abs(true_rot - cmd_rot) > 0.25  # the raw command is far off
+
+
+def test_command_model_odometry_is_not_trusted_over_vision():
+    from amr_rl.odometry.wheel_model import CommandModelOdometry
+
+    co = CommandModelOdometry(SPEC)
+    assert co.step((0.0, 0.45), 0.0) is None
+    st = co.step((0.0, 0.45), 0.1)
+    assert not st.trust_rotation and st.rotation_source == "command_model" and st.dth > 0
+
+
+def test_wheel_model_consistency_keeps_a_normal_turn_tracking():
+    slam, rows = run_turn(VSLAMConfig(wheel_model="consistency"), box_dist=None, turn_deg=180)
+    assert all(r[1] == "tracking" for r in rows[1:])
+
+
+def test_wheel_radius_scale_is_learned_from_vision_distances():
+    """In simulation the wheels roll ~10 % short of the spec radius (true / encoder
+    distance 0.89-0.91 on straight frames of live runs): learned online."""
+    odo = WheelInertialOdometry(SPEC)
+    assert odo.radius_scale == 1.0 and math.sqrt(odo.radius_var) >= 0.1
+    for r in (0.90, 0.89, 0.91, 0.90, 1.6):  # the last: a slip or vision fault, ignored
+        odo.add_radius_sample(r)
+    assert abs(odo.radius_scale - 0.90) < 0.006 and math.sqrt(odo.radius_var) < 0.02
+    counts = [0.0, 0.0]
+    odo.step(_samples(0, 10, 0, 0, 0, 0, counts), 0.1)
+    st = odo.step(_samples(0.1, 10, 0.0, 0.0, 4.0, 4.0, counts), 0.2)
+    assert abs(st.distance - 0.9 * 0.05 * 4.0 * 0.1) < 0.002
+
+
+def test_runtime_holds_the_wheels_for_imu_zero_velocity_updates():
+    from amr_rl.runtime.robot import RobotRuntime, RuntimeConfig
+
+    rt = RobotRuntime.__new__(RobotRuntime)
+    rt.cfg = RuntimeConfig(odometry="imu_encoders")
+    rt.odo = WheelInertialOdometry(SPEC)
+    rt._zupt_hold_until, rt.zupt_holds = -math.inf, 0
+    assert rt._imu_booting(0.5)  # boot: offset measurement first
+    rt.odo.last_zupt_t = 0.9
+    assert not rt._imu_booting(1.0)
+    assert not rt._imu_booting(30.0)
+    assert rt._imu_booting(31.0) and rt.zupt_holds == 1  # 30 s without one: a short stop
+    assert rt._imu_booting(31.5) and not rt._imu_booting(31.9)
+    rt.odo.last_zupt_t = 31.6
+    assert not rt._imu_booting(50.0)
+    rt.odo = None  # camera-only robot: never held
+    assert not rt._imu_booting(0.1)

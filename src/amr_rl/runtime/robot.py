@@ -33,6 +33,7 @@ from ..navigation.near_field import DepthGuard
 from ..navigation.planner import Planner, PlannerConfig
 from ..odometry.fusion import OdometryConfig, WheelInertialOdometry
 from ..odometry.samples import ProprioBatch
+from ..odometry.wheel_model import CommandModelOdometry
 from ..perception.camera_model import CameraModel
 from ..perception.entities import FixtureDetector
 from ..perception.near_depth import MODEL_ID as DEPTH_MODEL_ID
@@ -99,20 +100,33 @@ class RuntimeConfig:
     # Round 9 (docs/results/heading-r9.md). Motion source for localisation:
     # "command" = the robot's own commanded motion only (the camera-only robot);
     # "imu_encoders" = gyro + wheel encoders (ST LSM6DSOX, Pololu 4754 encoders; see
-    # assets/robot/amr_spec.yaml) through odometry/fusion.py, fused in the VSLAM.
+    # assets/robot/amr_spec.yaml) through odometry/fusion.py, fused in the VSLAM; when
+    # no samples arrive in a frame it falls back to the command model below;
+    # "command_model" = the commands through the wheel response model (WS2 soft prior).
     odometry: str = "command"
     odometry_cfg: OdometryConfig = field(default_factory=OdometryConfig)
     # With the IMU: stand still this long after start-up before autonomy moves the
     # wheels, so the gyro's zero-rate offset (+-1 dps typ, LSM6DSOX) is measured first
     # (standard IMU boot calibration; operator driving is not held).
     imu_boot_still_s: float = 1.0
+    # ...and pause driving for imu_zupt_hold_s when the last zero-velocity update is
+    # older than imu_zupt_interval_s (an exploring robot otherwise never stands still
+    # and the gyro offset random-walks: development run 6 deg in 390 s on the gyro).
+    # Engineered; about 2 % of driving time. 0 disables.
+    imu_zupt_interval_s: float = 30.0
+    imu_zupt_hold_s: float = 0.8
     # This robot's gyro calibration (scripts/calibrate_imu.py); used when its unit
     # serial matches the spec's. None = datasheet prior only (+-1 % sensitivity).
     imu_calibration: str | None = "configs/calibration/imu.yaml"
+    imu_unit_serial: int | None = None  # the installed IMU unit (None: the spec's unit_serial)
     # Perception-aware turning (navigation/view_check.py): avoid sweeping the camera
     # across surfaces nearer than ~0.6 m when the turn is optional; back off first
     # when it is not. Engineered behaviour, off by default.
     view_aware_turns: bool = False
+    # WS4: depth-model floor mask for the VSLAM's floor lifting (VSLAMConfig.depth_floor_mask
+    # selects when); one depth inference per frame is shared with the near-field guard.
+    # Device for that model: "cpu" (deterministic; tests and benches) | "mps" | "auto".
+    depth_device: str = "cpu"
 
 
 def apply_turn_preset(cfg, name):
@@ -178,11 +192,16 @@ class RobotRuntime:
             if not depth_model_available():
                 self.guard_status = "unavailable: depth model not in the local cache"
             else:
-                self.guard = DepthGuard(MonoDepthObstacles(self.model, backend=LazyDepthBackend()), self.grid,
+                self.depth = MonoDepthObstacles(self.model, backend=LazyDepthBackend(device=self.cfg.depth_device))
+                self.guard = DepthGuard(self.depth, self.grid,
                                         self.planner.cfg.footprint_radius,
                                         camera_x=float(self.model.T_base_cam[0, 3]))
                 self.guard_status = f"active ({DEPTH_MODEL_ID}@{DEPTH_MODEL_REVISION[:8]})"
         self.nav.guard = self.guard
+        if self.cfg.vslam.depth_floor_mask != "off":
+            if self.guard is None and depth_model_available():
+                self.depth = MonoDepthObstacles(self.model, backend=LazyDepthBackend(device=self.cfg.depth_device))
+            self.slam.floor_mask = getattr(self, "depth", None)
         self.place_status = "disabled"
         if self.cfg.place_descriptor:
             if not place_model_available():
@@ -256,6 +275,10 @@ class RobotRuntime:
         self.odo = None
         if self.cfg.odometry == "imu_encoders":
             self.odo = WheelInertialOdometry(spec, self.cfg.odometry_cfg, calibration=self._load_imu_calibration())
+        self.cmd_odo = CommandModelOdometry(spec) if self.cfg.odometry in ("imu_encoders", "command_model") else None
+        self.odo_fallbacks = 0
+        self._zupt_hold_until = -math.inf
+        self.zupt_holds = 0
         self._proprio = ProprioBatch([], [])
         self.last_odometry = None
         self.last_state = {}
@@ -280,7 +303,8 @@ class RobotRuntime:
             self.imu_calibration_status = f"missing ({path.name}): datasheet prior"
             return None
         cal = yaml.safe_load(path.read_text())
-        if int(cal.get("unit_serial", -1)) != int(self.spec.imu.get("unit_serial", -2)):
+        unit = self.cfg.imu_unit_serial if self.cfg.imu_unit_serial is not None else self.spec.imu.get("unit_serial", -2)
+        if int(cal.get("unit_serial", -1)) != int(unit):
             self.imu_calibration_status = "unit serial mismatch: datasheet prior"
             return None
         self.imu_calibration_status = f"loaded ({path.name}, scale {cal['gyro_scale']:.5f})"
@@ -297,11 +321,16 @@ class RobotRuntime:
         self.last_frame = frame
         self.last_frame_record = self.archive.capture(frame.rgb, frame_index=frame.index, timestamp=frame.timestamp)
         odo = None
+        batch, self._proprio = self._proprio, ProprioBatch([], [])
+        fallback = None if self.cmd_odo is None else self.cmd_odo.step(self.last_command, frame.timestamp)
         if self.odo is not None:
-            batch, self._proprio = self._proprio, ProprioBatch([], [])
+            first = self.odo.t is None
             odo = self.odo.step(batch, frame.timestamp, command=self.last_command)
-        else:
-            self._proprio = ProprioBatch([], [])
+            if odo is None and not first and fallback is not None:
+                odo = fallback  # no IMU/encoder samples this frame: the command model
+                self.odo_fallbacks += 1
+        elif self.cfg.odometry == "command_model":
+            odo = fallback
         self.last_odometry = odo
         result = self.slam.track(frame.rgb, frame.timestamp, commanded=self.last_command, odometry=odo)
         if self.odo is not None:
@@ -309,6 +338,8 @@ class RobotRuntime:
                 self.odo.add_scale_sample(ratio * self.odo.gyro_scale, sigma)
             for rate in self.slam.pop_bias_feedback():
                 self.odo.add_bias_feedback(rate)
+            for ratio in self.slam.pop_radius_samples():
+                self.odo.add_radius_sample(ratio)
         self.last_track = result
         # map evidence from this frame on is measured relative to the newest keyframe
         self.grid.anchor = self.slam.keyframes[-1].id if self.slam.keyframes else -1
@@ -647,7 +678,21 @@ class RobotRuntime:
         return self.screen, bool(self.expression.signal_pattern)
 
     def _imu_booting(self, now):
-        return self.odo is not None and now < self.cfg.imu_boot_still_s
+        """Hold the wheels for the IMU's zero-velocity offset measurement: at boot, and
+        briefly whenever the last one is older than imu_zupt_interval_s."""
+        if self.odo is None:
+            return False
+        if now < self.cfg.imu_boot_still_s:
+            return True
+        if self.cfg.imu_zupt_interval_s <= 0:
+            return False
+        if now < self._zupt_hold_until:
+            return True
+        if now - max(self.odo.last_zupt_t, self._zupt_hold_until) > self.cfg.imu_zupt_interval_s:
+            self._zupt_hold_until = now + self.cfg.imu_zupt_hold_s
+            self.zupt_holds += 1
+            return True
+        return False
 
     def _plan_recovery(self):
         """Choose a bounded recovery that only moves through space known to be clear
@@ -861,15 +906,17 @@ class RobotRuntime:
 
     def odometry_status(self):
         if self.odo is None:
-            return {"source": "command"}
+            return {"source": self.cfg.odometry, "fusion": dict(self.slam.fusion_log)}
         o, step = self.odo, self.last_odometry
         return {"source": "imu_encoders", "imu": self.spec.imu["part"], "encoders": self.spec.encoders["part"],
                 "calibration": self.imu_calibration_status,
                 "gyro_bias_dps": math.degrees(o.bias), "gyro_bias_sigma_dps": math.degrees(math.sqrt(o.bias_var)),
                 "bias_calibrated": o.bias_calibrated, "gyro_scale": o.gyro_scale,
                 "gyro_scale_sigma": math.sqrt(o.scale_var), "scale_samples": len(o.scale_samples),
-                "track_scale": o.track_scale, "slip": None if step is None else step.slip,
-                "slip_counts": dict(o.log), "fusion": dict(self.slam.fusion_log)}
+                "track_scale": o.track_scale, "wheel_radius_scale": o.radius_scale,
+                "slip": None if step is None else step.slip,
+                "slip_counts": dict(o.log), "fusion": dict(self.slam.fusion_log),
+                "command_model_fallback_frames": self.odo_fallbacks, "zupt_holds": self.zupt_holds}
 
     def snapshot(self):
         loc = self.slam.snapshot()

@@ -102,6 +102,8 @@ class Session:
                            "activity": None if self.runtime.activity is None else self.runtime.activity.name,
                            "cmd": None if cmd is None else [float(cmd[0]), float(cmd[1])],
                            **_odo_fields(self.runtime.last_odometry, self.runtime.last_track),
+                           **({"frame_sha": self.runtime.last_frame_record["raw_rgb_sha256"]}
+                              if self.runtime.cfg.audit_images and self.runtime.last_frame_record else {}),
                            **_track_fields(self.runtime.last_track)})
         touching = evaluator.robot_contacts(self.world)
         if touching:

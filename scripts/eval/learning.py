@@ -22,7 +22,17 @@ import numpy as np
 import yaml
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from common import FALSE_RELOC_M, FALSE_RELOC_RAD, dump, fresh_dir, provenance, trajectory_metrics  # noqa: E402
+from common import (  # noqa: E402
+    FALSE_RELOC_M,
+    FALSE_RELOC_RAD,
+    add_runtime_args,
+    apply_runtime_args,
+    dump,
+    fresh_dir,
+    provenance,
+    trajectory_metrics,
+    world_overrides,
+)
 
 from amr_rl.behavior.chooser import MotivationConfig  # noqa: E402
 from amr_rl.control.supervisor import SupervisorConfig  # noqa: E402
@@ -31,6 +41,8 @@ from amr_rl.robot.spec import PROJECT_ROOT  # noqa: E402
 from amr_rl.runtime.robot import RuntimeConfig, apply_turn_preset  # noqa: E402
 from amr_rl.sim import evaluator  # noqa: E402
 from amr_rl.sim.harness import Session  # noqa: E402
+
+RUNTIME_ARGS = None  # round-9 options (common.add_runtime_args), set in main()
 
 CONSEQUENCES = PROJECT_ROOT / "configs" / "consequences"
 VALENCE = LearningConfig().valence
@@ -119,6 +131,8 @@ def run_phase(phase, *, map_dir, memory_path, run_dir, seed, world="arena", star
                            initial_survey=False, motivation=MotivationConfig(**phase.get("motivation", {})),
                            detector=detector, detector_device=detector_device)
     apply_turn_preset(config, turn_preset)
+    if RUNTIME_ARGS is not None:
+        apply_runtime_args(config, RUNTIME_ARGS)
     for key, value in (vslam or {}).items():
         if not hasattr(config.vslam, key):
             raise ValueError(f"unknown VSLAMConfig field {key}")
@@ -126,7 +140,9 @@ def run_phase(phase, *, map_dir, memory_path, run_dir, seed, world="arena", star
     consequences = load_consequences(phase["consequences"])
     session = Session(world, run_dir=run_dir, memory_path=memory_path, config=config, consequences=consequences,
                       seed=seed, inspection=False, map_dir=map_dir, map_origin=map_origin,
-                      world_overrides={"robot_start": list(start)} if start is not None else None)
+                      world_overrides=world_overrides(RUNTIME_ARGS, {"robot_start": list(start)} if start is not None
+                                                      else None) if RUNTIME_ARGS else
+                      ({"robot_start": list(start)} if start is not None else None))
     rt = session.runtime
     record = {"phase": phase, "policy": policy, "seed": seed, "start_world": None if start is None else list(start),
               "memory_sessions_before": rt.memory.counts()["sessions"] - 1,
@@ -288,7 +304,10 @@ def main():
     parser.add_argument("--detector-device", default="auto")
     parser.add_argument("--vslam", nargs="*", default=[], help="VSLAMConfig overrides key=value (JSON values)")
     parser.add_argument("--turn-preset", default="none", help="named turn-handling preset (vslam.TURN_PRESETS)")
+    add_runtime_args(parser)
     args = parser.parse_args()
+    global RUNTIME_ARGS
+    RUNTIME_ARGS = args
     out = Path(args.out) if args.out else fresh_dir("learning")
     out.mkdir(parents=True, exist_ok=True)
     origin = map_origin_for(args.map)
