@@ -307,3 +307,40 @@ Everything stays switchable and off. The live validation (L1–L5) was not start
 - **Fresh maps.** 1.5 % of tracking frames are still confidently wrong.
 
 The reset-mode slip captures are idealised (perfectly constant slip, no wheel lag), so live runs would show more.
+
+## Live validation of FAm: fails (run on request, overriding the two offline misses)
+
+FAm missed two pre-registered offline criteria. On request, it went to live validation anyway.
+
+**Setup:**
+- Preset `--turn-preset fam`: the FAm VSLAM settings plus `respect_degraded_heading`.
+- Pinned worktree at `d896c14`.
+- Paired runs: same worlds, seeds and code.
+- Evidence: `work/evidence/live-20261004/`; report: `scripts/eval/turn_live_report.py`, with `L1-report.txt`.
+
+**L1: coverage-pass map builds.** arena, arena_textured and heldout_b × seeds 0–4. Each build runs 420 s and ends with a 150 s survey-turn pass.
+
+| | baseline | FAm | pass if |
+|---|---|---|---|
+| per-run max heading error, median (max) | 10.3° (43.0°) | **14.4° (31.6°)** | ≤ 10°, none > 20° |
+| drift events (≥ 8° in 10 s) per 100 in-place turns | 5.1 (42 / 828) | **13.5 (102 / 756)** | |
+| frames lost, mean | 16 % | 22 % | ≤ +2 pp |
+| ATE change, FAm − baseline, paired | | **median +9.0 cm, worst +42 cm** | median ≤ +0.5 cm, none > +3 cm |
+
+Some FAm maps were better: arena s3 went from 5.3 to 2.4 cm and s4 from 10.8 to 2.1 cm. Most were worse.
+
+**L1 fails, so FAm is not adopted.** The remaining checks were cancelled under the stop rule:
+- L2 (normal builds), L3 (navigation) and L5 (learning) were not run;
+- L4 (relocalisation probe) was run and showed identical results with and without FAm.
+
+**Why the offline result did not transfer.** These are diagnoses from the live logs, which now record the command on every frame.
+- **Turn rates differ.** The benchmark turned at a steady 0.45 rad/s from rest. Live in-place turns use 0.2–1.0 rad/s: navigation aligns at 0.6 and 1.0, and turns are frequent, short, and often start straight after driving.
+- **Turn starts are gated wrongly.** In the first frames of a turn the wheels are still accelerating, so the real rotation lags the command. The gate then replaces correct vision with the command, adding about 1–1.8° per frame (arena s0: most jumps at turn rotation ≈ −0.05 rad, `degraded`). The settle period only covered command changes within a turn, not the start of one.
+- **One slip factor for all rates.** It is a median over all turn rates, although slip depends on rate and acceleration.
+- **Losses outside turns.** Losses while driving ("motion inconsistent with commands") and failed relocalisation afterwards were more frequent with FAm (arena s2: 32 % of frames lost). A plausible cause is that turn-time floor validation leaves fewer confirmed landmarks; this was not isolated.
+
+**Lesson.** A replay benchmark has to use the live command profile. Next:
+1. capture turns from logged live command sequences (rates, accelerations, short turns, turns after driving);
+2. settle at turn start and while the measured rotation rate is still changing;
+3. estimate slip per rate band;
+4. test the floor-validation part separately from the gate.

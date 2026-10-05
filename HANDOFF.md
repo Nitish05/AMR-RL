@@ -37,6 +37,10 @@ Project rules are in `AGENTS.md` (read it first). Results with denominators are 
   - It fails two: confidently-wrong frames on fresh maps are 1.5 % (limit 0.5 %), and on saved maps at slip 0.75 the error is 7.7° (near-surface bin 16.6°).
   - Not adopted.
   - The seed-3 held-out and slip captures are now used up.
+- **Live validation of FAm failed.** In L1 (15 paired coverage builds) heading and maps were worse: drift events 13.5 vs 5.1 per 100 turns, ATE +9 cm median.
+  - Cause: the benchmark was not representative. Live turns are 0.2–1.0 rad/s, short and accelerating, and the gate overrides vision at turn starts.
+  - Next: build the benchmark from logged live command sequences, settle at turn start, estimate slip per rate band.
+  - FAm stays off; the `fam` preset is kept for comparison.
 
 ## Update: round 7 (2026-10-04): heading drift in in-place turns
 
