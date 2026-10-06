@@ -200,19 +200,21 @@ def test_runtime_holds_the_wheels_for_imu_zero_velocity_updates():
     rt.cfg = RuntimeConfig(odometry="imu_encoders")
     rt.odo = WheelInertialOdometry(SPEC)
     rt._zupt_hold_until, rt._zupt_hold_start, rt.zupt_holds, rt.zupt_hold_failures = -math.inf, None, 0, 0
+    rt._zupt_frames_at_hold = None
     assert rt._imu_booting(0.5)  # boot: offset measurement first
     rt.cfg.imu_zupt_interval_s = 30.0
-    rt.odo.last_bias_update_t = 0.9
+    assert rt._imu_booting(1.5)  # 2 s boot stand-still
+    rt.odo.last_bias_update_t = 1.9
     rt.odo.bias_var = math.radians(0.05) ** 2  # offset uncertain: a stop is necessary
-    assert not rt._imu_booting(1.0)
+    assert not rt._imu_booting(2.1)
     assert not rt._imu_booting(30.0)
-    assert rt._imu_booting(31.0) and rt.zupt_holds == 1  # no offset update for 30 s: a short stop
-    assert rt._imu_booting(31.5)  # held until the offset is measured...
-    rt.odo.last_bias_update_t = 31.6
-    assert not rt._imu_booting(31.7)  # ...then driving resumes at once
+    assert rt._imu_booting(32.5) and rt.zupt_holds == 1  # no offset update for 30 s: a short stop
+    assert rt._imu_booting(33.0)  # held until the offset is measured (10 still frames)...
+    rt.odo.last_bias_update_t, rt.odo.zupt_frames = 33.1, rt.odo.zupt_frames + 10
+    assert not rt._imu_booting(33.2)  # ...then driving resumes at once
     assert not rt._imu_booting(50.0)
-    assert rt._imu_booting(62.0) and rt._imu_booting(63.9)  # never measured: at most 2 s
-    assert not rt._imu_booting(64.1) and rt.zupt_hold_failures == 1
+    assert rt._imu_booting(64.0) and rt._imu_booting(66.4)  # never measured: at most 2.5 s
+    assert not rt._imu_booting(66.6) and rt.zupt_hold_failures == 1
     rt.odo = None  # camera-only robot: never held
     assert not rt._imu_booting(0.1)
 
@@ -237,6 +239,7 @@ def test_no_recalibration_stop_when_the_offset_is_still_known():
     rt.cfg = RuntimeConfig(odometry="imu_encoders")
     rt.odo = WheelInertialOdometry(SPEC)
     rt._zupt_hold_until, rt._zupt_hold_start, rt.zupt_holds, rt.zupt_hold_failures = -math.inf, None, 0, 0
+    rt._zupt_frames_at_hold = None
     rt.odo.last_bias_update_t = 1.0
     rt.odo.bias_var = math.radians(0.01) ** 2  # vision kept it known
     assert not rt._imu_booting(200.0) and rt.zupt_holds == 0
@@ -251,3 +254,39 @@ def test_offset_is_measured_from_a_zero_command_when_the_encoders_are_out():
         b = _samples(k * 0.1, 10, 0.0, bias, 0, 0, counts)
         odo.step(ProprioBatch(b.imu, []), (k + 1) * 0.1, command=(0.0, 0.0))
     assert odo.bias_calibrated and abs(odo.bias - bias) < 3e-4
+
+
+def test_vision_window_offset_measurements_update_with_their_own_uncertainty():
+    odo = WheelInertialOdometry(SPEC)
+    odo.bias, odo.bias_var = 0.0, math.radians(0.05) ** 2
+    true = math.radians(0.03)  # the offset is 0.03 dps more than estimated
+    for _ in range(6):  # six 20 s windows, each measuring the residual +-0.016 dps
+        odo.add_bias_feedback(true - odo.bias, math.radians(0.016))
+    assert abs(math.degrees(odo.bias) - 0.03) < 0.012
+    assert math.degrees(math.sqrt(odo.bias_var)) > 0.005  # not falsely certain
+    before = odo.bias
+    odo.add_bias_feedback(math.radians(1.0), math.radians(0.016))  # implausible: rejected
+    assert odo.bias == before and odo.log["bias_feedback_rejected"] == 1
+
+
+def test_temperature_compensation_tracks_the_warm_up_drift():
+    """Offset = b0 + k (T - T0): learned from stops at different chip temperatures,
+    then followed between stops while the robot warms up (no stop needed)."""
+    odo = WheelInertialOdometry(SPEC)
+    b0, k = 0.017, math.radians(-0.02)  # -0.02 dps/degC (datasheet +-0.010 typ)
+    t, counts = 0.0, [0.0, 0.0]
+
+    def still(temp, seconds):
+        nonlocal t
+        for _ in range(int(seconds * 10)):
+            b = _samples(t, 10, 0.0, b0 + k * (temp - 22.0), 0, 0, counts)
+            imu = [ImuSample(s.t, s.gyro, s.accel, temp) for s in b.imu]
+            odo.step(ProprioBatch(imu, b.encoders), round(t + 0.1, 9))
+            t = round(t + 0.1, 9)
+
+    still(22.0, 1.5)   # boot
+    still(26.0, 1.5)   # a stop after warming 4 degC
+    still(29.0, 1.5)   # another at +7 degC
+    assert abs(odo.tempco[0] - k) < math.radians(0.004)
+    odo.temp = 33.0    # warmer still, no stop: the offset follows the temperature
+    assert abs(odo.bias - (b0 + k * 11.0)) < math.radians(0.03)

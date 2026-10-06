@@ -73,12 +73,30 @@ imu:
     full_scale_dps: 250.0
     lsb_mdps: 8.75                # sensitivity at +-250 dps
     noise_density_dps_rthz: 0.0038  # high-performance mode
-    offset_sigma_dps: 1.0         # zero-rate offset +-1 dps typ
+    offset_sigma_dps: 1.0         # zero-rate offset +-1 dps typ: fixed per unit
     offset_max_dps: 3.0
-    bias_random_walk_dps_rts: 0.002  # ASSUMED (not specified)
+    offset_run_sigma_dps: 0.1     # ASSUMED: power-on to power-on repeatability (not published)
+    # Rate random walk: not specified for the LSM6DSOX; Allan measurements of
+    # comparable MEMS gyros (BMI160, TUM VI, Schubert et al. IROS 2018: 1.26e-4;
+    # BMI055 in RealSense D435i, allan_variance_ros: 1.53e-4 dps/sqrt(s)). ANALOGUE.
+    bias_random_walk_dps_rts: 0.00015
+    # Warm-up: ZRO change vs temperature +-0.010 dps/degC typ (datasheet; sigma, sign
+    # per unit) times the robot's electronics warming the IMU after power-on,
+    # dT(t) = dT_max (1 - exp(-t / tau)). dT_max and tau: ASSUMED ranges bracketed by
+    # hobby-robot and MEMS warm-up measurements (2-12 degC; 150-900 s); drawn per run.
+    tempco_sigma_dps_per_c: 0.010
+    warmup_dt_range_c: [2.0, 12.0]
+    warmup_tau_range_s: [150.0, 900.0]
     sensitivity_sigma: 0.01       # sensitivity tolerance +-1 % typ
     sensitivity_max: 0.03
     cross_axis_sigma: 0.01        # ASSUMED (not specified)
+  temperature:
+    # On-chip temperature sensor (OUT_TEMP, 256 LSB/degC per the datasheet). Absolute
+    # offset per unit and noise ASSUMED; the odometry uses only temperature changes.
+    lsb_c: 0.00390625
+    ambient_c: 22.0               # ASSUMED room temperature at power-on
+    offset_sigma_c: 2.0           # ASSUMED
+    noise_c: 0.05                 # ASSUMED
   accel:
     full_scale_g: 4.0
     lsb_mg: 0.122                 # sensitivity at +-4 g

@@ -87,3 +87,28 @@ The R9b commit is named in [heading-r9.md](heading-r9.md) before its runs start:
 | Camera only | 16.3° | 8.4 cm |
 
 **Validation 3.** R9c is frozen as the commit that adds this addendum. All checks and criteria are those pre-registered above, on seeds 5–9 with `--heading-offset 36`. The IMU arm is run fresh. The camera-only arm is reused from validation 2: it is byte-identical across these commits (0 of 400 frames differ against the pre-round-9 code, arena seed 1, 40 s). Missing baseline runs are added.
+
+## Addendum C: candidate R9e (written before any R9e validation run)
+
+**Owner decision after validation 3:** fix the slow drift first.
+
+**Diagnosis** (evaluation-only reconstruction of the simulated offset): in long non-stop runs the gyro offset was off by 0.009–0.018 dps between recalibrations. Three causes:
+1. The vision offset learning was over-confident: correlated per-frame corrections were used as independent measurements.
+2. The assumed offset random walk (0.002 dps/√s) was not realistic.
+3. Each stop measured only about 0.1 s of samples (about 0.01 dps of noise).
+
+**R9e** is R9c plus these changes:
+- **Sensor model (simulation).** The new values come from a cited research step:
+  - offset fixed per unit (±1 dps), plus 0.1 dps per power-on (assumed);
+  - rate random walk 1.5e-4 dps/√s (Allan measurements of BMI160 and BMI055 as analogues);
+  - **thermal warm-up**: datasheet tempco ±0.010 dps/°C times ΔT = 2–12 °C with τ = 150–900 s (assumed ranges);
+  - the chip's temperature sensor (256 LSB/°C).
+- **Estimator:**
+  - temperature-compensated offset, offset(T) = b0 + k(T − T0), with a two-state Kalman filter and a tempco prior of 2× the typical value;
+  - vision offset learning as one measurement per 15–90 s window, with honest uncertainty;
+  - a recalibration stop holds until 1 s of still samples is collected (10 frames, at most 2.5 s); boot stand-still 2 s;
+  - **owner-approved temperature trigger:** recalibrate when the chip temperature has changed by ≥ 1 °C since the last calibration and the offset is uncertain, at most every 20 s, in addition to the 2-minute rule.
+
+**Development** (spent seeds 0–4, 6 worlds; mean of the maximum heading error and mean ATE): R9e 1.28° / 1.94 cm with 1–3 recalibration stops in 7 minutes; the 2-minute rule alone 2.11° / 4.26 cm.
+
+**Validation 4.** All checks and criteria are unchanged (seeds 5–9, `--heading-offset 36`). The IMU arm is run fresh. The camera-only arm is reused, after a byte-identity check (it does not use the IMU).

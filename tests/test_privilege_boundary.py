@@ -72,5 +72,5 @@ def test_sensor_samples_carry_no_ground_truth():
 
     from amr_rl.odometry.samples import EncoderSample, ImuSample
 
-    assert [f.name for f in fields(ImuSample)] == ["t", "gyro", "accel"]
+    assert [f.name for f in fields(ImuSample)] == ["t", "gyro", "accel", "temp"]
     assert [f.name for f in fields(EncoderSample)] == ["t", "left", "right"]

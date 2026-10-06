@@ -61,7 +61,8 @@ def batches(prop, times):
     for t in times:
         mi = (imu[:, 0] > prev + 1e-9) & (imu[:, 0] <= t + 1e-9)
         me = (enc[:, 0] > prev + 1e-9) & (enc[:, 0] <= t + 1e-9)
-        out.append(ProprioBatch([ImuSample(r[0], r[1:4], r[4:7]) for r in imu[mi]],
+        out.append(ProprioBatch([ImuSample(r[0], r[1:4], r[4:7], None if len(r) < 8 or np.isnan(r[7]) else r[7])
+                                 for r in imu[mi]],
                                 [EncoderSample(r[0], int(r[1]), int(r[2])) for r in enc[me]]))
         prev = t
     return out
@@ -104,8 +105,8 @@ def replay(session, rows, prop, settings, spec, model):
         if odo is not None:
             for ratio, sigma in slam.pop_scale_samples():
                 odo.add_scale_sample(ratio * odo.gyro_scale, sigma)
-            for rate in slam.pop_bias_feedback():
-                odo.add_bias_feedback(rate)
+            for rate, sigma in slam.pop_bias_feedback():
+                odo.add_bias_feedback(rate, sigma)
             for ratio in slam.pop_radius_samples():
                 odo.add_radius_sample(ratio)
         est = None if r.pose is None else [float(v) for v in r.pose]

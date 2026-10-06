@@ -108,7 +108,7 @@ class RuntimeConfig:
     # With the IMU: stand still this long after start-up before autonomy moves the
     # wheels, so the gyro's zero-rate offset (+-1 dps typ, LSM6DSOX) is measured first
     # (standard IMU boot calibration; operator driving is not held).
-    imu_boot_still_s: float = 1.0
+    imu_boot_still_s: float = 2.0
     # The offset is re-measured at every natural stop (and learned from vision on
     # established landmarks in between). Owner decision 2026-10-05: if the robot has not
     # stopped for imu_zupt_interval_s, it stops to recalibrate, but only if necessary:
@@ -117,7 +117,15 @@ class RuntimeConfig:
     # 390 s on the gyro). Engineered. 0 disables.
     imu_zupt_interval_s: float = 120.0
     imu_zupt_min_sigma_dps: float = 0.02
-    imu_zupt_max_hold_s: float = 2.0
+    # Owner decision 2026-10-05: also recalibrate, at most every imu_zupt_temp_min_s,
+    # when the IMU chip has warmed or cooled this much since the last offset measurement
+    # and the offset is uncertain (warm-up after power-on shifts it by tempco x dT).
+    # Development (6 worlds): 1.0 degC gave 1.28 deg / 1.94 cm against 2.11 / 4.26 with
+    # the 2-minute rule alone, with 1-3 recalibration stops in 7 minutes. 0 = off.
+    imu_zupt_temp_c: float = 1.0
+    imu_zupt_temp_min_s: float = 20.0
+    imu_zupt_max_hold_s: float = 2.5
+    imu_zupt_min_frames: int = 10  # frames of stand-still measurement per recalibration stop
     # This robot's gyro calibration (scripts/calibrate_imu.py); used when its unit
     # serial matches the spec's. None = datasheet prior only (+-1 % sensitivity).
     imu_calibration: str | None = "configs/calibration/imu.yaml"
@@ -282,6 +290,7 @@ class RobotRuntime:
         self.odo_fallbacks = 0
         self._zupt_hold_until = -math.inf
         self._zupt_hold_start = None
+        self._zupt_frames_at_hold = None
         self.zupt_holds = self.zupt_hold_failures = 0
         self._proprio = ProprioBatch([], [])
         self.last_odometry = None
@@ -340,8 +349,8 @@ class RobotRuntime:
         if self.odo is not None:
             for ratio, sigma in self.slam.pop_scale_samples():
                 self.odo.add_scale_sample(ratio * self.odo.gyro_scale, sigma)
-            for rate in self.slam.pop_bias_feedback():
-                self.odo.add_bias_feedback(rate)
+            for rate, sigma in self.slam.pop_bias_feedback():
+                self.odo.add_bias_feedback(rate, sigma)
             for ratio in self.slam.pop_radius_samples():
                 self.odo.add_radius_sample(ratio)
         self.last_track = result
@@ -687,13 +696,17 @@ class RobotRuntime:
         if self.odo is None:
             return False
         if now < self.cfg.imu_boot_still_s:
+            if self._zupt_frames_at_hold is None:
+                self._zupt_frames_at_hold = self.odo.zupt_frames
             return True
         if self.cfg.imu_zupt_interval_s <= 0:
             return False
         if self._zupt_hold_start is not None:
             # hold until the offset has actually been measured (the chassis may still
             # rock after a turn), at most imu_zupt_max_hold_s
-            done = self.odo.last_bias_update_t >= self._zupt_hold_start
+            # ~1 s of still samples: one 0.1 s frame alone left a ~0.01 dps error
+            # (gyro noise and the 8.75 mdps LSB; development run arena s0)
+            done = self.odo.zupt_frames - self._zupt_frames_at_hold >= self.cfg.imu_zupt_min_frames
             if not done and now < self._zupt_hold_start + self.cfg.imu_zupt_max_hold_s:
                 return True
             if not done:
@@ -701,9 +714,15 @@ class RobotRuntime:
             self._zupt_hold_start = None
             self._zupt_hold_until = now
             return False
-        stale = now - max(self.odo.last_bias_update_t, self._zupt_hold_until) > self.cfg.imu_zupt_interval_s
-        if stale and math.degrees(math.sqrt(self.odo.bias_var)) > self.cfg.imu_zupt_min_sigma_dps:
+        since = now - max(self.odo.last_bias_update_t, self._zupt_hold_until)
+        stale = since > self.cfg.imu_zupt_interval_s
+        uncertain = math.degrees(math.sqrt(self.odo.bias_var)) > self.cfg.imu_zupt_min_sigma_dps
+        warmed = (self.cfg.imu_zupt_temp_c > 0 and since > self.cfg.imu_zupt_temp_min_s
+                  and self.odo.temp is not None and self.odo.temp_at_update is not None
+                  and abs(self.odo.temp - self.odo.temp_at_update) >= self.cfg.imu_zupt_temp_c)
+        if (stale or warmed) and uncertain:
             self._zupt_hold_start = now
+            self._zupt_frames_at_hold = self.odo.zupt_frames
             self.zupt_holds += 1
             return True
         return False

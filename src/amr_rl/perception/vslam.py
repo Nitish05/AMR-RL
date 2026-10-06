@@ -341,7 +341,9 @@ class VSLAMConfig:
     # measures the true angle (same landmarks at both ends); ratio samples go back to
     # the odometry (WheelInertialOdometry.add_scale_sample).
     odo_ba: bool = True                 # odometry factors in the local bundle adjustment
-    odo_bias_max_rate: float = 0.25     # rad/s: bias feedback only while turning slower than this
+    odo_bias_max_rate: float = 0.25     # rad/s: window ends only while turning slower than this
+    odo_bias_window_min: float = 15.0   # s
+    odo_bias_window_max: float = 90.0   # s
     # ...and only when at least this share of inliers are established landmarks (vision
     # is an absolute heading reference only through them; against fresh ones it is
     # visual odometry and the feedback would learn the map's own drift). 0 = any frame.
@@ -530,7 +532,8 @@ class PlanarVSLAM:
         self.last_fusion = None
         self._scale_anchor = None
         self.scale_samples = []   # (ratio, sigma) pending for the odometry
-        self.bias_feedback = []   # gyro rate error (rad/s) implied by vision's corrections
+        self.bias_feedback = []   # (gyro rate error rad/s, sigma) from vision windows
+        self._bias_win = None
         self.radius_samples = []  # vision / encoder distance over straight stretches
         self._radius_acc = None
 
@@ -1198,14 +1201,45 @@ class PlanarVSLAM:
         x[2] = wrap(x[2])
         self._cov = np.linalg.inv(lam)
         self._cov = 0.5 * (self._cov + self._cov.T)
-        # Vision's heading correction while hardly turning (no lever-arm effect) is a
-        # measurement of the gyro's rate error: fed back to the bias estimate.
-        if (odo.trust_rotation and w_th == 1.0 and abs(odo.w) < cfg.odo_bias_max_rate and odo.dt > 0
-                and share >= cfg.odo_bias_min_established):
-            self.bias_feedback.append(-float(delta[2]) / odo.dt)
+        self._bias_window(z, odo, share, w_th, t)
         self.last_fusion = {"nis_th": float(nis_th), "nis_xy": float(nis_xy), "w_th": float(w_th), "est": share,
                             "w_xy": float(w_xy), "vision_th": float(z[2]), "slip": bool(odo.slip)}
         return x
+
+    def _bias_window(self, z, odo, share, w_th, t):
+        """Gyro offset from vision, one honest measurement per window: between two
+        frames where vision is an absolute heading reference (mostly established
+        landmarks, not turning fast, vision not down-weighted), the gyro's rotation
+        minus vision's heading change over the window length. Uncertainty: vision's
+        heading error at both ends plus the scale uncertainty times the rotation.
+        (Per-frame corrections are correlated; used one by one they made the offset
+        look known when it was 0.01-0.02 dps off: validation 3.)"""
+        cfg = self.cfg
+        if not odo.trust_rotation:
+            self._bias_win = None
+            return
+        good = (w_th == 1.0 and abs(odo.w) < cfg.odo_bias_max_rate and share >= cfg.odo_bias_min_established)
+        win = self._bias_win
+        bias_now = odo.info.get("bias")
+        if win is not None:
+            win["gyro"] += odo.dth
+            win["rot"] += abs(odo.dth)
+            if t - win["t0"] > cfg.odo_bias_window_max or bias_now != win["bias"]:
+                win = self._bias_win = None  # too long, or the offset was re-measured (stop)
+        if not good:
+            return
+        if win is None:
+            self._bias_win = {"t0": t, "z0": float(z[2]), "gyro": 0.0, "rot": 0.0, "bias": bias_now,
+                              "share": share}
+            return
+        T = t - win["t0"]
+        if T < cfg.odo_bias_window_min:
+            return
+        err = -wrap(float(z[2]) - win["z0"] - win["gyro"]) / T  # gyro rate error (corrected units)
+        sv = cfg.odo_vision_heading_floor / math.sqrt(max(min(share, win["share"]), cfg.odo_min_established))
+        sigma = math.hypot(math.sqrt(2) * sv / T, odo.info.get("scale_sigma", 0.0005) * win["rot"] / T)
+        self.bias_feedback.append((err, sigma))
+        self._bias_win = {"t0": t, "z0": float(z[2]), "gyro": 0.0, "rot": 0.0, "bias": bias_now, "share": share}
 
     def _sigma_from_cov(self):
         if self._cov is None:

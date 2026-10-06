@@ -16,11 +16,13 @@ import numpy as np
 @dataclass(frozen=True)
 class ImuSample:
     """One IMU output sample. ``gyro`` in rad/s, ``accel`` (specific force) in m/s^2,
-    both in the IMU body frame (x forward, y left, z up when mounted level)."""
+    both in the IMU body frame (x forward, y left, z up when mounted level); ``temp``:
+    the chip's own temperature sensor (degC), None if not read."""
 
     t: float
     gyro: np.ndarray
     accel: np.ndarray
+    temp: float | None = None
 
 
 @dataclass(frozen=True)

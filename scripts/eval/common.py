@@ -234,7 +234,8 @@ def save_recording(session, run_dir: Path):
     images written by the runtime's evidence archive."""
     if session.proprio_log is None:
         return
-    imu = [[s.t, *map(float, s.gyro), *map(float, s.accel)] for b in session.proprio_log for s in b.imu]
+    imu = [[s.t, *map(float, s.gyro), *map(float, s.accel), float("nan") if s.temp is None else float(s.temp)]
+           for b in session.proprio_log for s in b.imu]
     enc = [[s.t, s.left, s.right] for b in session.proprio_log for s in b.encoders]
-    np.savez_compressed(Path(run_dir) / "proprio.npz", imu=np.asarray(imu, float).reshape(-1, 7),
+    np.savez_compressed(Path(run_dir) / "proprio.npz", imu=np.asarray(imu, float).reshape(-1, 8),
                         enc=np.asarray(enc, float).reshape(-1, 3))

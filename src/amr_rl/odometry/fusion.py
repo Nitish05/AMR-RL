@@ -59,7 +59,11 @@ class OdometryConfig:
     zaru_gate: float = 0.01 * DPS    # rad/s on top of 3 sigma
     zaru_settle_s: float = 1.0       # straight driving this long before a window starts (starts skid)
     zaru_max_dv: float = 0.02        # m/s change per frame: steady speed only
-    bias_rw: float = 0.004 * DPS     # rad/s/sqrt(s): bias drift allowed between still periods
+    # rad/s/sqrt(s): offset drift between updates beyond the temperature model (2x the
+    # analogue rate random walk 1.5e-4 dps/sqrt(s) plus margin for an imperfect model).
+    bias_rw: float = 0.001 * DPS
+    tempco_rw: float = 1e-5 * DPS    # rad/s/degC/sqrt(s): the tempco is nearly constant
+    tempco_prior_factor: float = 2.0
     track_scale_init: float = 1.0    # gyro yaw / encoder yaw (scrub of a skid-steered turn)
     track_scale_gain: float = 0.05
     track_scale_bounds: tuple = (0.6, 1.4)
@@ -72,12 +76,6 @@ class OdometryConfig:
     accel_slip_samples: int = 3
     slip_hold_s: float = 0.6
     tilt_yaw_error: float = 0.0005    # relative yaw error from caster rocking (body z vs vertical)
-    # rad/s per frame of vision-implied rate error. Used only on frames where most
-    # inliers are established landmarks (VSLAMConfig.odo_bias_min_established): from
-    # every frame (development) it learned the map's own drift (offset wandered 1.01-1.05
-    # dps, heading 3.7 deg); restricted, it beat stops-only at 120 s (6 dev worlds:
-    # 1.76 vs 2.51 deg mean max heading error).
-    bias_feedback_sigma: float = 0.003
 
 
 @dataclass
@@ -118,8 +116,19 @@ class WheelInertialOdometry:
         self.noise_density = float(g["noise_density_dps_rthz"]) * DPS
         self.sample_noise = self.noise_density * math.sqrt(bw)
         self.lsb = float(g["lsb_mdps"]) * 1e-3 * DPS
-        self.bias = 0.0
-        self.bias_var = (float(g["offset_sigma_dps"]) * DPS) ** 2
+        # Gyro z offset model: offset(T) = b0 + k (T - T0), T the chip's own temperature
+        # sensor (warm-up after power-on shifts the offset by tempco x dT: +-0.010
+        # dps/degC typ). State x = [b0, k] with covariance P; without temperature
+        # readings it reduces to a single offset b0.
+        self._x = np.array([0.0, 0.0])
+        # Tempco prior: 2x the datasheet's "typ" value (typ is not guaranteed; a unit at
+        # 2.5x typ drifted 0.03 dps unnoticed in development with a 1x prior).
+        self._P = np.diag([(float(g["offset_sigma_dps"]) * DPS) ** 2,
+                           (self.cfg.tempco_prior_factor * float(g.get("tempco_sigma_dps_per_c", 0.0)) * DPS) ** 2])
+        self.temp = None   # latest chip temperature (degC)
+        self.temp0 = None  # reference temperature of b0
+        self.temp_at_update = None  # chip temperature at the last stand-still offset measurement
+        self.zupt_frames = 0  # frames of stand-still offset measurement so far
         self.bias_calibrated = False
         self.last_zupt_t = -math.inf
         self.last_bias_update_t = -math.inf  # zero-velocity or straight-driving update
@@ -160,16 +169,52 @@ class WheelInertialOdometry:
     def _yaw_rate(self, s, dt):
         return self.gyro_scale * (float(s.gyro[2]) - self.bias)
 
-    def add_bias_feedback(self, rate_error: float):
-        """Gyro rate error (rad/s, corrected units) implied by vision's heading
-        correction in one frame. A slow Kalman update: the corrections of successive
-        frames are correlated, so each counts as a weak measurement."""
-        if not math.isfinite(rate_error) or abs(rate_error) > 0.05:
+    # ------------------------------------------------------------ offset model
+    def _h(self, temp=None):
+        temp = self.temp if temp is None else temp
+        d = 0.0 if (temp is None or self.temp0 is None) else temp - self.temp0
+        return np.array([1.0, d])
+
+    @property
+    def bias(self):
+        """Gyro z offset (rad/s) at the current chip temperature."""
+        return float(self._h() @ self._x)
+
+    @bias.setter
+    def bias(self, value):
+        self._x[0] += float(value) - self.bias
+
+    @property
+    def bias_var(self):
+        h = self._h()
+        return float(h @ self._P @ h)
+
+    @bias_var.setter
+    def bias_var(self, value):
+        self._P = np.diag([float(value), self._P[1, 1]])
+
+    @property
+    def tempco(self):
+        return float(self._x[1]), float(math.sqrt(max(self._P[1, 1], 0.0)))
+
+    def _offset_update(self, meas, r_var, temp=None):
+        """Kalman update with a measurement of the offset (rad/s) at ``temp``."""
+        h = self._h(temp)
+        S = float(h @ self._P @ h) + r_var
+        K = self._P @ h / S
+        self._x = self._x + K * (meas - float(h @ self._x))
+        self._P = self._P - np.outer(K, h @ self._P)
+        self._P = 0.5 * (self._P + self._P.T)
+
+    def add_bias_feedback(self, rate_error: float, sigma: float):
+        """Gyro rate error (rad/s, corrected units) measured by vision over a window,
+        with its uncertainty (VSLAM ``_bias_window``): a Kalman update of the offset."""
+        if not (math.isfinite(rate_error) and math.isfinite(sigma)) or abs(rate_error) > 0.05 or sigma <= 0:
             return
-        r = self.cfg.bias_feedback_sigma ** 2
-        k = self.bias_var / (self.bias_var + r)
-        self.bias += k * rate_error / max(self.gyro_scale, 0.5)
-        self.bias_var *= (1 - k)
+        if abs(rate_error) > 4 * math.sqrt(self.bias_var + sigma ** 2):
+            self.log["bias_feedback_rejected"] = self.log.get("bias_feedback_rejected", 0) + 1
+            return
+        self._offset_update(self.bias + rate_error / max(self.gyro_scale, 0.5), sigma ** 2)
         self.log["bias_feedback"] = self.log.get("bias_feedback", 0) + 1
 
     def add_radius_sample(self, ratio: float):
@@ -238,6 +283,10 @@ class WheelInertialOdometry:
             yaw += rate * h
             gz_int += float(s.gyro[2]) * h
             imu_time += h
+            if getattr(s, "temp", None) is not None:
+                self.temp = 0.95 * self.temp + 0.05 * float(s.temp) if self.temp is not None else float(s.temp)
+                if self.temp0 is None:
+                    self.temp0 = self.temp
             yaw_t.append(s.t)
             yaw_c.append(yaw)
         have_imu = len(imu) > 0
@@ -291,18 +340,19 @@ class WheelInertialOdometry:
                 if abs(mean - self.bias) < max(cfg.zupt_gyro_gate, 4 * math.sqrt(self.bias_var)):
                     stationary = True
                     r_var = (self.sample_noise ** 2 + self.lsb ** 2 / 12) / len(g_arr) + cfg.zupt_floor ** 2
-                    k = self.bias_var / (self.bias_var + r_var)
-                    self.bias += k * (mean - self.bias)
-                    self.bias_var = (1 - k) * self.bias_var
+                    self._offset_update(mean, r_var)
                     self.bias_calibrated = True
                     self.last_zupt_t = self.last_bias_update_t = t
+                    self.temp_at_update = self.temp
+                    self.zupt_frames += 1
                     self.log["zupt"] += 1
                     ax = float(np.mean([s_.accel[0] for s_ in imu]))
                     self.rest_ax = ax if self.rest_ax is None else 0.9 * self.rest_ax + 0.1 * ax
         else:
             self._still_since = None
             self._quiet_frames = 0
-        self.bias_var += cfg.bias_rw ** 2 * dt
+        self._P[0, 0] += cfg.bias_rw ** 2 * dt
+        self._P[1, 1] += cfg.tempco_rw ** 2 * dt
         # ---- slip detection
         slip_reasons = []
         if have_imu and have_enc and abs(enc_yaw) > 1e-4:
@@ -385,7 +435,8 @@ class WheelInertialOdometry:
         return OdometryStep(dt, float(x), float(y), float(yaw), cov, float(v), float(yaw / dt), dist,
                             slip=slip, stationary=stationary, rotation_source=rot_src,
                             translation_source=trans_src,
-                            info={"bias": self.bias, "bias_sigma": math.sqrt(self.bias_var),
+                            info={"bias": self.bias, "bias_sigma": math.sqrt(self.bias_var), "temp": self.temp,
+                                  "tempco": self.tempco[0],
                                   "track_scale": self.track_scale, "gyro_scale": self.gyro_scale,
                                   "radius_scale": self.radius_scale,
                                   "scale_sigma": math.sqrt(self.scale_var), "enc_yaw": enc_yaw,
@@ -401,9 +452,7 @@ class WheelInertialOdometry:
         if abs(meas - self.bias) > 3 * math.sqrt(self.bias_var + r_var) + self.cfg.zaru_gate:
             self.log["zaru_rejected"] = self.log.get("zaru_rejected", 0) + 1
             return
-        k = self.bias_var / (self.bias_var + r_var)
-        self.bias += k * (meas - self.bias)
-        self.bias_var *= (1 - k)
+        self._offset_update(meas, r_var)
         self.last_bias_update_t = self.t
         self.log["zaru"] = self.log.get("zaru", 0) + 1
 

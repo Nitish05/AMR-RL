@@ -53,7 +53,7 @@ class ImuErrorModel:
         # white noise per sample from the spectral density over the filter bandwidth
         self.g_noise = float(g["noise_density_dps_rthz"]) * DPS * math.sqrt(bw)
         self.g_rw = float(g.get("bias_random_walk_dps_rts", 0.0)) * DPS
-        self.g_bias = _draw(rng, float(g["offset_sigma_dps"]) * DPS, float(g["offset_max_dps"]) * DPS)
+        run_bias = _draw(rng, float(g["offset_sigma_dps"]) * DPS, float(g["offset_max_dps"]) * DPS)
         scale = _draw(unit_rng, float(g["sensitivity_sigma"]), float(g["sensitivity_max"]))
         cross = unit_rng.normal(0.0, float(g["cross_axis_sigma"]), (3, 3))
         self.g_M = np.eye(3) + np.diag(scale) + (cross - np.diag(np.diag(cross)))
@@ -64,11 +64,42 @@ class ImuErrorModel:
         a_scale = _draw(unit_rng, float(a["sensitivity_sigma"]), float(a["sensitivity_max"]))
         a_cross = unit_rng.normal(0.0, float(a["cross_axis_sigma"]), (3, 3))
         self.a_M = np.eye(3) + np.diag(a_scale) + (a_cross - np.diag(np.diag(a_cross)))
+        # Offset: fixed per unit (drawn after the unit's sensitivity errors, which keep
+        # their values) plus a small power-on part; without a separate unit generator
+        # the whole offset is per run (older model).
+        if "offset_run_sigma_dps" in g and unit_rng is not rng:
+            self.g_bias = _draw(unit_rng, float(g["offset_sigma_dps"]) * DPS, float(g["offset_max_dps"]) * DPS) \
+                + rng.normal(0.0, float(g["offset_run_sigma_dps"]) * DPS, 3)
+        else:
+            self.g_bias = run_bias
+        # Thermal warm-up after power-on (t = 0 at world creation).
+        self.tempco = unit_rng.normal(0.0, float(g.get("tempco_sigma_dps_per_c", 0.0)), 3) * DPS
+        lo, hi = g.get("warmup_dt_range_c", [0.0, 0.0])
+        self.warm_dt = float(rng.uniform(lo, hi)) if hi > 0 else 0.0
+        lo, hi = g.get("warmup_tau_range_s", [1.0, 1.0])
+        self.warm_tau = float(rng.uniform(lo, hi))
+        self.t = 0.0
+        tc = cfg.get("temperature")
+        self.temp_cfg = tc
+        self.temp_offset = float(unit_rng.normal(0.0, float(tc["offset_sigma_c"]))) if tc else 0.0
+
+    def temperature_rise(self):
+        return self.warm_dt * (1.0 - math.exp(-self.t / self.warm_tau))
 
     def gyro(self, omega):
+        self.t += self.dt
         self.g_bias = self.g_bias + self.g_rw * math.sqrt(self.dt) * self.rng.normal(0.0, 1.0, 3)
-        x = self.g_M @ omega + self.g_bias + self.rng.normal(0.0, self.g_noise, 3)
+        offset = self.g_bias + self.tempco * self.temperature_rise()
+        x = self.g_M @ omega + offset + self.rng.normal(0.0, self.g_noise, 3)
         return np.clip(np.round(x / self.g_lsb) * self.g_lsb, -self.g_range, self.g_range - self.g_lsb)
+
+    def temperature(self):
+        """The chip's temperature sensor reading (degC), or None if not modelled."""
+        tc = self.temp_cfg
+        if not tc:
+            return None
+        x = float(tc["ambient_c"]) + self.temperature_rise() + self.temp_offset + self.rng.normal(0.0, float(tc["noise_c"]))
+        return round(x / float(tc["lsb_c"])) * float(tc["lsb_c"])
 
     def accel(self, f):
         x = self.a_M @ f + self.a_bias + self.rng.normal(0.0, self.a_noise, 3)
@@ -143,7 +174,8 @@ class ProprioSensors:
             r = self._imu_sensor.read()
             omega = np.asarray(r.ang_vel, float).reshape(3)
             f = np.asarray(r.lin_acc, float).reshape(3)
-            self._imu.append(ImuSample(t, self.imu_model.gyro(omega), self.imu_model.accel(f)))
+            g = self.imu_model.gyro(omega)
+            self._imu.append(ImuSample(t, g, self.imu_model.accel(f), self.imu_model.temperature()))
         if self._tick % self.enc_every == 0 and not self.faults.get("encoders_off"):
             q = np.asarray(self._robot.get_dofs_position(self._dofs), float).reshape(2)
             self._enc.append(EncoderSample(t, self.encoders[0].count(float(q[0])), self.encoders[1].count(float(q[1]))))
