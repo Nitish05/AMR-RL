@@ -41,8 +41,24 @@ G = 9.80665
 
 @dataclass
 class OdometryConfig:
-    zupt_min_s: float = 0.3          # no encoder counts this long -> standing still
+    # Standing still: no encoder counts this long, then zupt_quiet_frames consecutive
+    # quiet frames. After a turn the chassis creeps (~0.06 dps, low noise) while it
+    # settles; a 0.3 s / one-frame rule took that creep as the offset (development run).
+    zupt_min_s: float = 0.6
+    zupt_quiet_frames: int = 3
+    zupt_floor: float = 0.005 * DPS  # rad/s per frame: residual creep, not averaged away
     zupt_gyro_gate: float = 0.03     # rad/s: |gyro_z - bias| above this is not still
+    # Zero-rotation update while driving straight. OFF: in simulation the chassis skids
+    # (0.1-0.3 dps of yaw with equal wheel travel; up to ~2 dps just after starting off),
+    # and one accepted window shifted the offset 0.08 dps (development run: 14 deg).
+    zaru: bool = False
+    zaru_max_frame_yaw: float = 0.003  # rad of encoder yaw per frame: "driving straight"
+    zaru_window_s: float = 2.0
+    zaru_min_s: float = 1.0
+    zaru_floor: float = 0.0005       # rad/s*sqrt(s): unmodelled side-skid while driving straight
+    zaru_gate: float = 0.01 * DPS    # rad/s on top of 3 sigma
+    zaru_settle_s: float = 1.0       # straight driving this long before a window starts (starts skid)
+    zaru_max_dv: float = 0.02        # m/s change per frame: steady speed only
     bias_rw: float = 0.004 * DPS     # rad/s/sqrt(s): bias drift allowed between still periods
     track_scale_init: float = 1.0    # gyro yaw / encoder yaw (scrub of a skid-steered turn)
     track_scale_gain: float = 0.05
@@ -56,11 +72,12 @@ class OdometryConfig:
     accel_slip_samples: int = 3
     slip_hold_s: float = 0.6
     tilt_yaw_error: float = 0.0005    # relative yaw error from caster rocking (body z vs vertical)
-    # rad/s per frame of vision-implied rate error (weak). A strong feedback (0.003)
-    # learned the map's own slow heading drift into the offset (development run arena
-    # s0: offset wandered 1.01-1.05 dps, heading 3.7 deg); the runtime's periodic
-    # zero-velocity stops (RuntimeConfig.imu_zupt_interval_s) measure it instead.
-    bias_feedback_sigma: float = 0.02
+    # rad/s per frame of vision-implied rate error. Used only on frames where most
+    # inliers are established landmarks (VSLAMConfig.odo_bias_min_established): from
+    # every frame (development) it learned the map's own drift (offset wandered 1.01-1.05
+    # dps, heading 3.7 deg); restricted, it beat stops-only at 120 s (6 dev worlds:
+    # 1.76 vs 2.51 deg mean max heading error).
+    bias_feedback_sigma: float = 0.003
 
 
 @dataclass
@@ -105,6 +122,10 @@ class WheelInertialOdometry:
         self.bias_var = (float(g["offset_sigma_dps"]) * DPS) ** 2
         self.bias_calibrated = False
         self.last_zupt_t = -math.inf
+        self.last_bias_update_t = -math.inf  # zero-velocity or straight-driving update
+        self._zaru = None
+        self._last_v = 0.0
+        self._straight_s = 0.0
         # gyro scale: true rate = gyro_scale x measured. Prior from the datasheet's
         # sensitivity tolerance; refined from full in-place turns that vision closes
         # (``add_scale_sample``).
@@ -123,6 +144,7 @@ class WheelInertialOdometry:
             self.gyro_scale = float(calibration["gyro_scale"])
             self.scale_var0 = self.scale_var = float(calibration["gyro_scale_sigma"]) ** 2
             self.scale_prior = self.gyro_scale
+        self._quiet_frames = 0
         self.track_scale = self.cfg.track_scale_init
         self.rest_ax = None  # forward specific force at rest (gravity x tilt + offset), from still periods
         self._last_imu_t = None
@@ -208,11 +230,14 @@ class WheelInertialOdometry:
         cfg = self.cfg
         # ---- rotation (gyro), cumulative yaw at each IMU sample
         yaw_t, yaw_c, yaw = [t0], [0.0], 0.0
+        gz_int = imu_time = 0.0  # raw gyro z integral (offset included) for the straight-driving update
         for s in imu:
             h = s.t - self._last_imu_t if self._last_imu_t is not None else 0.0
             self._last_imu_t = s.t
             rate = self._yaw_rate(s, h)
             yaw += rate * h
+            gz_int += float(s.gyro[2]) * h
+            imu_time += h
             yaw_t.append(s.t)
             yaw_c.append(yaw)
         have_imu = len(imu) > 0
@@ -256,21 +281,23 @@ class WheelInertialOdometry:
             g_arr = np.array([s_.gyro for s_ in imu]) if imu else np.zeros((0, 3))
             quiet_lim = 4 * self.sample_noise + self.lsb
             quiet = len(g_arr) >= 3 and bool(np.all(g_arr.std(0) < quiet_lim))  # (x/y have own offsets)
-            if quiet and t - self._still_since >= cfg.zupt_min_s:
+            self._quiet_frames = self._quiet_frames + 1 if quiet else 0
+            if quiet and t - self._still_since >= cfg.zupt_min_s and self._quiet_frames >= cfg.zupt_quiet_frames:
                 mean = float(g_arr[:, 2].mean())
                 if abs(mean - self.bias) < max(cfg.zupt_gyro_gate, 4 * math.sqrt(self.bias_var)):
                     stationary = True
-                    r_var = (self.sample_noise ** 2 + self.lsb ** 2 / 12) / len(g_arr)
+                    r_var = (self.sample_noise ** 2 + self.lsb ** 2 / 12) / len(g_arr) + cfg.zupt_floor ** 2
                     k = self.bias_var / (self.bias_var + r_var)
                     self.bias += k * (mean - self.bias)
                     self.bias_var = (1 - k) * self.bias_var
                     self.bias_calibrated = True
-                    self.last_zupt_t = t
+                    self.last_zupt_t = self.last_bias_update_t = t
                     self.log["zupt"] += 1
                     ax = float(np.mean([s_.accel[0] for s_ in imu]))
                     self.rest_ax = ax if self.rest_ax is None else 0.9 * self.rest_ax + 0.1 * ax
         else:
             self._still_since = None
+            self._quiet_frames = 0
         self.bias_var += cfg.bias_rw ** 2 * dt
         # ---- slip detection
         slip_reasons = []
@@ -298,6 +325,31 @@ class WheelInertialOdometry:
         if slip_reasons:
             self._slip_until = t + cfg.slip_hold_s
         slip = self._slip_active(t)
+        # ---- straight driving: zero-rotation update of the gyro offset (gyrodometry).
+        # Wheels turning (nearly) equally and no slip: the body's yaw is the encoders'
+        # (small) differential yaw, so the raw gyro integral minus it, over >= 1 s of
+        # such frames, measures the offset. Encoder quantisation (1.4 mrad per count)
+        # limits one window to ~0.03 dps; repeated windows average it down. No stop needed.
+        straight = (cfg.zaru and have_imu and have_enc and moved and not slip and imu_time > 0
+                    and abs(enc_yaw) <= cfg.zaru_max_frame_yaw
+                    and abs(dist_signed / dt - self._last_v) <= cfg.zaru_max_dv)
+        self._last_v = dist_signed / dt if have_enc else 0.0
+        self._straight_s = self._straight_s + dt if straight else 0.0
+        if straight and self._straight_s < cfg.zaru_settle_s:
+            self._zaru = None
+        elif straight:
+            w = self._zaru or [0.0, 0.0, 0.0]
+            w[0] += gz_int
+            w[1] += self.track_scale * enc_yaw / max(self.gyro_scale, 0.5)
+            w[2] += imu_time
+            self._zaru = w
+            if w[2] >= cfg.zaru_window_s:
+                self._zaru_update(*w)
+                self._zaru = None
+        else:
+            if self._zaru is not None and self._zaru[2] >= cfg.zaru_min_s:
+                self._zaru_update(*self._zaru)
+            self._zaru = None
         # ---- covariance (robot frame at the previous frame)
         dist = abs(dist_signed)
         if have_imu:
@@ -334,6 +386,22 @@ class WheelInertialOdometry:
                                   "radius_scale": self.radius_scale,
                                   "scale_sigma": math.sqrt(self.scale_var), "enc_yaw": enc_yaw,
                                   "slip_reasons": slip_reasons})
+
+    def _zaru_update(self, gz_int, enc_yaw_raw, T):
+        meas = (gz_int - enc_yaw_raw) / T
+        q = self.r * 2 * math.pi / self.cpr / self.track  # one count of differential yaw
+        r_var = (2 * q / T) ** 2 + (self.cfg.zaru_floor / math.sqrt(T)) ** 2
+        # Equal wheel travel does not guarantee no rotation: in simulation the chassis
+        # skids on caster and wheels (~0.2 dps while "straight", more when starting
+        # off). Only windows consistent with how far the offset can have drifted are used.
+        if abs(meas - self.bias) > 3 * math.sqrt(self.bias_var + r_var) + self.cfg.zaru_gate:
+            self.log["zaru_rejected"] = self.log.get("zaru_rejected", 0) + 1
+            return
+        k = self.bias_var / (self.bias_var + r_var)
+        self.bias += k * (meas - self.bias)
+        self.bias_var *= (1 - k)
+        self.last_bias_update_t = self.t
+        self.log["zaru"] = self.log.get("zaru", 0) + 1
 
     def _slip_active(self, t):
         return t < self._slip_until

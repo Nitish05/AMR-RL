@@ -199,14 +199,46 @@ def test_runtime_holds_the_wheels_for_imu_zero_velocity_updates():
     rt = RobotRuntime.__new__(RobotRuntime)
     rt.cfg = RuntimeConfig(odometry="imu_encoders")
     rt.odo = WheelInertialOdometry(SPEC)
-    rt._zupt_hold_until, rt.zupt_holds = -math.inf, 0
+    rt._zupt_hold_until, rt._zupt_hold_start, rt.zupt_holds, rt.zupt_hold_failures = -math.inf, None, 0, 0
     assert rt._imu_booting(0.5)  # boot: offset measurement first
-    rt.odo.last_zupt_t = 0.9
+    rt.cfg.imu_zupt_interval_s = 30.0
+    rt.odo.last_bias_update_t = 0.9
+    rt.odo.bias_var = math.radians(0.05) ** 2  # offset uncertain: a stop is necessary
     assert not rt._imu_booting(1.0)
     assert not rt._imu_booting(30.0)
-    assert rt._imu_booting(31.0) and rt.zupt_holds == 1  # 30 s without one: a short stop
-    assert rt._imu_booting(31.5) and not rt._imu_booting(31.9)
-    rt.odo.last_zupt_t = 31.6
+    assert rt._imu_booting(31.0) and rt.zupt_holds == 1  # no offset update for 30 s: a short stop
+    assert rt._imu_booting(31.5)  # held until the offset is measured...
+    rt.odo.last_bias_update_t = 31.6
+    assert not rt._imu_booting(31.7)  # ...then driving resumes at once
     assert not rt._imu_booting(50.0)
+    assert rt._imu_booting(62.0) and rt._imu_booting(63.9)  # never measured: at most 2 s
+    assert not rt._imu_booting(64.1) and rt.zupt_hold_failures == 1
     rt.odo = None  # camera-only robot: never held
     assert not rt._imu_booting(0.1)
+
+
+def test_straight_driving_measures_the_gyro_offset_without_stopping():
+    from amr_rl.odometry.fusion import OdometryConfig
+
+    odo = WheelInertialOdometry(SPEC, OdometryConfig(zaru=True))  # off by default (simulated skid)
+    counts, bias = [0.0, 0.0], 0.0175
+    odo.step(_samples(0, 10, 0, bias, 0, 0, counts), 0.1)
+    odo.bias, odo.bias_var = 0.0175 + 0.0004, (0.0006) ** 2  # offset drifted since the last stop
+    for k in range(1, 61):  # 6 s straight at 0.2 m/s (4 rad/s per wheel)
+        odo.step(_samples(k * 0.1, 10, 0.0, bias, 4.0, 4.0, counts), (k + 1) * 0.1)
+    assert odo.log.get("zaru", 0) >= 2 and odo.log["zupt"] == 0
+    assert abs(odo.bias - bias) < 0.00015 and odo.last_bias_update_t > 1.0
+
+
+def test_no_recalibration_stop_when_the_offset_is_still_known():
+    from amr_rl.runtime.robot import RobotRuntime, RuntimeConfig
+
+    rt = RobotRuntime.__new__(RobotRuntime)
+    rt.cfg = RuntimeConfig(odometry="imu_encoders")
+    rt.odo = WheelInertialOdometry(SPEC)
+    rt._zupt_hold_until, rt._zupt_hold_start, rt.zupt_holds, rt.zupt_hold_failures = -math.inf, None, 0, 0
+    rt.odo.last_bias_update_t = 1.0
+    rt.odo.bias_var = math.radians(0.01) ** 2  # vision kept it known
+    assert not rt._imu_booting(200.0) and rt.zupt_holds == 0
+    rt.odo.bias_var = math.radians(0.03) ** 2
+    assert rt._imu_booting(200.0) and rt.zupt_holds == 1

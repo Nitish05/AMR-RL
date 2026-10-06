@@ -109,12 +109,15 @@ class RuntimeConfig:
     # wheels, so the gyro's zero-rate offset (+-1 dps typ, LSM6DSOX) is measured first
     # (standard IMU boot calibration; operator driving is not held).
     imu_boot_still_s: float = 1.0
-    # ...and pause driving for imu_zupt_hold_s when the last zero-velocity update is
-    # older than imu_zupt_interval_s (an exploring robot otherwise never stands still
-    # and the gyro offset random-walks: development run 6 deg in 390 s on the gyro).
-    # Engineered; about 2 % of driving time. 0 disables.
-    imu_zupt_interval_s: float = 30.0
-    imu_zupt_hold_s: float = 0.8
+    # The offset is re-measured at every natural stop (and learned from vision on
+    # established landmarks in between). Owner decision 2026-10-05: if the robot has not
+    # stopped for imu_zupt_interval_s, it stops to recalibrate, but only if necessary:
+    # when the offset's uncertainty has grown above imu_zupt_min_sigma_dps. An
+    # exploring robot otherwise random-walks the offset (development run: 6 deg in
+    # 390 s on the gyro). Engineered. 0 disables.
+    imu_zupt_interval_s: float = 120.0
+    imu_zupt_min_sigma_dps: float = 0.02
+    imu_zupt_max_hold_s: float = 2.0
     # This robot's gyro calibration (scripts/calibrate_imu.py); used when its unit
     # serial matches the spec's. None = datasheet prior only (+-1 % sensitivity).
     imu_calibration: str | None = "configs/calibration/imu.yaml"
@@ -278,7 +281,8 @@ class RobotRuntime:
         self.cmd_odo = CommandModelOdometry(spec) if self.cfg.odometry in ("imu_encoders", "command_model") else None
         self.odo_fallbacks = 0
         self._zupt_hold_until = -math.inf
-        self.zupt_holds = 0
+        self._zupt_hold_start = None
+        self.zupt_holds = self.zupt_hold_failures = 0
         self._proprio = ProprioBatch([], [])
         self.last_odometry = None
         self.last_state = {}
@@ -686,10 +690,20 @@ class RobotRuntime:
             return True
         if self.cfg.imu_zupt_interval_s <= 0:
             return False
-        if now < self._zupt_hold_until:
-            return True
-        if now - max(self.odo.last_zupt_t, self._zupt_hold_until) > self.cfg.imu_zupt_interval_s:
-            self._zupt_hold_until = now + self.cfg.imu_zupt_hold_s
+        if self._zupt_hold_start is not None:
+            # hold until the offset has actually been measured (the chassis may still
+            # rock after a turn), at most imu_zupt_max_hold_s
+            done = self.odo.last_bias_update_t >= self._zupt_hold_start
+            if not done and now < self._zupt_hold_start + self.cfg.imu_zupt_max_hold_s:
+                return True
+            if not done:
+                self.zupt_hold_failures += 1
+            self._zupt_hold_start = None
+            self._zupt_hold_until = now
+            return False
+        stale = now - max(self.odo.last_bias_update_t, self._zupt_hold_until) > self.cfg.imu_zupt_interval_s
+        if stale and math.degrees(math.sqrt(self.odo.bias_var)) > self.cfg.imu_zupt_min_sigma_dps:
+            self._zupt_hold_start = now
             self.zupt_holds += 1
             return True
         return False
@@ -916,7 +930,8 @@ class RobotRuntime:
                 "track_scale": o.track_scale, "wheel_radius_scale": o.radius_scale,
                 "slip": None if step is None else step.slip,
                 "slip_counts": dict(o.log), "fusion": dict(self.slam.fusion_log),
-                "command_model_fallback_frames": self.odo_fallbacks, "zupt_holds": self.zupt_holds}
+                "command_model_fallback_frames": self.odo_fallbacks, "zupt_holds": self.zupt_holds,
+                "zupt_hold_failures": self.zupt_hold_failures}
 
     def snapshot(self):
         loc = self.slam.snapshot()

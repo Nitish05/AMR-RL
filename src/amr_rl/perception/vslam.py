@@ -342,6 +342,10 @@ class VSLAMConfig:
     # the odometry (WheelInertialOdometry.add_scale_sample).
     odo_ba: bool = True                 # odometry factors in the local bundle adjustment
     odo_bias_max_rate: float = 0.25     # rad/s: bias feedback only while turning slower than this
+    # ...and only when at least this share of inliers are established landmarks (vision
+    # is an absolute heading reference only through them; against fresh ones it is
+    # visual odometry and the feedback would learn the map's own drift). 0 = any frame.
+    odo_bias_min_established: float = 0.5
     odo_scale_calibration: bool = True
     # Wheel rolling radius from vision: distance on straight stretches of this length.
     odo_radius_calibration: bool = True
@@ -1196,7 +1200,8 @@ class PlanarVSLAM:
         self._cov = 0.5 * (self._cov + self._cov.T)
         # Vision's heading correction while hardly turning (no lever-arm effect) is a
         # measurement of the gyro's rate error: fed back to the bias estimate.
-        if odo.trust_rotation and w_th == 1.0 and abs(odo.w) < cfg.odo_bias_max_rate and odo.dt > 0:
+        if (odo.trust_rotation and w_th == 1.0 and abs(odo.w) < cfg.odo_bias_max_rate and odo.dt > 0
+                and share >= cfg.odo_bias_min_established):
             self.bias_feedback.append(-float(delta[2]) / odo.dt)
         self.last_fusion = {"nis_th": float(nis_th), "nis_xy": float(nis_xy), "w_th": float(w_th), "est": share,
                             "w_xy": float(w_xy), "vision_th": float(z[2]), "slip": bool(odo.slip)}

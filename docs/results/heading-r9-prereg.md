@@ -56,8 +56,34 @@ Development results (arena seed 0 / arena_textured seed 2, 420 s builds with the
 | R9 | 0.75° / 5.23° | 1.15 / 3.03 cm |
 | Camera only | 7.76° / 14.17° | 7.61 / 9.75 cm |
 
-The R9b commit is named in [heading-r9.md](heading-r9.md) before its runs start.
+The R9b commit is named in [heading-r9.md](heading-r9.md) before its runs start: **6e89e60**.
 
 **Fresh starts:** the same checks as above with seeds 5–9 and `--heading-offset 36`, so no start pose of validation 1 repeats. Worlds, durations and criteria are unchanged.
 
 **Correction to L1-slip** (a mechanism fix, not a criterion change): `wheel_friction` had no physical effect, because Genesis takes the higher friction of the two surfaces. It is replaced by `floor_friction=0.45`, and the slip patches are now low-friction plates.
+
+## Addendum B: candidate R9c (written before any R9c validation run)
+
+**What happened to R9b.** Validation 2 of R9b (6e89e60) was not finished. The owner judged its forced pause every 30 s not smooth enough. Results so far:
+- L1 passed every criterion on the 23 pairs that ran: max heading error median 1.17° against 13.15°, worst 2.1° against 53.8°; 0 against 87 drift events; paired ATE median −4.1 cm, worst pair +2.9 cm; lost fraction 0.3 % against 16.9 %.
+- The slip, F, U and L3 checks of the IMU arm never ran.
+
+**Owner decision (2026-10-05):** calibrate when the robot stops; if it has not stopped for 2 minutes, stop and recalibrate if necessary.
+
+**R9c** is R9b with this stop policy:
+- the offset is re-measured at every natural stop, after the wheels have stopped for 0.6 s plus 3 quiet frames;
+- it is learned from vision on frames where at least 50 % of inliers are established landmarks;
+- a recalibration stop (until the offset is measured, at most 2 s) happens only when there has been no update for 120 s **and** the offset uncertainty exceeds 0.02 dps;
+- the straight-driving update stays off, because the simulated chassis skids.
+
+**Development** used seeds 0–4 only, already spent in validation 1. Over 6 worlds the mean of the maximum heading error and mean ATE were:
+
+| Stop policy | Max heading error | ATE |
+|---|---|---|
+| Stops every 30 s | 1.33° | 2.20 cm |
+| Stops every 60 s | 1.51° | 3.16 cm |
+| Every 120 s plus vision-learned offset (R9c's settings, without the "if necessary" condition) | 1.76° | 3.05 cm |
+| Stops every 120 s | 2.51° | 3.37 cm |
+| Camera only | 16.3° | 8.4 cm |
+
+**Validation 3.** R9c is frozen as the commit that adds this addendum. All checks and criteria are those pre-registered above, on seeds 5–9 with `--heading-offset 36`. The IMU arm is run fresh. The camera-only arm is reused from validation 2: it is byte-identical across these commits (0 of 400 frames differ against the pre-round-9 code, arena seed 1, 40 s). Missing baseline runs are added.
