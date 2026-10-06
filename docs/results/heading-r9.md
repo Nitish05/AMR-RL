@@ -75,4 +75,92 @@ Against the pre-registered criteria:
 
 **Cause.** Position error in the IMU arm grows from the start (home_a s0: 2.4 cm at 30 s against 0.7 cm camera-only). On straight frames the true distance is 0.89–0.91 of the encoder distance, and the fusion trusted the encoders at ±3.6 %; it down-weighted them on only 14 % of driving frames. This led to candidate R9b (addendum A of the pre-registration): an online wheel-radius scale.
 
-PENDING
+## Validation 2: R9b (6e89e60), stopped at the owner's request
+
+R9b had a forced 0.8 s pause every 30 s. It was stopped after 47 L1 runs, because the owner judged the pause not smooth enough. On the 23 pairs that ran, **every L1 criterion passed**:
+
+| Metric (23 pairs) | Camera only | R9b |
+|---|---|---|
+| Max heading error, median (worst) | 13.15° (53.8°) | 1.17° (2.1°) |
+| Paired median Δ (95 % CI) | — | −11.6° (−18.5, −9.5) |
+| Drift events per 100 turns | 6.5 | 0 |
+| ATE median, paired Δ (CI), worst pair | — | −4.1 cm (−7.3, −1.8), worst +2.9 cm |
+| Lost fraction, mean | 16.9 % | 0.3 % |
+
+Its slip, fault, unit and navigation checks were never run.
+
+## How the stop policy was chosen (development only, spent seeds 0–4)
+
+**The constraint.** An exploring robot never stands still, so the gyro offset random-walks; on development data the gyro alone drifted 6° in 390 s.
+
+**Rejected options:**
+- **Updating the offset while driving straight** fails in this simulator: the chassis skids 0.1–0.3 dps with equal wheel travel, and one accepted window cost 14°.
+- **Single-frame updates at stops** took the chassis's settling creep (about 0.06 dps) as the offset.
+
+**Comparison.** Mean over six worlds of the per-run maximum heading error and of the ATE:
+
+| Stop policy | Max heading error | ATE |
+|---|---|---|
+| Every 30 s | 1.33° | 2.20 cm |
+| Every 60 s | 1.51° | 3.16 cm |
+| Every 120 s with the offset learned from vision on established landmarks | 1.76° | 3.05 cm |
+| Every 120 s | 2.51° | 3.37 cm |
+| Camera only | 16.3° | 8.4 cm |
+
+**Owner decision:** calibrate whenever the robot stops; if it has not stopped for 2 minutes, stop and recalibrate if necessary. This became R9c (pre-registration addendum B).
+
+## Validation 3: R9c (890646c), fresh starts (seeds 5–9, heading offset 36°)
+
+The IMU arm was run fresh. The camera-only arm is reused from validation 2; it is byte-identical. Evidence is in `work/evidence/r9c-val-20261005/`, with the reports `report-*.json`.
+
+**L1, 25 pairs:**
+
+| Metric | Camera only | R9c | Paired median Δ (95 % CI) |
+|---|---|---|---|
+| Max heading error per run, median (worst) | 13.15° (53.8°) | **1.70° (5.0°)** | −10.8° (−19.1, −7.5) |
+| Drift events (≥ 8° in 10 s) per 100 in-place turns | 6.5 (87 / 1329) | **0 (0 / 1591)** | — |
+| ATE median (worst) | 5.6 cm (54.3 cm) | 2.7 cm (7.9 cm) | −2.7 cm (−7.3, −0.8) |
+| Keyframe map RMSE median | 6.5 cm | 2.6 cm | −3.3 cm (−7.0, −0.9) |
+| Lost fraction, mean | 16.2 % | **0.4 %** | — |
+
+- P1, P2, P3 and P5 pass.
+- **P4 fails:** two pairs are more than 3 cm worse.
+  - heldout_c s8: 1.6 → 7.3 cm.
+  - home_a s5: 0.5 → 3.9 cm.
+  - In both, the IMU arm's heading drifted slowly over long non-stop driving (up to 4.5°), and its position error grew with it (to 14 cm at the end of heldout_c s8).
+  - In both, the camera-only arm was lost for long stretches: 998 frames between 106 s and 210 s, and 455 frames between 38 s and 90 s. Its ATE covers only the frames it tracked.
+  - This explanation is a post-hoc observation, not a change of the criterion.
+
+**Wheel slip.** Pass: R9c holds P1 and P5 against the paired baseline, and the slip detector fires.
+
+| Condition | Camera only, max heading median (worst) | R9c, max heading median (worst) | Lost fraction (camera / R9c) |
+|---|---|---|---|
+| Whole floor `floor_friction=0.45`, 6 pairs | 11.9° (38.2°) | 2.1° (3.5°) | 21.7 % / 0 % |
+| Two slip patches (friction 0.05), 3 pairs | 4.5° (37.0°) | 1.9° (2.6°) | 35.3 % / 0.7 % |
+
+On the patch runs the slip flag is on for 20–64 % of frames, mostly from the yaw check; translation then relies on vision.
+
+**Navigation (L3), 4 worlds.** Pass.
+- Supported goals reached: 15/15 against 9/14.
+- Reach goals reached: 5 against 2.
+- Contact episodes: 0 in both arms.
+- Mapping ATE: 0.5–3.7 cm against 0.7–4.4 cm.
+
+**Sensor faults (F), arena s5.** Camera only on this start: 10.6° and 5.4 cm.
+- **IMU off:** 6.8° and 11.6 cm, no losses. This passes (no crash, P5 holds, heading not worse). The fallback rotates on encoders, so the map error is higher.
+- **Encoders off:** 64.1° and 58.7 cm. **This failed.** Without encoder counts, stillness was never detected, so the offset was never measured.
+  - Fixed in d237559: a zero command plus a quiet gyro now counts as stillness; behaviour with encoders is unchanged.
+  - Re-check from a pinned worktree (`work/evidence/r9d-faults-20261005/`): encoders off gives **2.2° and 0.9 cm**. IMU off is unchanged, as expected (6.8°, 11.6 cm). F now passes.
+
+**Other IMU units (U), arena s5,** camera only 10.6°:
+
+| Unit | 2 | 3 | 4 | 5 |
+|---|---|---|---|---|
+| Max heading error, calibrated | 2.5° | 2.3° | 2.3° | 3.0° |
+| Max heading error, datasheet prior only | 2.6° | 2.1° | **10.1°** | 1.6° |
+| Map ATE, calibrated | 2.4 cm | 1.6 cm | 7.3 cm | 4.9 cm |
+
+The unit calibrations agree with simulator truth to 0.01–0.03 %. Unit 4 has a −1 % sensitivity error, which is why it needs the calibration.
+
+**Verdict against the pre-registered rule.** Adoption needs L1, L1-slip, L3 and F to pass. L1 (P4) failed, and F failed before the dropout fix (it passes since d237559). R9c is therefore not adopted by the rule. The owner's decision is recorded below.
+

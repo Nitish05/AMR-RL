@@ -26,6 +26,8 @@ Legend: **done** = implemented and exercised with evidence in this delivery ·
 | Editable spec → URDF + GLB meshes (35×30 cm chassis, 2 driven wheels + caster, camera, screen) | done | [ROBOT.md](ROBOT.md), `tests/test_robot_assets.py` |
 | Physical wheel actuation (velocity targets on wheel joints); pose setters only for resets | done | `control/genesis_backend.py`; `tests/test_sim_genesis.py::test_wheels_drive_body_forward_and_turn` |
 | Rigidly mounted onboard RGB camera moving with the body | done | `test_camera_is_attached_to_the_moving_body` |
+| IMU and wheel encoders modelled on purchasable parts (ST LSM6DSOX on Adafruit 4438; Pololu 4754 encoders, 4480 counts per wheel revolution) | done | datasheet error models in `sim/sensors.py`; raw samples only (`on_proprio`); [ROBOT.md](ROBOT.md); `tests/test_odometry.py`, `tests/test_privilege_boundary.py` |
+| Gyro calibration by the robot (camera-closed turns) | done | `scripts/calibrate_imu.py`: 5 units within 0.01–0.03 % of simulator truth ([results/heading-r9.md](results/heading-r9.md)) |
 | Screen: rendered face on the screen link; `signal` is a real screen pattern | done | `test_screen_is_visible_to_inspection_not_to_onboard_camera`, `test_fixture_signal_rule_raises_panel_visible_onboard` |
 | Supervisor: Stop wins, generations, heartbeat, stale frames, localization-loss revocation, bounded recovery, no auto-resume | done | `tests/test_supervisor.py`; nav fault tests |
 | No hardware connection on import or in simulation | done | there is no hardware adapter at all |
@@ -36,6 +38,8 @@ Legend: **done** = implemented and exercised with evidence in this delivery ·
 | Capability | Status | Evidence / note |
 |---|---|---|
 | RGB-only monocular planar VSLAM (ORB, keyframes, windowed BA, relocalization, save/load) | done | [VSLAM.md](VSLAM.md), [NAVIGATION_RESULTS.md](NAVIGATION_RESULTS.md) |
+| Wheel-inertial odometry fused with vision (gyro offset at stops, slip detection, odometry factors in BA) | partial (switch, off by default) | `odometry="imu_encoders"`. Validation 3 on fresh starts (25 pairs): max heading error median 13.2° → 1.7°, 0 drift events (camera only: 87), losses 16 % → 0.4 %, ATE median 5.6 → 2.7 cm. Slip, navigation and sensor-fault checks pass. Pre-registered P4 fails: 2 of 25 pairs worse by more than 3 cm. Not the default until the owner decides ([results/heading-r9.md](results/heading-r9.md)) |
+| Round-9 plan WS0–WS5 (live replay, wheel model, command-model prior, epipolar turn estimator, depth floor mask, view-aware turns) | partial | implemented, tested and switchable. Only WS0 and the WS3 calibration use are evaluated live; WS1, WS2, WS4 and WS5 are not yet evaluated in closed loop |
 | Explicit metric scale handling | done (with an assumption) | scale from the calibrated camera height over a flat floor; sensitivity is documented and unit-tested (a +10 % height error gives +10 % ranges). Not valid on ramps/uneven floors |
 | Unknown ≠ free; footprint-certified planning; rejected goals carry reasons | done | `tests/test_mapping_navigation.py`; held-out results |
 | Tracking loss revokes motion; bounded recovery; explicit re-enable | done | nav lens-blackout fault tests |

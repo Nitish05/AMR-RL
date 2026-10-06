@@ -219,3 +219,26 @@ Other open items:
 * The full Genesis environment is `bash scripts/amr.sh setup` (+ `fetch-depth-model`);
   one Genesis process uses ~3–5 GB RAM, so run simulations one at a time.
 * Commits: author Nitish <rrnitish@gmail.com>.
+
+
+## Update: round 9 (2026-10-05): IMU + wheel encoders
+
+- **Owner decisions:**
+  - Add an IMU and wheel encoders that can be bought (ST LSM6DSOX on Adafruit 4438; Pololu 4754 encoders) and keep wheel slip in mind.
+  - Implement the round-9 plan.
+  - Calibrate the gyro offset at natural stops; if the robot has not stopped for 2 minutes, stop and recalibrate if necessary.
+- **Where things are:**
+  - Results: `docs/results/heading-r9.md`.
+  - Pre-registration with addenda A and B: `docs/results/heading-r9-prereg.md`.
+  - Parts: `docs/ROBOT.md`.
+- **Switch:** `RuntimeConfig.odometry = "imu_encoders"` (default `"command"`, which is byte-identical to before). It needs `configs/calibration/imu.yaml`, produced by `scripts/calibrate_imu.py`.
+- **Validation 3 (R9c, 890646c, plus the encoder-dropout fix d237559):**
+  - Large gains in heading, drift, losses, slip, navigation and sensor faults.
+  - P4 fails on 2 of 25 pairs: the camera-only arm was lost for long stretches there, and the IMU arm's heading drifts slowly in long non-stop runs. Adoption as the default awaits the owner.
+- **Plan items not yet evaluated in closed loop:**
+  - WS1 `VSLAMConfig.wheel_model`;
+  - WS2 `odometry="command_model"`;
+  - WS4 `VSLAMConfig.depth_floor_mask` plus `RuntimeConfig.depth_device`;
+  - WS5 `RuntimeConfig.view_aware_turns`.
+  - WS0 live replay (`scripts/dev/live_replay.py`, `--record-frames`) is ready for them.
+- **Machine limits:** about 2–2.5 GB per simulation; run at most 8 in parallel on this 48 GB machine. More triggered memory-pressure kills.
