@@ -242,3 +242,12 @@ def test_no_recalibration_stop_when_the_offset_is_still_known():
     assert not rt._imu_booting(200.0) and rt.zupt_holds == 0
     rt.odo.bias_var = math.radians(0.03) ** 2
     assert rt._imu_booting(200.0) and rt.zupt_holds == 1
+
+
+def test_offset_is_measured_from_a_zero_command_when_the_encoders_are_out():
+    odo = WheelInertialOdometry(SPEC)
+    counts, bias = [0.0, 0.0], 0.0175
+    for k in range(15):
+        b = _samples(k * 0.1, 10, 0.0, bias, 0, 0, counts)
+        odo.step(ProprioBatch(b.imu, []), (k + 1) * 0.1, command=(0.0, 0.0))
+    assert odo.bias_calibrated and abs(odo.bias - bias) < 3e-4

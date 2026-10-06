@@ -275,7 +275,11 @@ class WheelInertialOdometry:
         # samples are one independent measurement of the offset.
         moved = abs(dl_tot) > 0 or abs(dr_tot) > 0
         stationary = False
-        if have_enc and not moved:
+        # Without encoder samples (dropout) stillness is judged from the robot's own
+        # zero command plus a quiet gyro (validation 3: with encoders off the offset was
+        # never measured and the heading drifted 64 deg in 420 s).
+        idle_cmd = command is not None and abs(float(command[0])) < 1e-9 and abs(float(command[1])) < 1e-9
+        if (have_enc and not moved) or (not have_enc and have_imu and idle_cmd):
             if self._still_since is None:
                 self._still_since = t0
             g_arr = np.array([s_.gyro for s_ in imu]) if imu else np.zeros((0, 3))
