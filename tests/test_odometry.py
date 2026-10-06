@@ -74,7 +74,7 @@ def test_missing_sensors_degrade_gracefully():
     odo.step(full, 0.1)
     enc_only = _samples(0.1, 10, 0.3, 0, -1.0, 1.0, counts)
     st = odo.step(ProprioBatch([], enc_only.encoders), 0.2)
-    assert st.rotation_source == "encoders" and st.cov[2, 2] > 1e-4
+    assert st.rotation_source == "encoders" and st.cov[2, 2] > 1e-4 and not st.trust_rotation
     imu_only = _samples(0.2, 10, 0.3, 0, 0, 0, counts)
     st = odo.step(ProprioBatch(imu_only.imu, []), 0.3, command=(0.1, 0.3))
     assert st.translation_source == "command" and st.rotation_source == "gyro"

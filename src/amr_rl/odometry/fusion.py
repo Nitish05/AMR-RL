@@ -435,6 +435,9 @@ class WheelInertialOdometry:
         return OdometryStep(dt, float(x), float(y), float(yaw), cov, float(v), float(yaw / dt), dist,
                             slip=slip, stationary=stationary, rotation_source=rot_src,
                             translation_source=trans_src,
+                            # encoder yaw (IMU missing) scrubs and slips: not trusted over
+                            # vision (validation 4: IMU off 15.3 deg with it trusted)
+                            trust_rotation=have_imu,
                             info={"bias": self.bias, "bias_sigma": math.sqrt(self.bias_var), "temp": self.temp,
                                   "tempco": self.tempco[0],
                                   "track_scale": self.track_scale, "gyro_scale": self.gyro_scale,
