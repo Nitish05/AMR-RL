@@ -69,6 +69,14 @@ Added on 2026-10-05 at the owner's request. Every sensor is a real part that can
 
 **Mounting.** The IMU sits on `base_link` at (−0.04, 0, 0.03), the chassis centre, with its z axis vertical.
 
+**Gyro offset over time** (`sim/sensors.py`):
+- a fixed offset per unit plus 0.1 dps per power-on (**assumed**);
+- rate random walk 1.5e-4 dps/√s (**analogue**: BMI160 and BMI055 Allan measurements);
+- **thermal warm-up**: the datasheet tempco (±0.010 dps/°C typ) times the electronics warming the IMU by 2–12 °C with τ 150–900 s (**assumed** ranges);
+- the chip's temperature sensor (256 LSB/°C) is part of each sample.
+
+The robot compensates the offset for temperature and recalibrates at stops.
+
 **Calibration.** The gyro sensitivity tolerance (±1 %) would cost up to 3.6° per full turn, so the gyro scale is calibrated once per unit. `scripts/calibrate_imu.py` has the robot:
 1. stand still to measure the offset;
 2. turn in place 5 times each way;

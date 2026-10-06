@@ -164,3 +164,69 @@ The unit calibrations agree with simulator truth to 0.01–0.03 %. Unit 4 has a 
 
 **Verdict against the pre-registered rule.** Adoption needs L1, L1-slip, L3 and F to pass. L1 (P4) failed, and F failed before the dropout fix (it passes since d237559). R9c is therefore not adopted by the rule. The owner's decision is recorded below.
 
+
+## Fixing the slow drift (owner: fix it before adoption)
+
+**Diagnosis** (evaluation-only reconstruction of the simulated offset, development seeds): between recalibrations the gyro offset was off by 0.009–0.018 dps. Three causes:
+1. **Vision offset learning was over-confident.** Correlated per-frame corrections were used as independent measurements, so the uncertainty shrank and the "if necessary" stop never fired. **Fix:** one measurement per 15–90 s window between frames where vision is an absolute reference, with its own uncertainty.
+2. **The drift model was unrealistic.** A cited research step replaced the assumed random walk (0.002 dps/√s) with these terms:
+   - Allan analogues (BMI160 and BMI055: 1.5e-4 dps/√s);
+   - a per-unit offset plus 0.1 dps per power-on;
+   - **thermal warm-up**: datasheet tempco ±0.010 dps/°C times 2–12 °C with τ 150–900 s (assumed ranges);
+   - the chip's temperature sensor.
+
+   The warm-up is the dominant slow term. **Estimator:** offset(T) = b0 + k(T − T0), a two-state Kalman filter with a tempco prior of 2× typical (one unit was at 2.5× typical).
+3. **Stops measured only about 0.1 s of samples**, which leaves about 0.01 dps of noise (the true yaw rate during stops was exactly 0, so this is not creep). **Fix:** a recalibration stop lasts until 1 s of still samples is collected; the boot stand-still is 2 s.
+
+**Owner-approved addition:** also recalibrate when the chip temperature has changed by ≥ 1 °C since the last calibration (only if the offset is uncertain).
+
+**Development** (6 worlds, mean of the per-run maximum heading error and mean ATE):
+
+| Policy | Max heading error | ATE | Recalibration stops in 7 min |
+|---|---|---|---|
+| With the temperature trigger | 1.28° | 1.94 cm | 1–3 |
+| 2-minute rule only | 2.11° | 4.26 cm | — |
+
+Pre-registration addendum C was written before validation 4.
+
+## Validation 4: R9e (f0748fc), plus the IMU-off fix 811adbc, fresh starts
+
+The IMU arm was run fresh. The camera-only arm is byte-identical and reused.
+- **Display sleep:** 12 jobs failed when the Mac's display slept at night (the renderer found no screen). They were re-run with the display kept awake; the failed logs are kept as `*.failed-no-display.log`.
+- **Evidence:** `work/evidence/r9e-val-20261006/` and `work/evidence/r9f-recheck-20261006/`.
+
+**L1, 25 pairs, all criteria pass:**
+
+| Metric | Camera only | R9e | Paired median Δ (95 % CI) |
+|---|---|---|---|
+| Max heading error per run, median (worst) | 13.15° (53.8°) | **1.25° (11.6°)** | -11.3° (-19.2, -9.5) |
+| Drift events per 100 in-place turns | 6.55 (87 / 1329) | **0.06 (1 / 1594)** | — |
+| ATE median (worst) | 5.6 cm (54.3) | **2.0 cm (23.9)** | -4.2 cm (-6.7, -2.5); worst pair +2.5 cm |
+| Keyframe map RMSE median | 6.5 cm | 2.0 cm | -4.6 cm |
+| Lost fraction, median (max) | 0.082 (0.55) | **0.000 (0.03)** | — |
+
+**The one outlier** (arena_textured s7, 11.6° and 23.9 cm; its camera-only pair had 38.3° and 54.3 cm) is a **false loop closure** at t = 103.4 s, off by 0.21 m and 12°. Loop closure is a camera-side component from rounds 5–6. Next improvement: reject loop corrections whose heading change exceeds the gyro's own uncertainty (about 0.1° there).
+
+**Other checks:**
+- **Slip:** pass.
+  - Slippery floor: median 1.2° (worst 1.8°) against 11.9° (38.2°), no losses.
+  - Slip patches: 0.9° (1.1°) against 4.5° (37.0°), no losses.
+  - The slip flag is on for 1260–3045 frames in the patch runs.
+- **Navigation (L3):** pass. Supported goals reached 12/14 against 9/14, reach goals 6 against 2, 0 contacts. Mapping ATE 0.7–4.6 against 0.7–4.4 cm.
+- **Sensor faults (F):** pass after one fix.
+  - Encoders off: 1.1°.
+  - IMU off failed at first (15.3° against 10.6° camera-only): encoder-only rotation was still trusted over vision. Fixed in 811adbc; re-check **4.0°**, no losses.
+- **Other units (U, reported, not required):**
+  - Calibrated units 2–5: 0.7–2.1°.
+  - Uncalibrated (datasheet prior): 0.8–2.9°, except unit 4 (−1 % sensitivity) at 19.2°. **A unit must be calibrated** with `scripts/calibrate_imu.py`.
+
+## Decision
+
+Every required pre-registered check passes: L1, L1-slip, L3 and F. **`RuntimeConfig.odometry = "imu_encoders"` is the default from 2026-10-06.** `"command"` reproduces the camera-only robot exactly.
+
+**Not yet evaluated in closed loop** (switches off):
+- WS1 wheel model;
+- WS2 command-model odometry (used as the fallback when no samples arrive);
+- WS4 depth floor mask;
+- WS5 view-aware turns;
+- the loop-closure heading guard above.

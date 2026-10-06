@@ -242,3 +242,13 @@ Other open items:
   - WS5 `RuntimeConfig.view_aware_turns`.
   - WS0 live replay (`scripts/dev/live_replay.py`, `--record-frames`) is ready for them.
 - **Machine limits:** about 2–2.5 GB per simulation; run at most 8 in parallel on this 48 GB machine. More triggered memory-pressure kills.
+
+### Round 9 outcome (2026-10-06)
+
+- IMU + encoder odometry is the **default** (R9e f0748fc plus 811adbc). Validation 4 passed every required check. `docs/results/heading-r9.md` has the full story, including three failed or stopped validations.
+- **Recalibration policy** (owner decisions): the gyro offset is measured at natural stops; if needed, the robot stops after 2 minutes without a measurement or after a 1 °C chip temperature change.
+- **Each IMU unit needs `scripts/calibrate_imu.py` once.** Unit 4 uncalibrated reached 19° of heading error.
+- **Next:**
+  - a loop-closure heading guard using the gyro (one false closure: 12°);
+  - closed-loop evaluation of WS1, WS2, WS4 and WS5.
+- **Long runs: keep the Mac's display awake** (`caffeinate -dims`). When the display slept, Genesis' renderer found no screen and 12 jobs failed.

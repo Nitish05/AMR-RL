@@ -103,7 +103,9 @@ class RuntimeConfig:
     # assets/robot/amr_spec.yaml) through odometry/fusion.py, fused in the VSLAM; when
     # no samples arrive in a frame it falls back to the command model below;
     # "command_model" = the commands through the wheel response model (WS2 soft prior).
-    odometry: str = "command"
+    # Default since 2026-10-06 (validation 4 passed every required pre-registered check,
+    # docs/results/heading-r9.md); "command" reproduces the camera-only robot exactly.
+    odometry: str = "imu_encoders"
     odometry_cfg: OdometryConfig = field(default_factory=OdometryConfig)
     # With the IMU: stand still this long after start-up before autonomy moves the
     # wheels, so the gyro's zero-rate offset (+-1 dps typ, LSM6DSOX) is measured first

@@ -186,7 +186,7 @@ def trajectory_metrics(truth_rows):
 # ---------------------------------------------------------------- round 9 options
 def add_runtime_args(parser):
     """Options shared by build_map / navigation / learning (round 9)."""
-    parser.add_argument("--odometry", default="command", choices=["command", "imu_encoders", "command_model"],
+    parser.add_argument("--odometry", default="imu_encoders", choices=["command", "imu_encoders", "command_model"],
                         help="motion source for localisation (RuntimeConfig.odometry)")
     parser.add_argument("--runtime", nargs="*", default=[], help="RuntimeConfig overrides key=value (JSON values)")
     parser.add_argument("--odo", nargs="*", default=[], help="OdometryConfig overrides key=value (JSON values)")

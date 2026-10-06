@@ -112,3 +112,7 @@ The R9b commit is named in [heading-r9.md](heading-r9.md) before its runs start:
 **Development** (spent seeds 0–4, 6 worlds; mean of the maximum heading error and mean ATE): R9e 1.28° / 1.94 cm with 1–3 recalibration stops in 7 minutes; the 2-minute rule alone 2.11° / 4.26 cm.
 
 **Validation 4.** All checks and criteria are unchanged (seeds 5–9, `--heading-offset 36`). The IMU arm is run fresh. The camera-only arm is reused, after a byte-identity check (it does not use the IMU).
+
+## Outcome (2026-10-06)
+
+Validation 4 of R9e passed L1 (all of P1–P5), L1-slip, L3 and F; F needed the IMU-off fix 811adbc and a re-check. R9e plus 811adbc is adopted as the default. Details: [heading-r9.md](heading-r9.md#validation-4-r9e-f0748fc-plus-the-imu-off-fix-811adbc-fresh-starts).
