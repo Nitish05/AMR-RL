@@ -13,6 +13,10 @@ need closed-loop runs.
         --variant base odometry=command --variant odo odometry=imu_encoders \
         --variant odo_mask odometry=imu_encoders depth_floor_mask='"always"' --out replay.json
 
+Each variant starts from the recorded run's own settings (its ``--odometry``,
+``--vslam`` and ``--odo`` overrides, and its IMU unit and calibration, from
+``provenance/identity.json``); the variant's key=value pairs apply on top.
+
 Scoring uses the logged ground truth (evaluation only).
 """
 
@@ -52,6 +56,29 @@ def load_run(run_dir):
     return session, rows, prop
 
 
+def recorded_settings(run_dir):
+    """The settings a run was recorded with (its command-line arguments in provenance)."""
+    ident = Path(run_dir) / "provenance" / "identity.json"
+    args = json.loads(ident.read_text()).get("extra", {}).get("args", {}) if ident.exists() else {}
+    kv = lambda items: {k: json.loads(v) for k, v in (i.split("=", 1) for i in items or [])}  # noqa: E731
+    runtime, world = kv(args.get("runtime")), kv(args.get("world_set"))
+    unit = runtime.get("imu_unit_serial", (world.get("sensor_faults") or {}).get("imu_unit"))
+    return {"odometry": args.get("odometry", "command"), "vslam": kv(args.get("vslam")), "odo": kv(args.get("odo")),
+            "imu_calibration": runtime.get("imu_calibration", "configs/calibration/imu.yaml"), "imu_unit": unit}
+
+
+def load_calibration(path, unit, spec):
+    """The unit's calibration as the runtime loads it (None on a missing file or another unit)."""
+    if not path:
+        return None
+    path = Path(path) if Path(path).is_absolute() else PROJECT_ROOT / path
+    if not path.exists():
+        return None
+    cal = yaml.safe_load(path.read_text())
+    unit = spec.imu.get("unit_serial", -2) if unit is None else unit
+    return cal if int(cal.get("unit_serial", -1)) == int(unit) else None
+
+
 def batches(prop, times):
     """Raw samples between consecutive frame times (t_prev, t]."""
     if prop is None:
@@ -68,11 +95,12 @@ def batches(prop, times):
     return out
 
 
-def replay(session, rows, prop, settings, spec, model):
+def replay(session, rows, prop, settings, spec, model, recorded=None):
+    recorded = recorded or {}
     settings = dict(settings)
-    odometry = settings.pop("odometry", "command")
+    odometry = settings.pop("odometry", recorded.get("odometry", "command"))
     cfg = VSLAMConfig()
-    for k, v in settings.items():
+    for k, v in {**recorded.get("vslam", {}), **settings}.items():
         if not hasattr(cfg, k):
             raise SystemExit(f"unknown VSLAMConfig field {k}")
         setattr(cfg, k, v)
@@ -83,9 +111,14 @@ def replay(session, rows, prop, settings, spec, model):
         slam.floor_mask = MonoDepthObstacles(model, backend=LazyBackend(device="cpu"))
     odo = cmd_odo = None
     if odometry == "imu_encoders":
-        cal_path = PROJECT_ROOT / "configs" / "calibration" / "imu.yaml"
-        cal = yaml.safe_load(cal_path.read_text()) if cal_path.exists() else None
-        odo = WheelInertialOdometry(spec, calibration=cal)
+        from amr_rl.odometry.fusion import OdometryConfig
+
+        ocfg = OdometryConfig()
+        for k, v in recorded.get("odo", {}).items():
+            setattr(ocfg, k, v)
+        cal = load_calibration(recorded.get("imu_calibration", "configs/calibration/imu.yaml"),
+                               recorded.get("imu_unit"), spec)
+        odo = WheelInertialOdometry(spec, ocfg, calibration=cal)
     if odometry in ("imu_encoders", "command_model"):
         cmd_odo = CommandModelOdometry(spec)
     out = []
@@ -130,10 +163,11 @@ def main():
     results = {}
     for run in args.runs:
         session, rows, prop = load_run(run)
+        recorded = recorded_settings(run)
         for v in args.variant:
             name, kv = v[0], dict(item.split("=", 1) for item in v[1:])
             settings = {k: (val if k == "odometry" else json.loads(val)) for k, val in kv.items()}
-            traj = replay(session, rows, prop, settings, spec, model)
+            traj = replay(session, rows, prop, settings, spec, model, recorded)
             res = analyse(traj)
             results.setdefault(Path(run).name, {})[name] = res
             print(Path(run).name, name, json.dumps(res), flush=True)

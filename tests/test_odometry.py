@@ -706,3 +706,35 @@ def test_unknown_world_overrides_are_rejected():
     assert apply_world_overrides(wc, {"room": {"size": [5, 5]}})["room"]["size"] == [5, 5]
     with pytest.raises(ValueError, match="wheel_friction"):
         apply_world_overrides(wc, {"wheel_friction": 0.4})
+
+
+def test_live_replay_uses_the_recorded_settings_and_unit_calibration(tmp_path):
+    import json as _json
+
+    lr = _scoring_module_dev("live_replay")
+    run = tmp_path / "run"
+    (run / "provenance").mkdir(parents=True)
+    cal = tmp_path / "u2.yaml"
+    cal.write_text("unit_serial: 2\ngyro_scale: 1.003\ngyro_scale_sigma: 0.0002\n")
+    (run / "provenance" / "identity.json").write_text(_json.dumps({"extra": {"args": {
+        "odometry": "imu_encoders", "vslam": ['loop_odo_guard="heading"'], "odo": ["zaru=true"],
+        "runtime": [f'imu_calibration="{cal}"', "imu_unit_serial=2"], "world_set": ['sensor_faults={"imu_unit":2}']}}}))
+    rec = lr.recorded_settings(run)
+    assert rec["odometry"] == "imu_encoders" and rec["vslam"] == {"loop_odo_guard": "heading"}
+    assert rec["odo"] == {"zaru": True} and rec["imu_unit"] == 2
+    assert lr.load_calibration(rec["imu_calibration"], 2, SPEC)["gyro_scale"] == 1.003
+    assert lr.load_calibration(rec["imu_calibration"], 1, SPEC) is None  # another unit: datasheet prior
+    assert lr.recorded_settings(tmp_path / "none")["odometry"] == "command"
+
+
+def _scoring_module_dev(name):
+    import importlib.util
+    import sys
+    from pathlib import Path
+
+    path = Path(__file__).resolve().parents[1] / "scripts" / "dev" / f"{name}.py"
+    sys.path.insert(0, str(path.parents[1] / "eval"))
+    spec = importlib.util.spec_from_file_location(f"_dev_{name}", path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
