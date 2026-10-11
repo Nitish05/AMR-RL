@@ -170,7 +170,7 @@ def test_imu_and_encoder_samples_follow_the_true_motion(world):
     for i, side in enumerate(("left", "right")):
         counts = getattr(enc[-1], side) - getattr(rest.encoders[-1], side)
         assert counts * 2 * math.pi / cpr == pytest.approx(q1[i] - q0[i], abs=0.05)
-    assert getattr(enc[-1], "right") > getattr(rest.encoders[-1], "right")  # left turn: right wheel forward
+    assert enc[-1].right > rest.encoders[-1].right  # left turn: right wheel forward
     world.sensors.drain()
     _cmd(world, 0.25, 0.0, 0.3)  # speeding up from rest
     ax = [s.accel[0] for s in world.sensors.drain().imu]
