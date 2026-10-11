@@ -27,6 +27,7 @@ scripts/dev/<name>.py ...`; see each file's docstring for its arguments.
 | `nudge_reach_probe.py` | Nudge reach: does the planned creep reach the fixture? (evaluation probe) |
 | `obstacle_hits_probe.py` | Evaluation-only diagnostic: where does obstacle evidence come from, and how much of it lands on true free floor? Wraps the mapper to tag each obstacle hit by source (parallax 'bases' or triangulated 'landmarks') and scores the hit cells against the true obstacle mask (ground truth used for scoring only). |
 | `reloc_capture.py` | Capture onboard frames for the offline relocalisation probe (evaluation only). |
+| `reloc_live_probe.py` | Live relocalisation probe (evaluation only): start the robot on a saved map at sampled free positions, binned by the distance to the nearest map keyframe, and measure whether it relocalises and whether the accepted pose is right. |
 | `reloc_probe.py` | Offline relocalisation probe: replay captured onboard frames through a freshly loaded map (evaluation only; ground truth is used for scoring). |
 | `results_figures.py` | Render README result figures from evaluation evidence. |
 | `slam_bench.py` | Localisation benchmark for VSLAM variants: exploration runs scored against ground truth (evaluation only). Usage: |
