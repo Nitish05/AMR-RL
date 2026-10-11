@@ -3,8 +3,10 @@
 **A wheeled indoor robot whose later choices depend on what it has seen happen.**
 
 AMR-RL simulates "Pip", a compact differential-drive robot with one forward RGB
-camera and an expressive screen. Using only its own camera, Pip maps a room,
-navigates conservatively, and interacts with objects. It records what each
+camera, an IMU, wheel encoders and an expressive screen. The IMU and encoders are
+modelled on parts you can buy. With its own camera, plus the IMU and encoders for
+its own motion, Pip maps a room, navigates conservatively, and interacts with
+objects. It records what each
 action actually did, as seen in its own images, and uses that remembered
 experience to decide what to do next — including after a restart.
 
@@ -16,7 +18,7 @@ lockstep). Nothing has run on hardware.
   <img src="docs/media/onboard-frame.png" width="40%" alt="What Pip's own camera sees">
 </p>
 <p align="center"><em>Left: Pip (inspection camera, never used by the robot), showing its "signal" pattern on the screen.
-Right: the same moment from Pip's onboard camera — the only sensor it perceives its surroundings with (an optional IMU and wheel encoders measure its own motion).</em></p>
+Right: the same moment from Pip's onboard camera, the only sensor it perceives its surroundings with (its IMU and wheel encoders measure only its own motion).</em></p>
 
 > **What this is not.** It is not a claim of consciousness, emotion or
 > self-created desire. What counts as a good or bad consequence is
@@ -71,8 +73,9 @@ tables with every denominator are in
 ```
 Genesis World (physics + rendering) ── sim/world.py: rooms, fixtures + hidden response rules
       │ onboard RGB (camera_link, 320×240, 10 Hz)      ▲ wheel velocity targets
+      │ raw IMU + encoder samples (sim/sensors.py: datasheet error models)
       ▼                                                │
-perception/vslam.py ──pose──► mapping/occupancy.py ──► navigation/planner + navigator
+odometry/fusion.py (gyro + encoders) ──► perception/vslam.py ──pose──► mapping/occupancy.py ──► navigation
 perception/entities.py ──► learning/identity.py ──► learning/memory.py (SQLite + image receipts)
 perception/semantic.py (async; labels only, stale/revoked results rejected)
 behavior/chooser.py + activities.py ──► control/supervisor.py ──► control/genesis_backend.py
@@ -90,18 +93,29 @@ A generated URDF and GLB meshes, built from an editable spec
 | Footprint | 0.35 m × 0.30 m, 0.339 m tall; planning radius 0.262 m (+0.03 m margin) |
 | Drive | two driven wheels (r = 0.05 m, track 0.27 m) + passive ball caster; 5.08 kg |
 | Actuation | wheel-joint velocity control only; body pose setters used only for explicit resets |
-| Camera | pinhole 320×240, 60° vertical FOV, 0.155 m above the floor, pitched 12° down |
+| Camera | pinhole 320×240, 60° vertical FOV, 0.155 m above the floor, pitched 12° down (matches the Arducam B0394) |
+| IMU | ST LSM6DSOX (Adafruit 4438), 104 Hz. Modelled from its datasheet, including offset, thermal warm-up, noise and quantisation; gyro scale calibrated once per unit by the robot |
+| Wheel encoders | Pololu 4754 gearmotors, 4480 counts per wheel revolution, 1° backlash (assumed) |
 | Screen | rendered face on a mast behind the camera; the `signal` action is a real screen pattern that fixtures respond to |
 
 Details: [docs/ROBOT.md](docs/ROBOT.md).
 
-### Perception and mapping (camera only)
+### Perception and mapping
 
 * **Monocular visual SLAM on a planar pose:** ORB features, several motion
   hypotheses, guided matching, robust Gauss–Newton pose estimation, keyframes,
-  triangulated and floor landmarks, windowed bundle adjustment, relocalization
-  against a saved map. **Metric scale** comes from the calibrated camera height
-  over a flat floor. Nothing uses simulator poses, depth or labels.
+  triangulated and floor landmarks, windowed bundle adjustment, relocalisation
+  against a saved map, and loop closure. **Metric scale** comes from the calibrated
+  camera height over a flat floor. Nothing uses simulator poses, depth or labels.
+* **Wheel-inertial odometry, fused with vision (default since round 9):**
+  - the gyro gives rotation, with its offset re-measured whenever the robot stands
+    still, and at a short recalibration stop when needed;
+  - the encoders give distance, with slip detection;
+  - vision and odometry are weighted per axis by which one is more reliable there;
+  - loop closures and the "am I actually moving?" check are tested against the
+    odometry.
+
+  `odometry="command"` runs the original camera-only robot.
 * **Occupancy:** free and obstacle evidence from plane-induced parallax between
   keyframes, with a *detectability gate*: a pixel only gives evidence if a 3 cm
   obstacle there would move by ≥ 3.5 px. Textureless, far or never-seen space
