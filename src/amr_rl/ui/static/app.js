@@ -77,9 +77,26 @@
 
   function locStatusClass(status) {
     if (status === 'tracking') return 'ok';
-    if (status === 'initializing' || status === 'relocalizing') return 'warn';
+    if (status === 'initializing' || status === 'relocalizing' || status === 'predicted') return 'warn';
     if (status === 'lost') return 'bad';
     return 'unknown';
+  }
+
+  /** Rows for the round-9 odometry block (IMU + encoders); one row for the camera-only robot. */
+  function odometryRows(o) {
+    if (!o || typeof o !== 'object') return [];
+    if (o.source !== 'imu_encoders') return [['motion source', o.source || DASH]];
+    var rows = [
+      ['motion source', 'IMU + encoders'],
+      ['gyro offset', isNum(o.gyro_bias_dps) ? fmt(o.gyro_bias_dps, 3) + ' ± ' +
+        (isNum(o.gyro_bias_sigma_dps) ? fmt(o.gyro_bias_sigma_dps, 3) : DASH) + ' dps' : DASH],
+      ['calibration', o.calibration || DASH],
+      ['recalibration', o.zupt_hold_active === true ? 'standing still now' :
+        (isNum(o.zupt_holds) ? o.zupt_holds + ' stops' : DASH)],
+      ['wheel slip', o.slip === true ? 'yes' : (o.slip === false ? 'no' : DASH)],
+    ];
+    if (isNum(o.temp_c)) rows.push(['IMU temperature', fmt(o.temp_c, 1) + ' °C']);
+    return rows;
   }
 
   /** Connection health from seconds since the last good /api/state. */
@@ -260,7 +277,7 @@
     POLL_MS: POLL_MS, HEARTBEAT_MS: HEARTBEAT_MS, MANUAL_MS: MANUAL_MS,
     isNum: isNum, isGen: isGen, clamp: clamp, fmt: fmt, fmtSigned: fmtSigned, fmtPct: fmtPct,
     fmtPose: fmtPose, fmtXY: fmtXY, fmtAge: fmtAge, escapeHtml: escapeHtml,
-    locStatusClass: locStatusClass, connectionLevel: connectionLevel,
+    locStatusClass: locStatusClass, connectionLevel: connectionLevel, odometryRows: odometryRows,
     attitudeClass: attitudeClass, imgUrl: imgUrl,
     validMapMeta: validMapMeta, clickToMap: clickToMap, mapToPixel: mapToPixel,
     stopCmd: stopCmd, heartbeatCmd: heartbeatCmd, disableCmd: disableCmd,
@@ -486,7 +503,7 @@
       ['landmarks', isNum(loc.landmarks) ? String(loc.landmarks) : DASH],
       ['keyframes', isNum(loc.keyframes) ? String(loc.keyframes) : DASH],
       ['map version', loc.map_version || DASH],
-    ]);
+    ].concat(odometryRows(loc.odometry)));
 
     // navigation line under map
     var nav = s.navigation || {};

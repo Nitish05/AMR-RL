@@ -296,6 +296,10 @@ def expression_from(state: dict | None) -> ExpressionState:
     elif not loc and name is None:
         cap = "No state"
         basis["caption"] = ["localization", "activity.name"]
+    elif isinstance(loc.get("odometry"), dict) and loc["odometry"].get("zupt_hold_active") is True:
+        # standing still on purpose to re-measure the gyro offset (round 9): not a freeze
+        cap = "Calibrating gyro"
+        basis["caption"] = ["localization.odometry.zupt_hold_active"]
     else:
         if face == "signalling":
             cap = f"Signalling {label}" if label else "Signalling"

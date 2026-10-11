@@ -106,6 +106,7 @@ test('status classes', () => {
   assert.strictEqual(U.locStatusClass('relocalizing'), 'warn');
   assert.strictEqual(U.locStatusClass('initializing'), 'warn');
   assert.strictEqual(U.locStatusClass('lost'), 'bad');
+  assert.strictEqual(U.locStatusClass('predicted'), 'warn');
   assert.strictEqual(U.locStatusClass(null), 'unknown');
   assert.strictEqual(U.connectionLevel(0.3), 'ok');
   assert.strictEqual(U.connectionLevel(1.5), 'warn');
@@ -257,6 +258,19 @@ test('distributionRows sorts and always includes observed', () => {
   assert.strictEqual(U.distributionRows({ x: 1.7, y: 'bad' }, null)[0].p, 1);
   assert.strictEqual(U.topOutcome({ a: 0.2, b: 0.8 }).outcome, 'b');
   assert.strictEqual(U.topOutcome(null), null);
+});
+
+test('odometry rows (round 9)', () => {
+  assert.deepStrictEqual(plain(U.odometryRows(null)), []);
+  assert.deepStrictEqual(plain(U.odometryRows({ source: 'command' })), [['motion source', 'command']]);
+  const rows = U.odometryRows({ source: 'imu_encoders', gyro_bias_dps: 1.0712, gyro_bias_sigma_dps: 0.0021,
+    calibration: 'loaded (imu.yaml)', zupt_hold_active: true, zupt_holds: 2, slip: false, temp_c: 31.24 });
+  const m = Object.fromEntries(rows.map((r) => [r[0], r[1]]));
+  assert.strictEqual(m['motion source'], 'IMU + encoders');
+  assert.ok(m['gyro offset'].startsWith('1.071') && m['gyro offset'].endsWith('dps'));
+  assert.strictEqual(m['recalibration'], 'standing still now');
+  assert.strictEqual(m['wheel slip'], 'no');
+  assert.ok(m['IMU temperature'].startsWith('31.2'));
 });
 
 console.log(`test_ui_static.js: ${passed} passed`);

@@ -249,6 +249,14 @@ def test_gaze_centred_without_target_or_pose():
 # --------------------------------------------------------------- captions & robustness
 
 
+def test_recalibration_stop_is_captioned_not_a_freeze():
+    s = with_activity("explore", target=None)
+    s["localization"]["odometry"] = {"source": "imu_encoders", "zupt_hold_active": True}
+    assert expression_from(s).caption == "Calibrating gyro"
+    s["localization"]["odometry"]["zupt_hold_active"] = False
+    assert expression_from(s).caption == "Exploring"
+
+
 def test_captions():
     assert expression_from(with_activity("explore", target=None)).caption == "Exploring"
     assert expression_from(with_activity("avoid", target="ent-b")).caption == \
