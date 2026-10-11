@@ -47,8 +47,11 @@ def out_dir(argv):
 
 
 def done(job):
+    """The job's --out holds result.json or summary.json (learning runs: one level down)."""
     out = out_dir(job["argv"])
-    return out is not None and any((out / name).exists() for name in ("result.json", "summary.json"))
+    if out is None:
+        return False
+    return any((out / name).exists() or any(out.glob(f"*/{name}")) for name in ("result.json", "summary.json"))
 
 
 def main():
