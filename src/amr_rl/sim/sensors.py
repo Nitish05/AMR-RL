@@ -93,6 +93,11 @@ class ImuErrorModel:
         x = self.g_M @ omega + offset + self.rng.normal(0.0, self.g_noise, 3)
         return np.clip(np.round(x / self.g_lsb) * self.g_lsb, -self.g_range, self.g_range - self.g_lsb)
 
+    def true_gyro_offset_z(self):
+        """EVALUATION ONLY: the gyro z offset in the output (rad/s) right now, to score
+        the robot's estimate (scripts/eval; never given to the runtime)."""
+        return float((self.g_bias + self.tempco * self.temperature_rise())[2])
+
     def temperature(self):
         """The chip's temperature sensor reading (degC), or None if not modelled."""
         tc = self.temp_cfg
