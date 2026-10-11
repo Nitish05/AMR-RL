@@ -178,3 +178,16 @@ The full results are in [heading-r9.md](heading-r9.md#validation-5-r9g-aa143e3-o
 - **Every other required criterion passes,** and so do slip, navigation and the mid-run faults.
 - **The loop-closure guard** rejected 4 false episodes (7–32°, arena_textured); 0 false closures were applied in 63 IMU builds.
 - **The blocked-robot check** shortened blind contacts (back-off 0.8–1.1 s after contact). It also turned every wheel-spin event into a loss with a correct pose, about 26 s each.
+
+**Where the remaining heading error comes from** (diagnosed on the validation-5 runs, scored against the simulated offset; nothing was changed):
+- The robot measures the gyro offset at boot. Until the first recalibration stop it does not know how the offset moves with temperature: the tempco prior has mean 0.
+- **Slow warm-up:** in seeds 10, 12 and 14 the chip warmed by less than 1 °C in the first 2 minutes. The first stop came at 115–122 s (in seed 14, at 0.98 °C, by the 2-minute rule).
+  - Meanwhile unit 1's offset moved by up to 0.031 °/s; its tempco is −0.025 °/s per °C, 2.5× the datasheet's typical value.
+  - The filter's own σ was 0.023 °/s at that stop, so it was honest about this.
+- **Heading error before the first stop is 72 % of the run's maximum** (median over the 25 runs). In heldout_c s14 it was 1.84° of 1.92°.
+- After the first stop the tempco is known, and the offset error stays at 0.002–0.005 °/s.
+- **Faster warm-up:** with a stop at 42–48 s (seeds 11 and 13), the error before the first stop is only 0.26–0.66°. Those runs' maxima come later, from other sources.
+
+**Options for the owner** (each would need development on spent seeds and its own pre-registration; not done):
+- trigger the first temperature stop at 0.5 °C, until the tempco has been measured. This costs about one more 2-s stop early in a run;
+- or stop when the heading uncertainty that the offset uncertainty has added since the last stop exceeds a budget (for example 0.5°), instead of fixed 2 minutes and 1 °C.
