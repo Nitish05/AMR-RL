@@ -16,7 +16,7 @@ from amr_rl.sim import evaluator
 from amr_rl.sim.world import SimWorld, load_world_config
 
 world_name = sys.argv[1] if len(sys.argv) > 1 else "home_a"
-out = sys.argv[2] if len(sys.argv) > 2 else "/tmp/claude-0/scr/vslam_ol"
+out = sys.argv[2] if len(sys.argv) > 2 else "work/dev/vslam_openloop"
 import os; os.makedirs(out, exist_ok=True)
 w = SimWorld(load_world_config(world_name), inspection=False)
 model = CameraModel.from_spec(w.spec)

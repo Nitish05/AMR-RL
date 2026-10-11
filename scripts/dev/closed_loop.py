@@ -11,7 +11,7 @@ from amr_rl.sim.harness import Session
 
 p = argparse.ArgumentParser()
 p.add_argument("--world", default="home_a"); p.add_argument("--seconds", type=float, default=120)
-p.add_argument("--out", default="/tmp/claude-0/scr/cl"); p.add_argument("--policy", default="learned")
+p.add_argument("--out", default="work/dev/closed_loop"); p.add_argument("--policy", default="learned")
 p.add_argument("--memory", default=None); p.add_argument("--map", default=None)
 p.add_argument("--save-map", default=None); p.add_argument("--explore-weight", type=float, default=None)
 a = p.parse_args()

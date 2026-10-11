@@ -11,7 +11,7 @@ from amr_rl.runtime.robot import RuntimeConfig
 from amr_rl.sim.harness import Session
 
 target_name, action = sys.argv[1], sys.argv[2]
-out = f"/tmp/claude-0/scr/probe_{target_name}_{action}"
+out = f"work/dev/engage_probe_{target_name}_{action}"
 import shutil; shutil.rmtree(out, ignore_errors=True)
 cfg = RuntimeConfig(supervisor=SupervisorConfig(require_heartbeat=False), initial_survey=False)
 cfg.chooser.explore_weight = 0.0
