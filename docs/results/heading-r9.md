@@ -21,7 +21,7 @@
 
 **Wheel-inertial odometry** (`odometry/fusion.py`):
 - rotation from the gyro z axis;
-- the zero-rate offset is measured whenever the robot stands still, including a 1 s stand-still at boot;
+- the zero-rate offset is measured whenever the robot stands still, including a stand-still at boot (1 s at first, 2 s since R9e);
 - the gyro scale is calibrated once and refined from vision on full turns;
 - distance from the encoders times a wheel-radius scale learned from vision;
 - slip flags.
@@ -34,7 +34,7 @@
 - dead reckoning on odometry when vision has no fix;
 - a signed motion-consistency check.
 
-The camera-only default is byte-identical to before: 400 of 400 frames match (arena seed 1, 40 s).
+The camera-only mode (`odometry="command"`, the default until 2026-10-06) is byte-identical to before: 400 of 400 frames match (arena seed 1, 40 s).
 
 ## Development findings
 
@@ -109,7 +109,7 @@ Its slip, fault, unit and navigation checks were never run.
 
 **Owner decision:** calibrate whenever the robot stops; if it has not stopped for 2 minutes, stop and recalibrate if necessary. This became R9c (pre-registration addendum B).
 
-## Validation 3: R9c (890646c), fresh starts (seeds 5–9, heading offset 36°)
+## Validation 3: R9c (890646c), the starts of validation 2 (seeds 5–9, heading offset 36°)
 
 The IMU arm was run fresh. The camera-only arm is reused from validation 2; it is byte-identical. Evidence is in `work/evidence/r9c-val-20261005/`, with the reports `report-*.json`.
 
@@ -169,6 +169,7 @@ The unit calibrations agree with simulator truth to 0.01–0.03 %. Unit 4 has a 
 
 **Diagnosis** (evaluation-only reconstruction of the simulated offset, development seeds): between recalibrations the gyro offset was off by 0.009–0.018 dps. Three causes:
 1. **Vision offset learning was over-confident.** Correlated per-frame corrections were used as independent measurements, so the uncertainty shrank and the "if necessary" stop never fired. **Fix:** one measurement per 15–90 s window between frames where vision is an absolute reference, with its own uncertainty.
+   - **Correction (2026-10-11):** the windows never completed. A defect restarted each window whenever the temperature-compensated offset changed, which is every frame. R9e's development numbers and validation 4 therefore had no vision offset feedback; the stops and the temperature trigger did the work. The defect is fixed in 6ddf562, and the feedback is off (`odo_bias_feedback`) until it is evaluated.
 2. **The drift model was unrealistic.** A cited research step replaced the assumed random walk (0.002 dps/√s) with these terms:
    - Allan analogues (BMI160 and BMI055: 1.5e-4 dps/√s);
    - a per-unit offset plus 0.1 dps per power-on;
@@ -189,9 +190,10 @@ The unit calibrations agree with simulator truth to 0.01–0.03 %. Unit 4 has a 
 
 Pre-registration addendum C was written before validation 4.
 
-## Validation 4: R9e (f0748fc), plus the IMU-off fix 811adbc, fresh starts
+## Validation 4: R9e (f0748fc), plus the IMU-off fix 811adbc, on the starts of validations 2–3
 
 The IMU arm was run fresh. The camera-only arm is byte-identical and reused.
+- **Starts:** seeds 5–9 with heading offset 36°, the starts of validations 2 and 3, so no start was untouched. The two worst P4 pairs below (heldout_c s8, home_a s5) are the pairs inspected after validation 3 (pre-registration addendum D).
 - **Display sleep:** 12 jobs failed when the Mac's display slept at night (the renderer found no screen). They were re-run with the display kept awake; the failed logs are kept as `*.failed-no-display.log`.
 - **Evidence:** `work/evidence/r9e-val-20261006/` and `work/evidence/r9f-recheck-20261006/`.
 
@@ -205,24 +207,35 @@ The IMU arm was run fresh. The camera-only arm is byte-identical and reused.
 | Keyframe map RMSE median | 6.5 cm | 2.0 cm | -4.6 cm |
 | Lost fraction, median (max) | 0.082 (0.55) | **0.000 (0.03)** | — |
 
-**The one outlier** (arena_textured s7, 11.6° and 23.9 cm; its camera-only pair had 38.3° and 54.3 cm) is a **false loop closure** at t = 103.4 s, off by 0.21 m and 12°. Loop closure is a camera-side component from rounds 5–6. Next improvement: reject loop corrections whose heading change exceeds the gyro's own uncertainty (about 0.1° there).
+**The one outlier** (arena_textured s7, 11.6° and 23.9 cm; its camera-only pair had 38.3° and 54.3 cm) is a **false loop closure** at t = 103.4 s, off by 0.21 m and 12°. It is the only false one of 144 closures in the IMU arm's 36 builds; the camera-only arm had 2 false of 110 in its 33 builds (validation 2). Loop closure is a camera-side component from rounds 5–6. Next improvement: reject loop corrections whose heading change exceeds the gyro's own uncertainty (about 0.1° there).
 
 **Other checks:**
 - **Slip:** pass.
   - Slippery floor: median 1.2° (worst 1.8°) against 11.9° (38.2°), no losses.
   - Slip patches: 0.9° (1.1°) against 4.5° (37.0°), no losses.
   - The slip flag is on for 1260–3045 frames in the patch runs.
-- **Navigation (L3):** pass. Supported goals reached 12/14 against 9/14, reach goals 6 against 2, 0 contacts. Mapping ATE 0.7–4.6 against 0.7–4.4 cm.
+- **Navigation (L3):** pass. Supported goals reached 12/14 against 9/14, reach goals 6 against 2, 0 contacts. Mapping ATE 0.7–4.6 against 0.7–4.4 cm. These are 4 runs, one per world; `--seeds 5` starts at seed 0's pose.
 - **Sensor faults (F):** pass after one fix.
   - Encoders off: 1.1°.
   - IMU off failed at first (15.3° against 10.6° camera-only): encoder-only rotation was still trusted over vision. Fixed in 811adbc; re-check **4.0°**, no losses.
 - **Other units (U, reported, not required):**
   - Calibrated units 2–5: 0.7–2.1°.
-  - Uncalibrated (datasheet prior): 0.8–2.9°, except unit 4 (−1 % sensitivity) at 19.2°. **A unit must be calibrated** with `scripts/calibrate_imu.py`.
+  - Uncalibrated (datasheet prior): 0.8–2.9°, except unit 4 (−1 % sensitivity) at 19.2°, which fails the reported U rule (camera only 10.6°). Its in-run scale learning did not correct it (estimate 0.9994 against a true 0.990). **A unit must be calibrated** with `scripts/calibrate_imu.py`.
+- **Learning (L5, reported, not required):** not run.
 
 ## Decision
 
 Every required pre-registered check passes: L1, L1-slip, L3 and F. **`RuntimeConfig.odometry = "imu_encoders"` is the default from 2026-10-06.** `"command"` reproduces the camera-only robot exactly.
+
+**Scope of this evidence** (pre-registration addendum D):
+- starts reused from validations 2–3;
+- IMU unit 1 only in L1, slip and L3;
+- runs of at most 7 minutes;
+- whole-run sensor faults on one start;
+- no vision offset feedback (inactive by a defect);
+- L5 not run.
+
+A re-validation on untouched starts follows the 2026-10-11 fixes.
 
 **Not yet evaluated in closed loop** (switches off):
 - WS1 wheel model;

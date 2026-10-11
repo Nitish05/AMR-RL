@@ -116,3 +116,19 @@ The R9b commit is named in [heading-r9.md](heading-r9.md) before its runs start:
 ## Outcome (2026-10-06)
 
 Validation 4 of R9e passed L1 (all of P1–P5), L1-slip, L3 and F; F needed the IMU-off fix 811adbc and a re-check. R9e plus 811adbc is adopted as the default. Details: [heading-r9.md](heading-r9.md#validation-4-r9e-f0748fc-plus-the-imu-off-fix-811adbc-fresh-starts).
+
+## Addendum D: records and deviations found after adoption (written 2026-10-11)
+
+A review of the round-9 records against the evidence found these deviations from the pre-registration above. None changes a run that has already happened; each is recorded so that the results can be read correctly.
+
+1. **"Fresh starts" were reused.** Addendum A defined seeds 5–9 with `--heading-offset 36` as fresh starts for validation 2. Validations 3 and 4 ran on the same starts, so they are fresh only relative to validation 1. The two worst P4 pairs of validation 4 (heldout_c s8, +2.50 cm; home_a s5, +2.27 cm; limit 3 cm) are the two pairs whose P4 failure was inspected after validation 3. The R9e changes were developed on seeds 0–4, but those two pairs are not independent of that inspection. No start in seeds 0–9 is untouched any more.
+2. **Slip patch friction.** The patch runs of validations 2–4 used friction **0.05**, not the pre-registered 0.08. The patches were at (0.0, −0.1) m, 0.8 × 0.8 m and (0.0, 0.6) m, 1.2 × 0.6 m.
+3. **L3 start.** L3 ran with `navigation.py --seeds 5`. That script turns the start heading by seed × 72°, so seed 5 starts at seed 0's pose; only the goal sample differs. L3 in validations 3 and 4 is 4 runs on the standard navigation start.
+4. **L5 was not run.** The learning check (reported, not required) was not run in any validation, and [heading-r9.md](heading-r9.md) did not say so.
+5. **U failed for unit 4.** With the datasheet prior only, unit 4 reached 19.2° against 10.6° camera-only on the same start. That fails the reported (not required) U rule. Calibrated, unit 4 passes.
+6. **R9e's vision offset windows were inactive.** A defect restarted the window whenever the temperature-compensated offset changed, which is every frame. No window completed, so validation 4 tested R9e without vision offset feedback. The stops and the temperature trigger did the work. The defect is fixed in 6ddf562 and the feedback is off (`VSLAMConfig.odo_bias_feedback`) until it is evaluated.
+7. **Strata were not computed.** The per-stratum metrics and the false/genuine loss split promised by the round-9 plan were not computed for any validation.
+8. **Fault scope.** F tested each sensor off for a whole run, on one start (arena s5). Dropouts in the middle of a run, single-wheel faults and the command-model fallback were never exercised. A later review found that a sensor returning after a dropout re-integrated the gap; this is fixed in 6ddf562.
+9. **Run length and units.** No validation run was longer than 7 minutes, so the thermal warm-up (τ up to 900 s) was only partly exercised. L1, slip and L3 used IMU unit 1 only.
+
+Every later change to the default is validated afresh on untouched starts, under its own pre-registration (addendum E).

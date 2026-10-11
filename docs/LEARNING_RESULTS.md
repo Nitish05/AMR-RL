@@ -49,12 +49,17 @@ Evidence: `work/evidence/learning-20260930-154854`; control run
   in 7/10. history_b s3 first completed grump. In s4 the learned option was
   roller/nudge, and the robot signalled the roller first.
 
-**Reversal: adapted in 6/10** (early swap: s0, s1, s2; late swap: s1, s2, s3).
+**Reversal: adapted in 7/10** (early swap: s0, s1, s2; late swap: s0, s1, s2, s3).
+Re-scored on 2026-10-11 from the retained evidence. The round-6 report said 6/10:
+its scorer took the "old" rewarding options from perceived outcomes, and a
+misperceived `moved` on stone (valence 0.6, 126 s) before the swap hid s0 late's
+stone/signal yellows from 451 s on (91 s after the swap). The world's own panel
+events show stone gave no yellow before the swap.
 - s4 never adapts. It starts near the roller, satisfies its engineered need by
   nudging the roller (whose rolling is physics, not a rule), and never tries the
   fixtures whose rules swap. Its training phases are therefore identical across
   experiments (deterministic simulator).
-- s3 early and s0 late did not find the new option before the run ended.
+- s3 early did not find the new option before the run ended (swap at 33 s, 3 outcomes before it).
 - Round 3 had 6/6, but on 3 seeds.
 
 **Settling (inert world): not shown.** Outcomes in the first vs second half:

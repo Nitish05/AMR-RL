@@ -64,7 +64,7 @@ Project rules are in `AGENTS.md` (read it first). Results with denominators are 
    evaluated; none adopted. Next: an "explained share" floor and heading drift in
    in-place turns (`docs/results/relocalisation.md`).
 4. **Learning suite re-run** (`docs/LEARNING_RESULTS.md`, round 6): 5/5 starts
-   relocalised; restart 10/10; reversal 6/10; inert does not settle; 0 unintended
+   relocalised; restart 10/10; reversal 7/10 (re-scored 2026-10-11); inert does not settle; 0 unintended
    contacts.
 5. **Perception swap:**
    - VLM pilot: Qwen3-VL-2B held out 0.935, but red misses 4 %, so not in the
