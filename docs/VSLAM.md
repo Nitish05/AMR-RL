@@ -1,18 +1,24 @@
 # Onboard visual SLAM, mapping and navigation
 
-Everything in this document consumes only the robot-mounted RGB image, the
-camera calibration (intrinsics + mounting) and the robot's own commanded body
-motion. No depth, segmentation, simulator pose, room geometry or external camera
-enters the pipeline (`tests/test_privilege_boundary.py`).
+Everything in this document consumes only:
+- the robot-mounted RGB image and the camera calibration (intrinsics and mounting);
+- since round 9 (the default from 2026-10-06), the raw samples of the robot's IMU
+  and wheel encoders (parts modelled on purchasable hardware, [ROBOT.md](ROBOT.md));
+- the robot's own commanded body motion.
+
+No depth, segmentation, simulator pose, room geometry or external camera enters
+the pipeline (`tests/test_privilege_boundary.py`). `RuntimeConfig.odometry =
+"command"` runs the original camera-only robot, which uses only the image and the
+commands.
 
 ## 1. Pose estimation and relocalization (`perception/vslam.py`)
 
 * **Features:** ORB (900 per 320×240 frame) on CLAHE-normalised grayscale.
 * **State:** planar pose (x, y, θ) of `base_link` in the map frame. The map frame
   origin is the robot's pose when the map was started.
-* **Tracking:** three prediction hypotheses (constant velocity, static, and the
-  robot's own last commanded (v, ω) — proprioceptive knowledge of its action, not
-  a sensor). For each: guided descriptor matching of projected map landmarks
+* **Tracking:** three prediction hypotheses: constant velocity, static, and
+  motion. The motion hypothesis is the measured odometry step with the IMU, or the
+  robot's own last commanded (v, ω) on the camera-only robot. For each: guided descriptor matching of projected map landmarks
   (radius 22 px, then 50 px), robust Gauss–Newton on the planar pose with an
   analytic Jacobian and Huber weights, established landmarks weighted higher
   than new ones, then a tight re-match (8 px) and re-optimisation. The
@@ -26,8 +32,10 @@ enters the pipeline (`tests/test_privilege_boundary.py`).
 * **Windowed bundle adjustment:** the newest 6 keyframes (2 held fixed) and
   their shared landmarks are refined with sparse robust least squares after each
   keyframe; the result is rejected if the cost does not fall or a pose jumps.
-* **Brief visual loss:** up to 1.5 s (and position σ ≤ 8 cm) the pose is
-  dead-reckoned from the robot's own commands and reported as `predicted`.
+* **Brief visual loss:** the pose is dead-reckoned and reported as `predicted`.
+  With the IMU this lasts up to 4 s, on the measured odometry with its propagated
+  uncertainty. On the camera-only robot it lasts up to 1.5 s (and position
+  σ ≤ 8 cm), on the robot's own commands.
   Ordinary navigation holds still on predicted poses; only the bounded nudge
   primitive may continue. Beyond those bounds the status is `lost`.
 * **Relocalization** (round 4, `reloc_method="planar2pt"`; results in
@@ -94,7 +102,33 @@ Validation (`tests/test_perception_units.py::test_scale_prior_error_scales_groun
 a +10 % height error scales IPM ranges by +10 %; the evaluation reports the
 similarity-alignment scale of every run (see NAVIGATION_RESULTS.md). A physical
 robot would need the height/pitch measured (±5 mm / ±0.5°) or a calibration
-target; wheel odometry fusion is a proposed extension (ledger), not used here.
+target. With the IMU the wheel encoders give a second distance source, but their
+scale is learned from vision (an online wheel-radius scale), so the camera height
+remains the metric reference.
+
+### Wheel-inertial odometry fusion (round 9; [results/heading-r9.md](results/heading-r9.md))
+
+* **Odometry** (`odometry/fusion.py`, engineered):
+  - rotation from the gyro z axis, with a temperature-compensated offset;
+  - the offset is measured at every stand-still (and at recalibration stops when
+    needed: 2 minutes or a 1 °C change, only if uncertain);
+  - distance from the encoders times a wheel-radius scale learned from vision;
+  - slip flags: gyro against encoder yaw, accelerometer against wheel
+    acceleration, wheels against the command.
+* **Fusion** (`_fuse`): an information-weighted update of the planar pose, with
+  robust per-axis weights. On heading, vision is down-weighted when it disagrees
+  (near surfaces it over-rotates); on translation, the odometry is (wheel slip).
+  Vision's heading information counts only through established landmarks.
+* **Local bundle adjustment** has odometry relative-pose factors between
+  consecutive keyframes.
+* **No visual fix:** dead reckoning on odometry (`predicted`) for up to 4 s,
+  bounded by its own uncertainty.
+* **Consistency checks:**
+  - vision against measured rotation (signed);
+  - vision against the robot's commanded forward travel ("blocked": a stalled or
+    spinning robot starts the contact back-off; 2026-10-11);
+  - loop closures against the odometry chain's heading (`loop_odo_guard`,
+    [results/r9-followup.md](results/r9-followup.md)).
 
 ### Failure handling (added after the first evaluation round)
 

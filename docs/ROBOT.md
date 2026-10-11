@@ -63,7 +63,7 @@ Added on 2026-10-05 at the owner's request. Every sensor is a real part that can
 
 | Sensor | Part (where to buy, approx. price) | Modelled |
 |---|---|---|
-| IMU | ST LSM6DSOX 6-axis, Adafruit breakout 4438 (STEMMA QT/Qwiic, I2C/SPI; Adafruit, DigiKey, Mouser, The Pi Hut), about $12 | Datasheet DS12814 Rev 3, all "typ": ±250 dps range, 8.75 mdps/LSB, noise 3.8 mdps/√Hz, ODR 104 Hz with a 33 Hz filter, zero-rate offset ±1 dps, sensitivity ±1 %; accelerometer ±4 g, 75 µg/√Hz, offset ±20 mg. **Assumed** (not specified): cross-axis 1 %, bias random walk 0.002 dps/√s. Each unit's sensitivity and cross-axis errors are fixed by `imu.unit_serial`; offset and noise change per run |
+| IMU | ST LSM6DSOX 6-axis, Adafruit breakout 4438 (STEMMA QT/Qwiic, I2C/SPI; Adafruit, DigiKey, Mouser, The Pi Hut), about $12 | Datasheet DS12814 Rev 3, all "typ": ±250 dps range, 8.75 mdps/LSB, noise 3.8 mdps/√Hz, ODR 104 Hz with a 33 Hz filter, zero-rate offset ±1 dps, sensitivity ±1 %; accelerometer ±4 g, 75 µg/√Hz, offset ±20 mg. **Assumed** (not specified): cross-axis 1 %. Offset drift over time: see below. Each unit's sensitivity and cross-axis errors are fixed by `imu.unit_serial`; offset and noise change per run |
 | Wheel encoders | Pololu 4754: 70:1 metal gearmotor 37D×70L mm, 12 V, with a 64 CPR Hall-effect quadrature encoder, about $61 each | 4480 counts per wheel revolution (64 × 70, exact): 1.40 mrad and 0.070 mm of travel per count. Gearbox backlash 1° (**assumed**; Pololu gives no figure). 100 Hz sampling |
 | Camera | Arducam B0394 (Sony IMX219 with an 88° diagonal, low-distortion M12 lens) matches the simulated 75° × 60° field of view | The vendor's FOV and focal length disagree, so calibrate with a checkerboard before relying on the intrinsics |
 
@@ -84,9 +84,13 @@ The robot compensates the offset for temperature and recalibrates at stops.
 4. write `configs/calibration/imu.yaml`.
 
 For unit 1 the calibration gives 1.00249 ± 0.0002. The same turns scored against simulator truth (evaluation only) give 1.00248. At runtime the robot also:
-- stands still for 1 s at boot to measure the zero-rate offset;
+- stands still for 2 s after its first control tick to measure the zero-rate offset;
 - updates the offset whenever it stands still;
 - refines the scale from full in-place turns that vision closes on the same view.
+
+**Caster contact (fixed 2026-10-11).** Genesis gives a contact the larger of the two surfaces' frictions. Until 2026-10-11 the floor kept the default 1.0, so the sliding ball caster (friction 0.02) dragged at 1.0. The wheels then rolled about 11 % short of their radius, and the chassis yawed 1–6 dps with equal wheel speeds. The floor now carries the caster's friction and every other body its own ([results/r9-followup.md](results/r9-followup.md#5-simulator-the-caster-dragged-at-the-floors-friction-5cd6db9)); `physics.legacy_floor` reproduces the old model.
+
+**Caveat (wheel inertia, assumed).** The wheel joints carry Genesis's default armature of 0.1 kg·m², about 40 kg of equivalent mass per wheel. That limits acceleration to about 0.5 m/s², much as a motor controller's ramp would. The real reflected rotor inertia is not published.
 
 **Caveat (motor model).** The simulated drive still has a flat ±1.5 N·m torque limit. The Pololu 4754 stalls at 2.65 N·m at 12 V; on a linear speed–torque curve it gives about 0.63 N·m at 12 rad/s, and it is rated for 0.98 N·m continuous. The motor's speed–torque line is not modelled yet.
 

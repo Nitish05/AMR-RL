@@ -634,3 +634,19 @@ def test_time_windowed_and_periodic_sensor_faults():
     assert s._off("encoders", 91.5) and s._off("left_encoder", 5.5) and not s._off("right_encoder", 5.5)
     s.faults = {"imu_off": True}
     assert s._off("imu", 0.0) and not s._off("encoders", 0.0)
+
+
+def test_interfaces_doc_lists_every_odometry_status_key():
+    from pathlib import Path
+    from types import SimpleNamespace
+
+    from amr_rl.runtime.robot import RobotRuntime, RuntimeConfig
+
+    rt = RobotRuntime.__new__(RobotRuntime)
+    rt.cfg, rt.spec, rt.odo, rt.last_odometry = RuntimeConfig(), SPEC, WheelInertialOdometry(SPEC), None
+    rt.slam = SimpleNamespace(fusion_log={})
+    rt.imu_calibration_status, rt.odo_fallbacks, rt.zupt_holds, rt.zupt_hold_failures = "loaded", 0, 0, 0
+    rt._zupt_hold_start = None
+    doc = (Path(__file__).resolve().parents[1] / "docs" / "INTERFACES.md").read_text()
+    missing = [k for k in rt.odometry_status() if f'"{k}"' not in doc]
+    assert not missing, f"document these odometry status keys in docs/INTERFACES.md: {missing}"

@@ -1,23 +1,32 @@
-"""RGB-only planar visual SLAM for a ground robot with one forward camera.
+"""Planar visual SLAM for a ground robot with one forward camera, fused with
+wheel-inertial odometry when it is given (round 9, the default robot).
 
 Pipeline (see docs/VSLAM.md for assumptions and validation):
 
 1. ORB features on CLAHE-normalised grayscale.
-2. Tracking: constant-velocity prediction, guided descriptor matching of map
+2. Tracking: prediction hypotheses (constant velocity, static, and the measured
+   odometry step or the robot's own command), guided descriptor matching of map
    landmarks projected into the image, robust (Huber) Gauss-Newton on the planar
    pose (x, y, theta) minimising reprojection error.
-3. Mapping: keyframes on motion; new landmarks by two-view triangulation between
+3. Odometry fusion (``odometry`` steps from ``amr_rl.odometry.fusion``): an
+   information-weighted update with robust per-axis weights, dead reckoning
+   without a visual fix, and motion-consistency checks against the measured
+   rotation and the commanded travel.
+4. Mapping: keyframes on motion; new landmarks by two-view triangulation between
    keyframes with known poses, plus floor landmarks by inverse perspective
    mapping (IPM) of features below the horizon. Floor landmarks carry metric
    scale from the calibrated camera height; this is the only scale source.
-4. Relocalization: global descriptor matching + PnP-RANSAC, accepted only when
-   the solution is planar-consistent and repeated on consecutive frames.
+   Windowed bundle adjustment of the newest keyframes (with odometry factors).
+5. Relocalization: planar two-point RANSAC on floor matches, guided
+   verification, confirmation by the robot's own motion, then probation.
+6. Loop closure (with a place descriptor): retrieval, the same planar
+   verification against the candidate's landmarks, temporal confirmation, an
+   odometry-consistency check, and an SE(2) keyframe pose graph.
 
 Monocular scale ambiguity is resolved by the flat-floor + known-camera-height
-assumption, not by any simulator quantity. What this module does NOT do: loop
-closure/pose-graph optimisation, bundle adjustment, dynamic-object handling or
-obstacle mapping (see ``amr_rl.mapping``). A sparse landmark map is not an
-obstacle map.
+assumption, not by any simulator quantity. What this module does NOT do: global
+bundle adjustment, dynamic-object handling or obstacle mapping (see
+``amr_rl.mapping``). A sparse landmark map is not an obstacle map.
 """
 
 from __future__ import annotations
