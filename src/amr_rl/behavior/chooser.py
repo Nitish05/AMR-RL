@@ -52,6 +52,14 @@ class ChooserConfig:
     # min(4, holds) seconds, then tries one retreat again.
     avoid_max_failures: int = 3
     avoid_backoff: float = 20.0
+    # Frustration renewal (engineered, off; evaluated in the learning re-run): when idle
+    # wins for this long although the need is unsatisfied (>= frustration_need), every
+    # exhausted option tried at least this long ago gets one fresh probe. Round 6 seed 4
+    # idled from the swap to the end of the run: its tried options had no probes left,
+    # and no change was detected because its established effect (pushing the roller) is
+    # physics and did not change. 0 = off.
+    frustration_renewal_s: float = 0.0
+    frustration_need: float = 0.5
 
 
 class Motivation:
@@ -122,6 +130,8 @@ class ActivityChooser:
         self.fixed_order = None
         self._avoid_state = {}  # entity -> {"failures", "holds", "hold_until"} (this session)
         self._last_avoid = None
+        self._idle_need_since = None
+        self.renewals = []  # (t, options renewed) by frustration renewal
 
     def _note_avoid_result(self, now):
         """Read the outcome of the last Avoid once. A cancel (Stop, revocation) is not
@@ -288,6 +298,9 @@ class ActivityChooser:
             if len(self.switch_times) >= self.cfg.max_switches_per_minute:
                 return None
         choice = self._pick(rt, candidates)
+        if self._frustrated(rt, choice, now):
+            candidates = self.candidates = self.candidates_for(rt, now)
+            choice = self._pick(rt, candidates)
         if not must:
             same = (choice["activity"] == current.name or (choice["activity"] in ("engage", "revisit")
                     and current.name in ("engage", "revisit"))) and choice["entity_id"] == current.target_entity
@@ -296,6 +309,24 @@ class ActivityChooser:
             self.switch_times.append(now)
         self.chosen = {k: v for k, v in choice.items() if k not in ("xy", "frontier")}
         return self._instantiate(rt, choice, now)
+
+    def _frustrated(self, rt, choice, now):
+        """Frustration renewal (see ChooserConfig); True when probes were renewed."""
+        cfg = self.cfg
+        if cfg.frustration_renewal_s <= 0 or self.policy != "learned":
+            return False
+        if choice["activity"] != "idle" or rt.motivation.need < cfg.frustration_need:
+            self._idle_need_since = None
+            return False
+        if self._idle_need_since is None:
+            self._idle_need_since = now
+            return False
+        if now - self._idle_need_since < cfg.frustration_renewal_s:
+            return False
+        self._idle_need_since = None
+        n = rt.memory.renew_probes(now, cfg.frustration_renewal_s)
+        self.renewals.append((now, n))
+        return n > 0
 
     def snapshot(self):
         keep = ("activity", "entity_id", "action", "value", "expected_value", "information_value", "cost", "basis")

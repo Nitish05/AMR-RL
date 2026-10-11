@@ -335,6 +335,21 @@ class ExperienceMemory:
                     row = self._budget(entity_id, action)
             return dict(row)
 
+    def renew_probes(self, now, min_age):
+        """One fresh probe for every exhausted option whose last outcome (and renewal) is
+        at least ``min_age`` old (ActivityChooser frustration renewal). Returns how many."""
+        with self.lock, self.db:
+            rows = self.db.execute("SELECT entity_id, action, last_outcome, last_renewal FROM budgets "
+                                   "WHERE probes=0 AND last_outcome IS NOT NULL").fetchall()
+            n = 0
+            for r in rows:
+                last = max(r["last_outcome"], r["last_renewal"] if r["last_renewal"] is not None else r["last_outcome"])
+                if now - last >= min_age:
+                    self.db.execute("UPDATE budgets SET probes=1, last_renewal=? WHERE entity_id=? AND action=?",
+                                    (now, r["entity_id"], r["action"]))
+                    n += 1
+            return n
+
     def information_value(self, prediction, best_other):
         """Capped value of information: one-step lookahead plus an engineered
         uncertainty bonus. Only the uncertainty itself is learned (it shrinks with

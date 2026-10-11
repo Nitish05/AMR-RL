@@ -192,6 +192,7 @@ def add_runtime_args(parser):
                         help="motion source for localisation (RuntimeConfig.odometry)")
     parser.add_argument("--runtime", nargs="*", default=[], help="RuntimeConfig overrides key=value (JSON values)")
     parser.add_argument("--odo", nargs="*", default=[], help="OdometryConfig overrides key=value (JSON values)")
+    parser.add_argument("--chooser", nargs="*", default=[], help="ChooserConfig overrides key=value (JSON values)")
     parser.add_argument("--world-set", nargs="*", default=[],
                         help="EVALUATION: world config overrides key=value (JSON), e.g. floor_friction=0.06, "
                              "slip_patches=[...], sensor_faults={\"imu_off\":true}, physics={...}; unknown keys "
@@ -218,6 +219,10 @@ def apply_runtime_args(cfg, args):
         if not hasattr(cfg.odometry_cfg, key):
             raise SystemExit(f"unknown OdometryConfig field {key}")
         setattr(cfg.odometry_cfg, key, value)
+    for key, value in _kv(getattr(args, "chooser", [])).items():
+        if not hasattr(cfg.chooser, key):
+            raise SystemExit(f"unknown ChooserConfig field {key}")
+        setattr(cfg.chooser, key, value)
     if args.record_frames:
         cfg.audit_images = True
     return cfg

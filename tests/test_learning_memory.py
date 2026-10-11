@@ -246,3 +246,31 @@ def test_reliable_effect_still_changes_after_three_failures(tmp_path):
         observe(memory, "a", useful(), now=1.0 + k)
     changes = [observe(memory, "a", "none", now=10.0 + k)["change_hypothesis"] for k in range(3)]
     assert changes == [False, False, True]
+
+
+def test_frustration_renewal_reopens_exhausted_options(tmp_path):
+    """Round 6 seed 4 after the swap: every tried option had no probes left and idle won
+    for the rest of the run. With frustration renewal, idling while the need is
+    unsatisfied for long enough renews one probe on options tried that long ago."""
+    from types import SimpleNamespace
+
+    from amr_rl.behavior.chooser import ActivityChooser
+
+    memory = open_memory(tmp_path / "m.sqlite")
+    for k in range(3):  # 'b' tried three times before the swap: nothing (probes 3 -> 0)
+        observe(memory, "b", "none", now=10.0 + k)
+    assert memory.option_state("b", "signal", 20.0)["probes"] == 0
+    assert memory.renew_probes(30.0, min_age=60.0) == 0  # tried too recently
+    assert memory.renew_probes(80.0, min_age=60.0) == 1 and memory.option_state("b", "signal", 80.0)["probes"] == 1
+    assert memory.renew_probes(100.0, min_age=60.0) == 0  # at most once per min_age
+
+    ch = ActivityChooser(ChooserConfig(frustration_renewal_s=60.0))
+    rt = SimpleNamespace(motivation=SimpleNamespace(need=0.9), memory=memory)
+    idle = {"activity": "idle"}
+    assert not ch._frustrated(rt, idle, 200.0) and not ch._frustrated(rt, idle, 230.0)
+    for k in range(3):
+        observe(memory, "a", "none", now=150.0 + k)
+    assert ch._frustrated(rt, idle, 261.0) and ch.renewals[-1] == (261.0, 1)  # a reopened; b kept its probe
+    rt.motivation.need = 0.1  # satisfied: idling is fine
+    assert not ch._frustrated(rt, idle, 400.0) and not ch._frustrated(rt, idle, 500.0)
+    assert not ActivityChooser(ChooserConfig())._frustrated(rt, idle, 1000.0)  # off by default

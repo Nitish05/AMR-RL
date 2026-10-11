@@ -255,6 +255,7 @@ def run_phase(phase, *, map_dir, memory_path, run_dir, seed, world="arena", star
         "semantic": rt.semantic.stats if rt.semantic else None,
         "supervisor_log": rt.supervisor.log[-60:],
         "odometry": rt.odometry_status(), "recalibration_stops": rt.zupt_hold_log,
+        "probe_renewals": rt.chooser.renewals,
     })
     session.save_summary()
     session.close()
