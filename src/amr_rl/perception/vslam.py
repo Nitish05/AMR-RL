@@ -341,6 +341,12 @@ class VSLAMConfig:
     # measures the true angle (same landmarks at both ends); ratio samples go back to
     # the odometry (WheelInertialOdometry.add_scale_sample).
     odo_ba: bool = True                 # odometry factors in the local bundle adjustment
+    # Gyro offset from vision, one measurement per 15-90 s window (``_bias_window``). Off:
+    # until 2026-10-11 the window was restarted whenever the temperature-compensated
+    # offset changed, i.e. every frame, so no window ever completed (validation 4 ran
+    # without this feedback). Fixed (restarts only on a real re-measurement of the
+    # offset, a map correction or a tracking gap) but not yet evaluated.
+    odo_bias_feedback: bool = False
     odo_bias_max_rate: float = 0.25     # rad/s: window ends only while turning slower than this
     odo_bias_window_min: float = 15.0   # s
     odo_bias_window_max: float = 90.0   # s
@@ -830,7 +836,8 @@ class PlanarVSLAM:
             return out
         if self.status in (LOST, RELOCALIZING):
             self._turn, self._turn_count = None, 0
-            self._cov, self._scale_anchor, self._resync, self._odo_acc = None, None, 0, None
+            self._cov, self._resync, self._odo_acc = None, 0, None
+            self._reset_vision_refs()
             return self._relocalize(gray, pts, desc, timestamp, commanded=commanded, dt=dt, rgb=rgb)
         # TRACKING or PREDICTED: try to (re)acquire against the local map.
         self._update_turn_state(commanded, dt, timestamp)
@@ -1143,6 +1150,7 @@ class PlanarVSLAM:
             cov_v = np.linalg.inv(lam_v)
         except np.linalg.LinAlgError:
             self._cov = None
+            self._reset_vision_refs(keep_pose=True)
             return z
         created = self.lm.created[ids] if len(ids) else np.zeros(0)
         share = float(np.mean(created < t - cfg.odo_old_landmark_s)) if len(created) else 0.0
@@ -1157,6 +1165,7 @@ class PlanarVSLAM:
         self.fusion_log["frames"] += 1
         if self._cov is None:  # (re)start: the vision pose with its own uncertainty
             self._cov = cov_v
+            self._reset_vision_refs(keep_pose=True)
             self.last_fusion = {"init": True}
             return z
         xp = compose(self.pose, (odo.dx, odo.dy, odo.dth))
@@ -1180,6 +1189,7 @@ class PlanarVSLAM:
         if self._resync >= cfg.odo_resync_frames and recent_rot < cfg.odo_resync_max_rot:
             self._resync = 0
             self._cov = cov_v
+            self._reset_vision_refs(keep_pose=True)
             self.fusion_log["resyncs"] += 1
             self.last_fusion = {"resync": True, "nis_th": float(nis_th)}
             return z
@@ -1192,6 +1202,7 @@ class PlanarVSLAM:
             lam_p = np.linalg.inv(Pp)
         except np.linalg.LinAlgError:
             self._cov = cov_v
+            self._reset_vision_refs(keep_pose=True)
             return z
         Dp = np.diag([math.sqrt(w_xy), math.sqrt(w_xy), math.sqrt(w_prior_th)])
         lv, lp = Dv @ lam_v @ Dv, Dp @ lam_p @ Dp
@@ -1206,6 +1217,14 @@ class PlanarVSLAM:
                             "w_xy": float(w_xy), "vision_th": float(z[2]), "slip": bool(odo.slip)}
         return x
 
+    def _reset_vision_refs(self, keep_pose=False):
+        """Vision's pose reference jumped (loop closure, relocalisation, resync) or had a
+        gap (dead-reckoned frames): windows that compare vision's change with the
+        odometry's over several frames start again."""
+        if not keep_pose:
+            self._vision_pose = None
+        self._bias_win = self._scale_anchor = self._radius_acc = None
+
     def _bias_window(self, z, odo, share, w_th, t):
         """Gyro offset from vision, one honest measurement per window: between two
         frames where vision is an absolute heading reference (mostly established
@@ -1215,21 +1234,25 @@ class PlanarVSLAM:
         (Per-frame corrections are correlated; used one by one they made the offset
         look known when it was 0.01-0.02 dps off: validation 3.)"""
         cfg = self.cfg
-        if not odo.trust_rotation:
+        if not cfg.odo_bias_feedback or not odo.trust_rotation:
             self._bias_win = None
             return
-        good = (w_th == 1.0 and abs(odo.w) < cfg.odo_bias_max_rate and share >= cfg.odo_bias_min_established)
+        good = (w_th == 1.0 and abs(odo.w) < cfg.odo_bias_max_rate and share >= cfg.odo_bias_min_established
+                and self._probation == 0)
         win = self._bias_win
-        bias_now = odo.info.get("bias")
+        # The offset model's state changes only when the offset is re-measured (a stop, a
+        # previous window); its value also follows the chip temperature every frame, which
+        # is modelled and does not invalidate the window.
+        epoch = odo.info.get("offset_updates")
         if win is not None:
             win["gyro"] += odo.dth
             win["rot"] += abs(odo.dth)
-            if t - win["t0"] > cfg.odo_bias_window_max or bias_now != win["bias"]:
-                win = self._bias_win = None  # too long, or the offset was re-measured (stop)
+            if t - win["t0"] > cfg.odo_bias_window_max or epoch != win["epoch"]:
+                win = self._bias_win = None  # too long, or the offset was re-measured
         if not good:
             return
         if win is None:
-            self._bias_win = {"t0": t, "z0": float(z[2]), "gyro": 0.0, "rot": 0.0, "bias": bias_now,
+            self._bias_win = {"t0": t, "z0": float(z[2]), "gyro": 0.0, "rot": 0.0, "epoch": epoch,
                               "share": share}
             return
         T = t - win["t0"]
@@ -1239,7 +1262,8 @@ class PlanarVSLAM:
         sv = cfg.odo_vision_heading_floor / math.sqrt(max(min(share, win["share"]), cfg.odo_min_established))
         sigma = math.hypot(math.sqrt(2) * sv / T, odo.info.get("scale_sigma", 0.0005) * win["rot"] / T)
         self.bias_feedback.append((err, sigma))
-        self._bias_win = {"t0": t, "z0": float(z[2]), "gyro": 0.0, "rot": 0.0, "bias": bias_now, "share": share}
+        self.fusion_log["bias_windows"] = self.fusion_log.get("bias_windows", 0) + 1
+        self._bias_win = None  # the next window starts after the feedback is applied
 
     def _sigma_from_cov(self):
         if self._cov is None:
@@ -1258,6 +1282,7 @@ class PlanarVSLAM:
         self._cov = _propagate(self.pose, cov, odo)
         self.pose = compose(self.pose, (odo.dx, odo.dy, odo.dth))
         self._sigma_from_cov()
+        self._reset_vision_refs()
         self.fusion_log["predicted_odo"] += 1
         expired = (self.predicted_time > cfg.odo_max_prediction_s + 1e-9
                    or (self.position_sigma or 0.0) > cfg.max_prediction_sigma
@@ -2358,6 +2383,7 @@ class PlanarVSLAM:
         self.velocity[:2] = [c * self.velocity[0] - s_ * self.velocity[1], s_ * self.velocity[0] + c * self.velocity[1]]
         self._motion_log.clear()  # the jump is a correction, not motion
         self._dr = None
+        self._reset_vision_refs()
         self._kp_tree = self._kp_tree_pts = None
         self.loop_edges.append((cand.id, kf.id, z))
         entry.update({"outcome": "closed", "pose_after": [float(v) for v in self.pose]})

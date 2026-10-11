@@ -292,6 +292,7 @@ class RobotRuntime:
         self.odo_fallbacks = 0
         self._zupt_hold_until = -math.inf
         self._zupt_hold_start = None
+        self._boot_t0 = None  # first control tick: the boot hold is measured from it
         self._zupt_frames_at_hold = None
         self.zupt_holds = self.zupt_hold_failures = 0
         self._proprio = ProprioBatch([], [])
@@ -697,7 +698,9 @@ class RobotRuntime:
         briefly whenever the last one is older than imu_zupt_interval_s."""
         if self.odo is None:
             return False
-        if now < self.cfg.imu_boot_still_s:
+        if self._boot_t0 is None:
+            self._boot_t0 = now
+        if now - self._boot_t0 < self.cfg.imu_boot_still_s:
             if self._zupt_frames_at_hold is None:
                 self._zupt_frames_at_hold = self.odo.zupt_frames
             return True

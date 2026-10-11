@@ -201,6 +201,7 @@ def test_runtime_holds_the_wheels_for_imu_zero_velocity_updates():
     rt.odo = WheelInertialOdometry(SPEC)
     rt._zupt_hold_until, rt._zupt_hold_start, rt.zupt_holds, rt.zupt_hold_failures = -math.inf, None, 0, 0
     rt._zupt_frames_at_hold = None
+    rt._boot_t0 = 0.0  # first control tick at t = 0
     assert rt._imu_booting(0.5)  # boot: offset measurement first
     rt.cfg.imu_zupt_interval_s = 30.0
     assert rt._imu_booting(1.5)  # 2 s boot stand-still
@@ -240,6 +241,7 @@ def test_no_recalibration_stop_when_the_offset_is_still_known():
     rt.odo = WheelInertialOdometry(SPEC)
     rt._zupt_hold_until, rt._zupt_hold_start, rt.zupt_holds, rt.zupt_hold_failures = -math.inf, None, 0, 0
     rt._zupt_frames_at_hold = None
+    rt._boot_t0 = 0.0  # first control tick at t = 0
     rt.odo.last_bias_update_t = 1.0
     rt.odo.bias_var = math.radians(0.01) ** 2  # vision kept it known
     assert not rt._imu_booting(200.0) and rt.zupt_holds == 0
@@ -290,3 +292,141 @@ def test_temperature_compensation_tracks_the_warm_up_drift():
     assert abs(odo.tempco[0] - k) < math.radians(0.004)
     odo.temp = 33.0    # warmer still, no stop: the offset follows the temperature
     assert abs(odo.bias - (b0 + k * 11.0)) < math.radians(0.03)
+
+
+def _runtime_for_holds():
+    from amr_rl.runtime.robot import RobotRuntime, RuntimeConfig
+
+    rt = RobotRuntime.__new__(RobotRuntime)
+    rt.cfg = RuntimeConfig(odometry="imu_encoders")
+    rt.odo = WheelInertialOdometry(SPEC)
+    rt._zupt_hold_until, rt._zupt_hold_start, rt.zupt_holds, rt.zupt_hold_failures = -math.inf, None, 0, 0
+    rt._zupt_frames_at_hold, rt._boot_t0 = None, None
+    return rt
+
+
+def test_boot_hold_is_measured_from_the_first_tick_not_absolute_time():
+    """A runtime started at a large clock value (hardware monotonic time) still stands
+    still for imu_boot_still_s, even with periodic recalibration disabled."""
+    rt = _runtime_for_holds()
+    rt.cfg.imu_zupt_interval_s = 0.0
+    assert rt._imu_booting(5000.0) and rt._imu_booting(5001.5)
+    assert not rt._imu_booting(5002.1)
+
+
+def test_encoder_heading_without_the_imu_keeps_a_straight_drive_straight():
+    """IMU missing: positions within the frame follow the encoders' differential yaw
+    (a typo used the right wheel's travel alone, bending straight drives)."""
+    odo = WheelInertialOdometry(SPEC)
+    counts = [0.0, 0.0]
+    odo.step(_samples(0, 10, 0, 0, 0, 0, counts), 0.1)
+    for k in range(1, 4):
+        b = _samples(k * 0.1, 10, 0.0, 0.0, 6.0, 6.0, counts)
+        st = odo.step(ProprioBatch([], b.encoders), (k + 1) * 0.1)
+        assert st.rotation_source == "encoders" and abs(st.dth) < 1e-9
+        assert st.dx > 0.025 and abs(st.dy) < 1e-6
+    # an arc: the within-frame chord follows half the frame's encoder yaw
+    b = _samples(0.4, 10, 0.0, 0.0, 4.0, 8.0, counts)
+    st = odo.step(ProprioBatch([], b.encoders), 0.5)
+    assert st.dth > 0 and abs(math.atan2(st.dy, st.dx) - st.dth / 2) < 0.1 * st.dth
+
+
+def test_gyro_dropout_is_not_integrated_twice():
+    """IMU silent for 0.5 s during a turn (frames dead-reckoned on encoder yaw): the
+    first frame after it integrates its own 0.1 s only, not the whole gap again
+    (measured before the fix: ~0.15 rad extra here)."""
+    odo = WheelInertialOdometry(SPEC)
+    r, track = SPEC.drive["wheel_radius"], SPEC.drive["track"]
+    w = 0.3
+    wheel = w * track / 2 / r
+    counts = [0.0, 0.0]
+    odo.step(_samples(0, 10, 0, 0, 0, 0, counts), 0.1)
+    odo.step(_samples(0.1, 10, w, 0, -wheel, wheel, counts), 0.2)
+    for k in range(2, 7):
+        b = _samples(k * 0.1, 10, w, 0, -wheel, wheel, counts)
+        assert odo.step(ProprioBatch([], b.encoders), (k + 1) * 0.1).rotation_source == "encoders"
+    st = odo.step(_samples(0.7, 10, w, 0, -wheel, wheel, counts), 0.8)
+    assert st.rotation_source == "gyro" and abs(st.dth - w * 0.1) < 0.003
+    assert odo.log.get("imu_gaps") == 1
+
+
+def test_encoder_dropout_travel_is_not_counted_twice():
+    """Encoders silent for 0.5 s while driving (distance from the command meanwhile):
+    the cumulative counts on their return add only this frame's share."""
+    odo = WheelInertialOdometry(SPEC)
+    counts = [0.0, 0.0]
+    wheel = 0.2 / SPEC.drive["wheel_radius"]  # 0.2 m/s
+    odo.step(_samples(0, 10, 0, 0, wheel, wheel, counts), 0.1)
+    odo.step(_samples(0.1, 10, 0, 0, wheel, wheel, counts), 0.2, command=(0.2, 0.0))
+    for k in range(2, 7):
+        b = _samples(k * 0.1, 10, 0, 0, wheel, wheel, counts)
+        st = odo.step(ProprioBatch(b.imu, []), (k + 1) * 0.1, command=(0.2, 0.0))
+        assert st.translation_source == "command"
+    st = odo.step(_samples(0.7, 10, 0, 0, wheel, wheel, counts), 0.8, command=(0.2, 0.0))
+    assert st.translation_source == "encoders" and abs(st.distance - 0.02) < 0.002
+    assert odo.log.get("enc_gaps") == 1
+
+
+def test_out_of_order_samples_are_dropped():
+    odo = WheelInertialOdometry(SPEC)
+    counts = [0.0, 0.0]
+    odo.step(_samples(0, 10, 0, 0, 0, 0, counts), 0.1)
+    b = _samples(0.1, 10, 0.2, 0, 0, 0, counts)
+    stale = ImuSample(0.05, np.array([0.0, 0.0, 5.0]), np.array([0.0, 0.0, 9.81]))
+    st = odo.step(ProprioBatch([stale] + b.imu, b.encoders), 0.2)
+    assert abs(st.dth - 0.02) < 0.002 and odo.log["imu_out_of_order"] == 1
+
+
+class _FakeStep:
+    def __init__(self, dth, dt, updates, trust=True):
+        self.dth, self.w, self.trust_rotation = dth, dth / dt, trust
+        self.info = {"offset_updates": updates, "scale_sigma": 0.0002}
+
+
+def _window_slam(**cfg):
+    from amr_rl.perception.vslam import PlanarVSLAM
+
+    slam = PlanarVSLAM.__new__(PlanarVSLAM)
+    slam.cfg = VSLAMConfig(**cfg)
+    slam._probation, slam._bias_win, slam.bias_feedback = 0, None, []
+    slam._scale_anchor = slam._radius_acc = slam._vision_pose = None
+    slam.fusion_log = {}
+    return slam
+
+
+def test_vision_offset_window_completes_while_the_temperature_model_moves():
+    """The window measures (gyro rotation - vision rotation) / T over 15-90 s. It used to
+    restart whenever the temperature-compensated offset value changed (every frame), so
+    it never completed; now only a real re-measurement of the offset restarts it."""
+    err = math.radians(0.02)  # the gyro reads 0.02 dps high after correction
+    slam = _window_slam(odo_bias_feedback=True)
+    th = 0.0
+    for k in range(200):  # 20 s, slow drive, established landmarks
+        true = 0.01 * math.sin(0.3 * k * 0.1)
+        dth = (true - th) + err * 0.1
+        th = true
+        slam._bias_window(np.array([0.0, 0.0, true]), _FakeStep(dth, 0.1, updates=7), 0.9, 1.0, k * 0.1)
+    assert len(slam.bias_feedback) == 1
+    rate, sigma = slam.bias_feedback[0]
+    assert abs(rate - err) < 1e-6 and 0 < sigma < math.radians(0.05)  # gyro - vision: offset up
+    # a re-measurement of the offset (a stop) mid-window restarts it
+    slam = _window_slam(odo_bias_feedback=True)
+    for k in range(200):
+        slam._bias_window(np.zeros(3), _FakeStep(0.0, 0.1, updates=7 if k < 100 else 8), 0.9, 1.0, k * 0.1)
+    assert slam.bias_feedback == [] and slam._bias_win is not None
+    # off by default (validation 4 ran without this feedback)
+    slam = _window_slam()
+    for k in range(200):
+        slam._bias_window(np.zeros(3), _FakeStep(0.0, 0.1, updates=7), 0.9, 1.0, k * 0.1)
+    assert slam.bias_feedback == [] and slam._bias_win is None
+
+
+def test_map_corrections_and_tracking_gaps_restart_vision_windows():
+    slam = _window_slam(odo_bias_feedback=True)
+    for k in range(100):
+        slam._bias_window(np.zeros(3), _FakeStep(0.0, 0.1, updates=1), 0.9, 1.0, k * 0.1)
+    slam._scale_anchor, slam._radius_acc, slam._vision_pose = {"th": 0.0}, [0.1, 0.1], np.zeros(3)
+    assert slam._bias_win is not None
+    slam._reset_vision_refs()
+    assert slam._bias_win is None and slam._scale_anchor is None and slam._radius_acc is None
+    assert slam._vision_pose is None

@@ -76,6 +76,10 @@ class OdometryConfig:
     accel_slip_samples: int = 3
     slip_hold_s: float = 0.6
     tilt_yaw_error: float = 0.0005    # relative yaw error from caster rocking (body z vs vertical)
+    # A sample more than this many sample periods after the previous one ends a dropout:
+    # the frames in between were dead-reckoned without that sensor (encoder yaw, command
+    # distance), so the returning sensor integrates only from the current frame's start.
+    max_gap_periods: float = 3.0
 
 
 @dataclass
@@ -116,6 +120,8 @@ class WheelInertialOdometry:
         self.noise_density = float(g["noise_density_dps_rthz"]) * DPS
         self.sample_noise = self.noise_density * math.sqrt(bw)
         self.lsb = float(g["lsb_mdps"]) * 1e-3 * DPS
+        self.max_imu_gap = self.cfg.max_gap_periods / float(imu["output_rate_hz"])
+        self.max_enc_gap = self.cfg.max_gap_periods / float(enc.get("sample_rate_hz", 100.0))
         # Gyro z offset model: offset(T) = b0 + k (T - T0), T the chip's own temperature
         # sensor (warm-up after power-on shifts the offset by tempco x dT: +-0.010
         # dps/degC typ). State x = [b0, k] with covariance P; without temperature
@@ -129,6 +135,7 @@ class WheelInertialOdometry:
         self.temp0 = None  # reference temperature of b0
         self.temp_at_update = None  # chip temperature at the last stand-still offset measurement
         self.zupt_frames = 0  # frames of stand-still offset measurement so far
+        self.offset_updates = 0  # Kalman updates of the offset model (stops, vision windows)
         self.bias_calibrated = False
         self.last_zupt_t = -math.inf
         self.last_bias_update_t = -math.inf  # zero-velocity or straight-driving update
@@ -205,6 +212,7 @@ class WheelInertialOdometry:
         self._x = self._x + K * (meas - float(h @ self._x))
         self._P = self._P - np.outer(K, h @ self._P)
         self._P = 0.5 * (self._P + self._P.T)
+        self.offset_updates += 1
 
     def add_bias_feedback(self, rate_error: float, sigma: float):
         """Gyro rate error (rad/s, corrected units) measured by vision over a window,
@@ -277,7 +285,18 @@ class WheelInertialOdometry:
         yaw_t, yaw_c, yaw = [t0], [0.0], 0.0
         gz_int = imu_time = 0.0  # raw gyro z integral (offset included) for the straight-driving update
         for s in imu:
-            h = s.t - self._last_imu_t if self._last_imu_t is not None else 0.0
+            prev = self._last_imu_t
+            if prev is not None and s.t <= prev:
+                self.log["imu_out_of_order"] = self.log.get("imu_out_of_order", 0) + 1
+                continue
+            if prev is None or prev < t0 - self.max_imu_gap:
+                # first sample after a dropout: the frames without gyro samples were
+                # already dead-reckoned (encoder yaw); integrate from this frame's start
+                # only (a 0.5 s gap re-integrated at one sample's rate gave ~14 deg).
+                if prev is not None:
+                    self.log["imu_gaps"] = self.log.get("imu_gaps", 0) + 1
+                prev = min(t0, s.t)
+            h = s.t - prev
             self._last_imu_t = s.t
             rate = self._yaw_rate(s, h)
             yaw += rate * h
@@ -296,12 +315,23 @@ class WheelInertialOdometry:
         speeds = []
         last = self._last_enc
         for s in enc:
+            if last is not None and s.t <= last.t:
+                self.log["enc_out_of_order"] = self.log.get("enc_out_of_order", 0) + 1
+                continue
             if last is not None:
                 dl = (s.left - last.left) * 2 * math.pi / self.cpr
                 dr = (s.right - last.right) * 2 * math.pi / self.cpr
+                if last.t < t0 - self.max_enc_gap:
+                    # first sample after a dropout: the counts are cumulative, but the
+                    # frames in between were dead-reckoned from the command; keep only the
+                    # share of the travel inside this frame (mean speed over the gap).
+                    frac = max(s.t - t0, 0.0) / (s.t - last.t)
+                    dl, dr = dl * frac, dr * frac
+                    self.log["enc_gaps"] = self.log.get("enc_gaps", 0) + 1
                 ds = self.radius_scale * self.r * (dl + dr) / 2
+                # heading within the frame: the gyro's, else the encoders' yaw (mid-sample)
                 th = float(np.interp(s.t, yaw_t, yaw_c)) if have_imu else \
-                    self.r * (dr_tot + dl_tot * 0 + dr - dl) / self.track  # fallback: encoder heading
+                    self.track_scale * self.r * ((dr_tot - dl_tot) + 0.5 * (dr - dl)) / self.track
                 x += ds * math.cos(th)
                 y += ds * math.sin(th)
                 dl_tot += dl
@@ -439,6 +469,7 @@ class WheelInertialOdometry:
                             # vision (validation 4: IMU off 15.3 deg with it trusted)
                             trust_rotation=have_imu,
                             info={"bias": self.bias, "bias_sigma": math.sqrt(self.bias_var), "temp": self.temp,
+                                  "offset_updates": self.offset_updates,
                                   "tempco": self.tempco[0],
                                   "track_scale": self.track_scale, "gyro_scale": self.gyro_scale,
                                   "radius_scale": self.radius_scale,
