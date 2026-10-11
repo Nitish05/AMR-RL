@@ -1,5 +1,31 @@
 # Plan: heading robustness, round 9 (written 2026-10-04, work starts 2026-10-05)
 
+> **Status (2026-10-11).** This plan was written for the camera-only robot. On
+> 2026-10-05 the owner added an IMU and wheel encoders, and the wheel-inertial fusion
+> superseded most of it ([results/heading-r9.md](../results/heading-r9.md),
+> [results/r9-followup.md](../results/r9-followup.md)). Status of each workstream:
+>
+> - **WS0** (replay, recording, paired report): built. The replay now starts from
+>   the recorded settings. The replay corpus has not been recorded: one 40 s
+>   recording exists.
+> - **WS1** (wheel response model): built and off. The gains were fitted on logs
+>   from the old caster model, so they need refitting. Not evaluated.
+> - **WS2** (soft rotation prior): built in reduced form, as the command-model
+>   odometry used as a fallback when no samples arrive. The calibrated soft prior
+>   of §3 was not built.
+> - **WS3** (planar epipolar estimator): built and used by the gyro calibration
+>   (`scripts/calibrate_imu.py`). Not used in tracking: the gyro made it
+>   unnecessary there.
+> - **WS4** (depth floor mask): built and off. Not evaluated.
+> - **WS5** (view-aware turns): built and off. Not evaluated.
+> - **WS6** (delayed turn landmarks): not built. Superseded by the gyro, so
+>   dropped unless camera-only drift matters again.
+> - **WS7** (global consistency): not started. The loop-closure odometry guard
+>   (2026-10-11) is the only part done.
+>
+> The "camera and commands only" scope below no longer holds for the default
+> robot (AGENTS.md now includes the IMU and encoders).
+
 **Scope.**
 - Software only: no hardware or robot-spec changes (owner decision).
 - Sensing for localisation is restricted to the onboard RGB camera, its calibration and the robot's own commanded motion (AGENTS.md).
