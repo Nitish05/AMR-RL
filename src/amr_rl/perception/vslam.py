@@ -385,7 +385,7 @@ class VSLAMConfig:
 
 
 # Named turn-handling configurations (docs/results/turn-drift.md). "fam": round-8
-# finalist FAm, frozen at 993459f (not a default; under live validation).
+# finalist FAm, frozen at 993459f (camera-only; failed its live validation, not adopted).
 TURN_PRESETS = {
     "fam": {
         "turn_heading_gate": True, "turn_gate_deg": 0.65, "turn_gate_frac": 0.3, "turn_max_prediction_s": 4.0,

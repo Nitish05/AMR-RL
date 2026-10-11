@@ -144,7 +144,10 @@ class RuntimeConfig:
 
 def apply_turn_preset(cfg, name):
     """Apply a named turn-handling preset (perception/vslam.py TURN_PRESETS) and the
-    runtime's degraded-heading handling that goes with it. ``None``/"none": unchanged."""
+    runtime's degraded-heading handling that goes with it. ``None``/"none": unchanged.
+    The presets are camera-only turn handling (rounds 7-8, not adopted): they set
+    ``odometry="command"``, since with the IMU they would run an unevaluated hybrid.
+    Apply after the other runtime options."""
     if name in (None, "none"):
         return cfg
     from ..perception.vslam import TURN_PRESETS
@@ -152,6 +155,7 @@ def apply_turn_preset(cfg, name):
     for key, value in TURN_PRESETS[name].items():
         setattr(cfg.vslam, key, value)
     cfg.respect_degraded_heading = True
+    cfg.odometry = "command"
     return cfg
 
 

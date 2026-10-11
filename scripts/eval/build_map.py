@@ -63,8 +63,8 @@ def main():
     if args.loop_shadow:  # log more candidates; revisits change the trajectory, so off
         cfg.vslam.loop_shadow, cfg.vslam.loop_top_k, cfg.vslam.loop_uncertain_k, cfg.revisit_sigma = True, 3, 3, 0.0
         cfg.vslam.covis_max_per_kf = 3  # recorded for the offline comparison only
-    apply_turn_preset(cfg, args.turn_preset)
     apply_runtime_args(cfg, args)
+    apply_turn_preset(cfg, args.turn_preset)  # camera-only presets: after --odometry
     for item in args.vslam:
         key, value = item.split("=", 1)
         if not hasattr(cfg.vslam, key):

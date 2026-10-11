@@ -119,4 +119,5 @@ def test_turn_preset_sets_the_finalist_and_degraded_heading_handling():
     cfg = apply_turn_preset(RuntimeConfig(), "fam")
     assert cfg.respect_degraded_heading
     assert all(getattr(cfg.vslam, k) == v for k, v in TURN_PRESETS["fam"].items())
+    assert cfg.odometry == "command"  # a camera-only preset; never an IMU hybrid
     assert not apply_turn_preset(RuntimeConfig(), "none").respect_degraded_heading

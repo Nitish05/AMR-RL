@@ -265,9 +265,9 @@ def evaluate_world(name, out_root, map_seconds, seed, loop_closure=True, turn_pr
     start[2] = float(start[2] + seed * 2 * math.pi / 5)
     config = RuntimeConfig(supervisor=SupervisorConfig(require_heartbeat=False), policy="explore_only", seed=seed,
                            place_descriptor="megaloc" if loop_closure else None)
-    apply_turn_preset(config, turn_preset)
     if RUNTIME_ARGS is not None:
         apply_runtime_args(config, RUNTIME_ARGS)
+    apply_turn_preset(config, turn_preset)  # camera-only presets: after --odometry
     session = Session(name, run_dir=run_dir, memory_path=run_dir / "throwaway-memory.sqlite", config=config,
                       seed=seed, inspection=False,
                       world_overrides=world_overrides(RUNTIME_ARGS, {"robot_start": start}) if RUNTIME_ARGS

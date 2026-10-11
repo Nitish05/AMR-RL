@@ -130,9 +130,9 @@ def run_phase(phase, *, map_dir, memory_path, run_dir, seed, world="arena", star
     config = RuntimeConfig(supervisor=SupervisorConfig(require_heartbeat=False), policy=policy, seed=seed,
                            initial_survey=False, motivation=MotivationConfig(**phase.get("motivation", {})),
                            detector=detector, detector_device=detector_device)
-    apply_turn_preset(config, turn_preset)
     if RUNTIME_ARGS is not None:
         apply_runtime_args(config, RUNTIME_ARGS)
+    apply_turn_preset(config, turn_preset)  # camera-only presets: after --odometry
     for key, value in (vslam or {}).items():
         if not hasattr(config.vslam, key):
             raise ValueError(f"unknown VSLAMConfig field {key}")
