@@ -74,3 +74,14 @@ revision and loaded with `local_files_only` at run time:
 
 The default semantic backend is still an engineered describer, and outcomes come from
 the engineered colour detector.
+
+## Evidence retention
+
+Evidence lives in fresh directories under the ignored `work/evidence/`. Runs that failed or were superseded are kept, with a note naming the reason.
+
+Validation runs come from pinned git worktrees under `work/wt/`:
+- A worktree is removed once the results document names its commit, it has no uncommitted changes, and the commit is in `main`'s history. The commit reproduces the code; the world-asset caches inside the worktree are regenerated on demand.
+- A worktree with local changes keeps them as a patch next to its evidence before removal.
+- Round-9 removals (2026-10-11): ce39b72, 552d630, 6e89e60, 890646c, d237559, f0748fc and 811adbc.
+
+The large turn-capture corpora (`work/evidence/turncap-*`, about 29 GB) are kept until the owner decides to archive them elsewhere.
