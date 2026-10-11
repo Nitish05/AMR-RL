@@ -45,6 +45,25 @@ class Frame:
     calibration_version: str = ""
 
 
+def _require_display():
+    """macOS renders through a window-system context: with the display asleep pyglet
+    finds no screen and Genesis fails deep inside with an IndexError. Fail early and
+    clearly instead (keep the display awake, e.g. ``caffeinate -d``)."""
+    import sys
+
+    if sys.platform != "darwin":
+        return
+    try:
+        from pyglet.display import get_display
+
+        screens = get_display().get_screens()
+    except Exception:  # pyglet missing or another backend: let Genesis decide
+        return
+    if not screens:
+        raise RuntimeError("no display available for rendering (the display is asleep or locked); "
+                           "keep it awake, e.g. run under `caffeinate -dims`")
+
+
 @dataclass
 class FixtureState:
     name: str
@@ -264,6 +283,7 @@ class SimWorld:
 
         self.sensors = ProprioSensors(spec, seed=self.seed, dt=self.dt, faults=cfg.get("sensor_faults"))
         self.sensors.attach(self.scene, self.robot)
+        _require_display()
         self.scene.build()
         self.sensors.bind()
         # Mount the camera on the chassis link: OpenCV optical -> Genesis (OpenGL) camera axes.

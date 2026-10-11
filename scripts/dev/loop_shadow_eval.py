@@ -12,6 +12,8 @@ Rules (subsets of the recorded constraints):
   r5     round-5 candidates: the 3 most similar
   new    round-6 candidates: the 2 most similar, or any with pose-graph sigma >= 3 cm
   all    every recorded constraint
+  r5+gh  r5, minus constraints the odometry contradicts on heading (VSLAMConfig.loop_odo_guard="heading")
+  r5+gf  r5, minus constraints failing the full odometry test (loop_odo_guard="full")
 
     PYTHONPATH=src python scripts/dev/loop_shadow_eval.py work/evidence/shadow-* --out report.json
 """
@@ -34,7 +36,14 @@ RULES = {
     "r5": lambda e: e.get("rank", 99) < 3,
     "new": lambda e: e.get("rank", 99) < 2 or (e.get("sigma_m") or 0.0) >= 0.03,
     "all": lambda e: True,
+    "r5+gh": lambda e: e.get("rank", 99) < 3 and _guard(e, "heading"),
+    "r5+gf": lambda e: e.get("rank", 99) < 3 and _guard(e, "full"),
 }
+
+
+def _guard(e, mode):
+    check = e.get("odo_check")
+    return check is None or bool(check.get("pass_" + mode, True))
 
 
 def optimise(kfs, edges, covis=()):
@@ -72,19 +81,25 @@ def main():
         log = json.loads((d / "result.json").read_text())["loop_closure"]["log"]
         shadow = [e for e in log if e.get("outcome") == "shadow_closed"]
         covis = json.loads((d / "result.json").read_text())["loop_closure"].get("covis_edges", [])
+        false = {(e["kf"], e["candidate"]) for e in json.loads((d / "result.json").read_text())["loop_closure"]
+                 .get("scored", []) if e.get("false")}
         row = {"run": d.name, "keyframes": len(kfs), "constraints": len(shadow)}
         for name, rule in RULES.items():
             edges = [e for e in shadow if rule(e)]
             rmse, mx = score(kfs, optimise(kfs, edges, covis), truth)
-            row[name] = {"edges": len(edges), "rmse_m": rmse, "max_m": mx}
+            row[name] = {"edges": len(edges), "rmse_m": rmse, "max_m": mx,
+                         "false": sum((e["kf"], e["candidate"]) in false for e in edges)}
         rows.append(row)
         print(f"{d.name:28s} constraints {len(shadow):3d} | " + " | ".join(
             f"{n} {100 * row[n]['rmse_m']:5.1f} cm ({row[n]['edges']})" for n in RULES), flush=True)
-    for n in ("r5", "new", "all"):
+    for n in RULES:
+        if n == "none":
+            continue
         better = sum(r[n]["rmse_m"] < r["none"]["rmse_m"] - 0.002 for r in rows)
         worse = sum(r[n]["rmse_m"] > r["none"]["rmse_m"] + 0.002 for r in rows)
         print(f"{n}: better than none in {better}/{len(rows)}, worse in {worse}/{len(rows)}; "
-              f"median change {100 * np.median([r[n]['rmse_m'] - r['none']['rmse_m'] for r in rows]):+.1f} cm")
+              f"median change {100 * np.median([r[n]['rmse_m'] - r['none']['rmse_m'] for r in rows]):+.1f} cm; "
+              f"constraints {sum(r[n]['edges'] for r in rows)}, false {sum(r[n]['false'] for r in rows)}")
     if args.out:
         Path(args.out).write_text(json.dumps(rows, indent=1))
 

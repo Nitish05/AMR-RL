@@ -293,6 +293,7 @@ class RobotRuntime:
         self._zupt_hold_until = -math.inf
         self._zupt_hold_start = None
         self._boot_t0 = None  # first control tick: the boot hold is measured from it
+        self.zupt_hold_log = []  # recalibration stops: start, end, trigger, frames measured, success
         self._zupt_frames_at_hold = None
         self.zupt_holds = self.zupt_hold_failures = 0
         self._proprio = ProprioBatch([], [])
@@ -716,6 +717,9 @@ class RobotRuntime:
                 return True
             if not done:
                 self.zupt_hold_failures += 1
+            if self.zupt_hold_log:
+                self.zupt_hold_log[-1].update({"end": float(now), "success": bool(done),
+                                               "frames": int(self.odo.zupt_frames - self._zupt_frames_at_hold)})
             self._zupt_hold_start = None
             self._zupt_hold_until = now
             return False
@@ -729,6 +733,11 @@ class RobotRuntime:
             self._zupt_hold_start = now
             self._zupt_frames_at_hold = self.odo.zupt_frames
             self.zupt_holds += 1
+            self.zupt_hold_log.append({"start": float(now), "trigger": "interval" if stale else "temperature",
+                                       "sigma_dps": math.degrees(math.sqrt(self.odo.bias_var)),
+                                       "temp_change_c": None if self.odo.temp is None or self.odo.temp_at_update is None
+                                       else float(self.odo.temp - self.odo.temp_at_update)})
+            del self.zupt_hold_log[:-500]
             return True
         return False
 
@@ -955,7 +964,9 @@ class RobotRuntime:
                 "slip": None if step is None else step.slip,
                 "slip_counts": dict(o.log), "fusion": dict(self.slam.fusion_log),
                 "command_model_fallback_frames": self.odo_fallbacks, "zupt_holds": self.zupt_holds,
-                "zupt_hold_failures": self.zupt_hold_failures}
+                "zupt_hold_failures": self.zupt_hold_failures, "zupt_hold_active": self._zupt_hold_start is not None,
+                "temp_c": o.temp, "tempco_dps_per_c": math.degrees(o.tempco[0]),
+                "offset_updates": o.offset_updates, "zupt_frames": o.zupt_frames}
 
     def snapshot(self):
         loc = self.slam.snapshot()

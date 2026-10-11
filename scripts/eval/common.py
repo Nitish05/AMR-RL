@@ -135,11 +135,12 @@ def keyframe_map_error(keyframes, truth_rows):
 
 
 def score_loops(loop_log, truth_rows, *, max_err=0.1, max_herr=0.1):
-    """Scoring only: was each CLOSED loop's relative pose right? Compares the loop
-    constraint (candidate keyframe -> current keyframe) with the true relative pose."""
+    """Scoring only: was each CLOSED (or, in shadow builds, recorded) loop's relative
+    pose right? Compares the loop constraint (candidate keyframe -> current keyframe)
+    with the true relative pose."""
     out = []
     for e in loop_log:
-        if e.get("outcome") != "closed":
+        if e.get("outcome") not in ("closed", "shadow_closed"):
             continue
         a, b = _truth_at(truth_rows, e["t_candidate"]), _truth_at(truth_rows, e["t"])
         c, s = math.cos(a[2]), math.sin(a[2])
@@ -152,7 +153,8 @@ def score_loops(loop_log, truth_rows, *, max_err=0.1, max_herr=0.1):
         err = float(np.hypot(*(est_rel[:2] - true_rel[:2])))
         herr = abs((est_rel[2] - true_rel[2] + math.pi) % (2 * math.pi) - math.pi)
         out.append({"t": e["t"], "kf": e["kf"], "candidate": e["candidate"], "err_m": err, "herr_rad": herr,
-                    "false": bool(err > max_err or herr > max_herr), "correction_m": e.get("correction_m")})
+                    "false": bool(err > max_err or herr > max_herr), "correction_m": e.get("correction_m"),
+                    "shadow": e.get("outcome") == "shadow_closed", "odo_check": e.get("odo_check")})
     return out
 
 

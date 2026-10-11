@@ -163,6 +163,20 @@ class VSLAMConfig:
     loop_confirm_window_kf: int = 6
     loop_confirm_m: float = 0.05
     loop_confirm_rad: float = math.radians(2)
+    # Odometry consistency of a verified loop (after 2026-10-06: validation 4's worst run
+    # was a false closure 12 deg off while the gyro knew the relative heading to ~0.1
+    # deg). The loop's relative pose (old keyframe -> current, from vision against the
+    # old landmarks) is compared with the odometry chain between the two keyframes
+    # (gyro heading, encoder distance), independent of the map. Always logged in the
+    # loop entry ("odo_check"). off: accept as before; heading: reject when the heading
+    # residual exceeds loop_odo_k sigma; full: also a 3-DoF Mahalanobis test.
+    # Uncertainty: the chain's covariance plus the correlated terms it treats as
+    # independent (gyro offset sigma x time, scale sigma x rotation) and the loop
+    # pose's own heading error (loop_odo_loop_deg).
+    loop_odo_guard: str = "off"
+    loop_odo_k: float = 3.0
+    loop_odo_loop_deg: float = 0.5
+    loop_odo_chi2: float = 16.27       # 3 degrees of freedom, 99.9 %
     # Evaluation: detect, verify, confirm and check loops exactly as live, but record
     # the accepted constraints (shadow_edges) instead of correcting the map. The same
     # trajectory can then be scored with and without them (paired; live A/B runs
@@ -387,6 +401,10 @@ class Keyframe:
     # None without odometry or across a loss of tracking).
     odo_rel: np.ndarray | None = None
     odo_cov: np.ndarray | None = None
+    # Correlated heading error bound of odo_rel (rad, 1 sigma): sum of gyro offset sigma x
+    # dt and scale sigma x |rotation| per frame; inf when a frame's rotation was not
+    # from a trusted gyro (command model, encoders only).
+    odo_drift: float | None = None
 
 
 @dataclass
@@ -527,7 +545,7 @@ class PlanarVSLAM:
         self._odo = None          # odometry step of the current frame (fusion mode)
         self._cov = None          # fused pose covariance (world frame), fusion mode only
         self._vision_pose = None  # last vision-only pose (fusion mode)
-        self._odo_acc = None      # (relative motion, covariance, keyframe id) since the newest keyframe
+        self._odo_acc = None      # (relative motion, covariance, keyframe id, heading drift) since the newest keyframe
         self.wheel_model = None   # WheelResponse for the wheel_model="consistency" check (camera-only)
         self._wm_delta = None
         self.floor_mask = None    # MonoDepthObstacles shared with the near-field guard (WS4)
@@ -824,15 +842,20 @@ class PlanarVSLAM:
                 self._dr["travel"] += abs(v) * dt + 0.1 * abs(w) * dt
                 self._dr["rot"] += abs(w) * dt
         if odo is not None and self._odo_acc is not None and self.status in (TRACKING, PREDICTED):
-            rel, cov, kid = self._odo_acc
-            self._odo_acc = (compose(rel, (odo.dx, odo.dy, odo.dth)), _propagate(rel, cov, odo), kid)
+            rel, cov, kid, drift = self._odo_acc
+            info = odo.info or {}
+            if odo.trust_rotation and "bias_sigma" in info:
+                drift += float(info["bias_sigma"]) * odo.dt + float(info.get("scale_sigma", 0.0)) * abs(odo.dth)
+            else:
+                drift = math.inf
+            self._odo_acc = (compose(rel, (odo.dx, odo.dy, odo.dth)), _propagate(rel, cov, odo), kid, drift)
         elif odo is None:
             self._odo_acc = None
         if self.status == INITIALIZING:
             self._cov = None
             out = self._initialize(gray, pts, desc, timestamp)
             if self.keyframes:
-                self._odo_acc = (np.zeros(3), np.zeros((3, 3)), self.keyframes[-1].id)
+                self._odo_acc = (np.zeros(3), np.zeros((3, 3)), self.keyframes[-1].id, 0.0)
             return out
         if self.status in (LOST, RELOCALIZING):
             self._turn, self._turn_count = None, 0
@@ -1411,7 +1434,8 @@ class PlanarVSLAM:
         kf = Keyframe(len(self.keyframes), timestamp, self.pose.copy(), pts, desc, matched_lm.copy(), gray)
         if self._odo_acc is not None and self._odo_acc[2] == last.id:
             kf.odo_rel, kf.odo_cov = self._odo_acc[0].copy(), self._odo_acc[1].copy()
-        self._odo_acc = (np.zeros(3), np.zeros((3, 3)), kf.id)
+            kf.odo_drift = float(self._odo_acc[3])
+        self._odo_acc = (np.zeros(3), np.zeros((3, 3)), kf.id, 0.0)
         self._triangulate(kf, last)
         if self.cfg.floor_validation != "off":
             self._validate_floor(kf)
@@ -2315,6 +2339,11 @@ class PlanarVSLAM:
         if jump > allowed:
             entry["outcome"] = "rejected_implausible_correction"
             return None
+        check = self._odometry_loop_check(cand, kf, between(cand.pose, best["pose"]))
+        entry["odo_check"] = check
+        if cfg.loop_odo_guard != "off" and check is not None and not check["pass_" + cfg.loop_odo_guard]:
+            entry["outcome"] = "rejected_odometry"
+            return None
         partner = self._confirm_loop(kf.id, cand.id, between(kf.pose, best["pose"]))
         if partner is None:
             entry["outcome"] = "awaiting_confirmation"
@@ -2322,6 +2351,46 @@ class PlanarVSLAM:
         entry["confirmed_by_kf"] = partner["kf"]
         z = between(cand.pose, best["pose"])
         return self._close_loop(kf, cand, z, entry)
+
+    def _odometry_loop_check(self, cand, kf, z):
+        """Loop relative pose ``z`` (keyframe ``kf`` in ``cand``'s frame, from vision
+        against the old landmarks) against the odometry chain between the two keyframes.
+        None when the chain is broken (a loss of tracking, a loaded map, no odometry)."""
+        cfg = self.cfg
+        by = {k.id: k for k in self.keyframes}
+        rel, cov, drift, path, rot = np.zeros(3), np.zeros((3, 3)), 0.0, 0.0, 0.0
+        for i in range(cand.id + 1, kf.id + 1):
+            k = by.get(i)
+            if k is None or k.odo_rel is None or k.odo_cov is None or k.odo_drift is None:
+                return None
+            c, s_ = math.cos(rel[2]), math.sin(rel[2])
+            F = np.eye(3)
+            F[0, 2] = -s_ * k.odo_rel[0] - c * k.odo_rel[1]
+            F[1, 2] = c * k.odo_rel[0] - s_ * k.odo_rel[1]
+            G = np.array([[c, -s_, 0.0], [s_, c, 0.0], [0.0, 0.0, 1.0]])
+            cov = F @ cov @ F.T + G @ k.odo_cov @ G.T
+            rel = compose(rel, k.odo_rel)
+            drift += k.odo_drift
+            path += float(np.hypot(k.odo_rel[0], k.odo_rel[1]))
+            rot += abs(float(k.odo_rel[2]))
+        if not math.isfinite(drift):
+            return {"chain": "untrusted_rotation", "pass_heading": True, "pass_full": True}
+        r = np.array([z[0] - rel[0], z[1] - rel[1], wrap(z[2] - rel[2])])
+        loop_th = math.radians(cfg.loop_odo_loop_deg)
+        sig_th = math.sqrt(max(cov[2, 2], 0.0) + drift ** 2 + loop_th ** 2)
+        S = cov.copy()
+        S[2, 2] = sig_th ** 2
+        S[:2, :2] += np.eye(2) * 0.03 ** 2  # the loop pose's own position error (as the pose-graph loop edge)
+        try:
+            d2 = float(r @ np.linalg.solve(S, r))
+        except np.linalg.LinAlgError:
+            d2 = math.inf
+        return {"chain": "ok", "dt": float(kf.timestamp - cand.timestamp), "path_m": path,
+                "rot_deg": math.degrees(rot), "res_xy_m": float(np.hypot(r[0], r[1])),
+                "res_th_deg": math.degrees(r[2]), "sigma_th_deg": math.degrees(sig_th),
+                "sigma_xy_m": float(math.sqrt(max(np.linalg.eigvalsh(S[:2, :2]).max(), 0.0))), "d2": d2,
+                "pass_heading": bool(abs(r[2]) <= cfg.loop_odo_k * sig_th),
+                "pass_full": bool(abs(r[2]) <= cfg.loop_odo_k * sig_th and d2 <= cfg.loop_odo_chi2)}
 
     def _confirm_loop(self, kf_id, cand_id, corr):
         """Temporal consistency: return an earlier pending hypothesis (within

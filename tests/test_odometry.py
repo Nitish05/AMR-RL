@@ -202,6 +202,7 @@ def test_runtime_holds_the_wheels_for_imu_zero_velocity_updates():
     rt._zupt_hold_until, rt._zupt_hold_start, rt.zupt_holds, rt.zupt_hold_failures = -math.inf, None, 0, 0
     rt._zupt_frames_at_hold = None
     rt._boot_t0 = 0.0  # first control tick at t = 0
+    rt.zupt_hold_log = []
     assert rt._imu_booting(0.5)  # boot: offset measurement first
     rt.cfg.imu_zupt_interval_s = 30.0
     assert rt._imu_booting(1.5)  # 2 s boot stand-still
@@ -216,6 +217,9 @@ def test_runtime_holds_the_wheels_for_imu_zero_velocity_updates():
     assert not rt._imu_booting(50.0)
     assert rt._imu_booting(64.0) and rt._imu_booting(66.4)  # never measured: at most 2.5 s
     assert not rt._imu_booting(66.6) and rt.zupt_hold_failures == 1
+    assert [h["trigger"] for h in rt.zupt_hold_log] == ["interval", "interval"]
+    assert rt.zupt_hold_log[0]["success"] and not rt.zupt_hold_log[1]["success"]
+    assert abs(rt.zupt_hold_log[1]["end"] - rt.zupt_hold_log[1]["start"] - 2.6) < 1e-9
     rt.odo = None  # camera-only robot: never held
     assert not rt._imu_booting(0.1)
 
@@ -242,6 +246,7 @@ def test_no_recalibration_stop_when_the_offset_is_still_known():
     rt._zupt_hold_until, rt._zupt_hold_start, rt.zupt_holds, rt.zupt_hold_failures = -math.inf, None, 0, 0
     rt._zupt_frames_at_hold = None
     rt._boot_t0 = 0.0  # first control tick at t = 0
+    rt.zupt_hold_log = []
     rt.odo.last_bias_update_t = 1.0
     rt.odo.bias_var = math.radians(0.01) ** 2  # vision kept it known
     assert not rt._imu_booting(200.0) and rt.zupt_holds == 0
@@ -302,6 +307,7 @@ def _runtime_for_holds():
     rt.odo = WheelInertialOdometry(SPEC)
     rt._zupt_hold_until, rt._zupt_hold_start, rt.zupt_holds, rt.zupt_hold_failures = -math.inf, None, 0, 0
     rt._zupt_frames_at_hold, rt._boot_t0 = None, None
+    rt.zupt_hold_log = []
     return rt
 
 
@@ -430,3 +436,57 @@ def test_map_corrections_and_tracking_gaps_restart_vision_windows():
     slam._reset_vision_refs()
     assert slam._bias_win is None and slam._scale_anchor is None and slam._radius_acc is None
     assert slam._vision_pose is None
+
+
+def _chain_slam(n=40, drift_per_kf=math.radians(0.002), trusted=True):
+    """Keyframes 0..n driving a 1 m radius circle (0.1 rad per keyframe, 1 s apart)
+    with odometry links between consecutive keyframes."""
+    from amr_rl.perception.vslam import Keyframe, PlanarVSLAM, compose
+
+    slam = PlanarVSLAM.__new__(PlanarVSLAM)
+    slam.cfg = VSLAMConfig()
+    step = np.array([math.sin(0.1), 1 - math.cos(0.1), 0.1])
+    pose, kfs = np.zeros(3), []
+    for i in range(n + 1):
+        kf = Keyframe(i, float(i), pose.copy(), np.zeros((0, 2)), np.zeros((0, 32), np.uint8), np.zeros(0, int))
+        if i > 0:
+            kf.odo_rel = step.copy()
+            kf.odo_cov = np.diag([1e-6, 1e-6, 1e-8])
+            kf.odo_drift = drift_per_kf if trusted else math.inf
+        kfs.append(kf)
+        pose = compose(pose, step)
+    slam.keyframes = kfs
+    return slam, kfs
+
+
+def test_loop_odometry_check_rejects_a_closure_the_gyro_contradicts():
+    """Validation 4's worst run: a verified, confirmed loop 0.21 m and 12 deg off was
+    accepted while the gyro knew the relative heading to ~0.1 deg."""
+    from amr_rl.perception.vslam import between, compose
+
+    slam, kfs = _chain_slam()
+    cand, kf = kfs[2], kfs[38]
+    true_z = between(cand.pose, kf.pose)
+    ok = slam._odometry_loop_check(cand, kf, true_z + np.array([0.01, -0.01, math.radians(0.3)]))
+    assert ok["chain"] == "ok" and ok["pass_heading"] and ok["pass_full"]
+    assert ok["sigma_th_deg"] < 0.6
+    bad = slam._odometry_loop_check(cand, kf, compose(true_z, (0.15, 0.15, math.radians(12))))
+    assert not bad["pass_heading"] and not bad["pass_full"] and abs(bad["res_th_deg"]) > 11
+    shifted = slam._odometry_loop_check(cand, kf, true_z + np.array([0.5, 0.0, 0.0]))  # heading right, 0.5 m off
+    assert shifted["pass_heading"] and not shifted["pass_full"]
+    # a broken chain (a loss of tracking between the two) cannot be checked
+    kfs[20].odo_rel = None
+    assert slam._odometry_loop_check(cand, kf, true_z) is None
+    # rotation not from a trusted gyro: no heading test
+    slam, kfs = _chain_slam(trusted=False)
+    res = slam._odometry_loop_check(kfs[2], kfs[38], compose(between(kfs[2].pose, kfs[38].pose), (0, 0, 0.2)))
+    assert res["chain"] == "untrusted_rotation" and res["pass_heading"]
+
+
+def test_loop_odometry_tolerance_grows_with_the_gyro_offset_uncertainty():
+    slam, kfs = _chain_slam(drift_per_kf=math.radians(0.02))  # 0.02 dps offset sigma, 1 s per keyframe
+    from amr_rl.perception.vslam import between, compose
+
+    z = compose(between(kfs[2].pose, kfs[38].pose), (0, 0, math.radians(1.5)))
+    res = slam._odometry_loop_check(kfs[2], kfs[38], z)
+    assert res["sigma_th_deg"] > 0.7 and res["pass_heading"]  # 36 s x 0.02 dps = 0.72 deg
