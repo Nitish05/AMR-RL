@@ -132,3 +132,46 @@ def test_fixture_signal_rule_raises_panel_visible_onboard(world):
     after = [d.state_token for d in det.detect(world.capture("t").rgb) if d.color == "cyan"]
     assert before == ["attach:none"] and after == ["attach:yellow"]
     assert world.events[-1].fixture == "bloom" and world.events[-1].response == "yellow"
+
+
+def test_imu_and_encoder_samples_follow_the_true_motion(world):
+    """Round 9 sensors against simulator truth: gyro z sign and scale through a turn,
+    encoder counts against the wheel joints, accelerometer gravity at rest and forward
+    specific force while speeding up (the error models stay within datasheet bounds)."""
+    from amr_rl.sim.evaluator import true_pose
+
+    spec = world.spec
+    cpr = float(spec.raw["encoders"]["counts_per_wheel_rev"])
+    offset_max = math.radians(float(spec.raw["imu"]["gyro"]["offset_max_dps"]))
+    world.backend.initialize_pose(-1.0, -0.2, 0.0)
+    for _ in range(30):
+        world.step()
+    world.sensors.drain()
+    rest = world.sensors.drain()
+    for _ in range(50):
+        world.step()
+    rest = world.sensors.drain()
+    acc = np.mean([s.accel for s in rest.imu], axis=0)
+    assert acc[2] == pytest.approx(9.81, abs=0.4) and abs(acc[0]) < 0.6 and abs(acc[1]) < 0.6
+    gz_rest = float(np.mean([s.gyro[2] for s in rest.imu]))
+    assert abs(gz_rest) <= offset_max + 0.01
+    p0 = true_pose(world)
+    q0 = np.asarray(world.robot.get_dofs_position(world.backend._dofs), float).reshape(2)
+    _cmd(world, 0.0, 0.8, 2.0)
+    batch = world.sensors.drain()
+    p1 = true_pose(world)
+    q1 = np.asarray(world.robot.get_dofs_position(world.backend._dofs), float).reshape(2)
+    true_turn = math.atan2(math.sin(p1[2] - p0[2]), math.cos(p1[2] - p0[2]))
+    t = np.array([s.t for s in batch.imu])
+    gz = np.array([s.gyro[2] for s in batch.imu]) - gz_rest
+    gyro_turn = float(np.sum(gz[1:] * np.diff(t)))
+    assert true_turn > 0.5 and gyro_turn == pytest.approx(true_turn, rel=0.05)
+    enc = batch.encoders
+    for i, side in enumerate(("left", "right")):
+        counts = getattr(enc[-1], side) - getattr(rest.encoders[-1], side)
+        assert counts * 2 * math.pi / cpr == pytest.approx(q1[i] - q0[i], abs=0.05)
+    assert getattr(enc[-1], "right") > getattr(rest.encoders[-1], "right")  # left turn: right wheel forward
+    world.sensors.drain()
+    _cmd(world, 0.25, 0.0, 0.3)  # speeding up from rest
+    ax = [s.accel[0] for s in world.sensors.drain().imu]
+    assert max(ax[:15]) > acc[0] + 0.3  # forward specific force while accelerating

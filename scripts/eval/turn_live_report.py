@@ -8,6 +8,10 @@ For every run directory with ``session/trajectory_scoring.jsonl`` (map builds) o
     harness's per-frame "cmd")
   - drift events: heading-error change >= 8 deg within 10 s of continuous tracking
     (non-overlapping), and events per 100 in-place turns
+  - strata (round-9 plan): heading-error change per tracked frame by motion class
+    (still / straight / arc / in-place turn) and by commanded turn-rate band; per
+    in-place turn the estimated / true rotation; losses split into false (the estimate
+    was still right when tracking was given up: < 5 cm and < 3 deg) and genuine
 
     python scripts/eval/turn_live_report.py work/evidence/live-20261004 --prefix L1
     python scripts/eval/turn_live_report.py work/evidence/r9-L1-20261005 --arms base odo --json out.json
@@ -66,6 +70,56 @@ def analyse(rows):
             i += 1
     out["drift_events"] = events
     out["events_per_100_turns"] = 100.0 * events / turns if turns else None
+    out.update(strata(rows))
+    return out
+
+
+def motion_class(cmd):
+    if cmd is None:
+        return None
+    v, w = abs(cmd[0]), abs(cmd[1])
+    if v < 0.02:
+        return "turn" if w >= 0.15 else "still"
+    return "arc" if w >= 0.15 else "straight"
+
+
+def rate_band(cmd):
+    w = abs(cmd[1]) if cmd is not None else 0.0
+    return "w<0.15" if w < 0.15 else "w0.15-0.5" if w < 0.5 else "w>=0.5"
+
+
+def strata(rows):
+    """Per-stratum heading-error growth, per-turn scale error, false/genuine losses."""
+    steps = {}
+    for a, b in zip(rows[:-1], rows[1:]):
+        if a["status"] != "tracking" or b["status"] != "tracking" or a.get("est") is None or b.get("est") is None:
+            continue
+        dh = abs(math.degrees(wrap(wrap(b["est"][2] - b["gt"][2]) - wrap(a["est"][2] - a["gt"][2]))))
+        for key in (f"motion:{motion_class(b.get('cmd'))}", f"rate:{rate_band(b.get('cmd'))}"):
+            steps.setdefault(key, []).append(dh)
+    out = {"strata": {k: {"frames": len(v), "mean_deg_per_frame": float(np.mean(v)),
+                          "p95_deg_per_frame": float(np.percentile(v, 95))} for k, v in sorted(steps.items())}}
+    # in-place turns tracked throughout: estimated / true rotation
+    ratios, seg = [], []
+    for r in rows + [{"cmd": None, "status": "end"}]:
+        if motion_class(r.get("cmd")) == "turn" and r["status"] == "tracking" and r.get("est") is not None:
+            seg.append(r)
+            continue
+        if len(seg) >= 5:
+            true = sum(wrap(b["gt"][2] - a["gt"][2]) for a, b in zip(seg[:-1], seg[1:]))
+            est = sum(wrap(b["est"][2] - a["est"][2]) for a, b in zip(seg[:-1], seg[1:]))
+            if abs(true) >= math.radians(20):
+                ratios.append(est / true)
+        seg = []
+    out["turn_scale"] = {"turns": len(ratios), "median": float(np.median(ratios)) if ratios else None,
+                         "p90_abs_error": float(np.percentile(np.abs(np.asarray(ratios) - 1), 90)) if ratios else None}
+    false = genuine = 0
+    for a, b in zip(rows[:-1], rows[1:]):
+        if a["status"] in ("tracking", "predicted") and b["status"] in ("lost", "relocalizing"):
+            ok = a.get("err") is not None and a["err"] < 0.05 and abs(math.degrees(a.get("herr") or 0.0)) < 3
+            false += ok
+            genuine += not ok
+    out["losses"] = {"false": int(false), "genuine": int(genuine)}
     return out
 
 
@@ -91,7 +145,11 @@ def runs(root, prefix):
             "lost_frac": float(np.mean([a["lost_frac"] for a in agg])),
             "max_heading_err_deg": max((a["max_heading_err_deg"] for a in agg if a["max_heading_err_deg"] is not None),
                                        default=None),
-            "turns": sum(a["turns"] for a in agg), "drift_events": sum(a["drift_events"] for a in agg)})
+            "turns": sum(a["turns"] for a in agg), "drift_events": sum(a["drift_events"] for a in agg),
+            "losses_false": sum(a["losses"]["false"] for a in agg),
+            "losses_genuine": sum(a["losses"]["genuine"] for a in agg),
+            "strata": agg[0]["strata"] if len(agg) == 1 else None,
+            "turn_scale": agg[0]["turn_scale"] if len(agg) == 1 else None})
         res["events_per_100_turns"] = 100.0 * res["drift_events"] / res["turns"] if res["turns"] else None
         result = Path(d) / "result.json"
         if result.exists():
@@ -132,6 +190,19 @@ def compare(found, a, b):
         ev = sum(found[n]["drift_events"] for n in sel)
         tu = sum(found[n]["turns"] for n in sel)
         out[f"drift_{arm}"] = {"events": ev, "turns": tu, "per_100": 100.0 * ev / tu if tu else None}
+        out[f"losses_{arm}"] = {"false": sum(found[n].get("losses_false", 0) for n in sel),
+                                "genuine": sum(found[n].get("losses_genuine", 0) for n in sel)}
+        pooled = {}
+        for n in sel:
+            for key, st in (found[n].get("strata") or {}).items():
+                f, m = pooled.get(key, (0, 0.0))
+                pooled[key] = (f + st["frames"], m + st["frames"] * st["mean_deg_per_frame"])
+        out[f"strata_{arm}"] = {k: {"frames": f, "mean_deg_per_frame": m / f if f else None}
+                                for k, (f, m) in sorted(pooled.items())}
+        ratios = [found[n]["turn_scale"]["median"] for n in sel
+                  if (found[n].get("turn_scale") or {}).get("median") is not None]
+        out[f"turn_scale_{arm}"] = {"runs": len(ratios), "median_of_run_medians": float(np.median(ratios))
+                                    if ratios else None}
     return out
 
 

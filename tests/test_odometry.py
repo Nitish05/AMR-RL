@@ -490,3 +490,134 @@ def test_loop_odometry_tolerance_grows_with_the_gyro_offset_uncertainty():
     z = compose(between(kfs[2].pose, kfs[38].pose), (0, 0, math.radians(1.5)))
     res = slam._odometry_loop_check(kfs[2], kfs[38], z)
     assert res["sigma_th_deg"] > 0.7 and res["pass_heading"]  # 36 s x 0.02 dps = 0.72 deg
+
+
+def _motion_slam(entries):
+    from amr_rl.perception.vslam import PlanarVSLAM
+
+    slam = PlanarVSLAM.__new__(PlanarVSLAM)
+    slam.cfg = VSLAMConfig()
+    slam._motion_log = entries
+    slam.inconsistency = None
+    return slam
+
+
+def test_blocked_robot_is_noticed_although_the_wheels_report_no_travel_or_slip():
+    """Pushing on an obstacle the camera does not see: commanded forward 0.2 m/s for
+    1.2 s, vision (correctly) static. Stalled wheels give no encoder travel and spinning
+    wheels are slip-flagged, so the odometry frozen check alone never fired."""
+    still = np.zeros(3)
+    for travel, slip in ((0.0, False), (0.02, True)):  # stalled; spinning (flagged)
+        log = [(k * 0.1, still.copy(), travel, 0.0, slip, 0.02) for k in range(13)]
+        slam = _motion_slam(log)
+        assert not slam._odometry_consistent(1.2) and slam.inconsistency == "blocked"
+        slam = _motion_slam(log)
+        slam.cfg.odo_blocked_check = False
+        assert slam._odometry_consistent(1.2)  # the round-9 behaviour
+    # driving normally: vision follows the command
+    log = [(k * 0.1, np.array([0.02 * k, 0.0, 0.0]), 0.02, 0.0, False, 0.02) for k in range(13)]
+    assert _motion_slam(log)._odometry_consistent(1.2)
+    # turning in place / standing still for a recalibration: nothing commanded forward
+    log = [(k * 0.1, still.copy(), 0.0, 0.05, False, 0.0) for k in range(13)]
+    assert _motion_slam(log)._odometry_consistent(1.2)
+
+
+def test_blocked_without_vision_from_command_and_encoders():
+    slam = _motion_slam([])
+    slam._proprio_win = [(k * 0.1, 0.02, 0.0) for k in range(13)]  # commanded 0.2 m/s, wheels stalled or slipping
+    assert slam.blocked_by_odometry(1.2)
+    slam._proprio_win = [(k * 0.1, 0.02, 0.019) for k in range(13)]  # moving as commanded
+    assert not slam.blocked_by_odometry(1.2)
+    slam._proprio_win = [(k * 0.1, 0.0, 0.0) for k in range(13)]  # standing still on purpose
+    assert not slam.blocked_by_odometry(1.2)
+    slam._proprio_win = [(1.0 + k * 0.1, 0.02, 0.0) for k in range(6)]  # 0.5 s window at loss time
+    assert slam.blocked_by_odometry(1.5, window=0.5) and not slam.blocked_by_odometry(1.5)
+
+
+def test_recovery_backs_off_when_the_wheels_show_a_blocked_robot():
+    from amr_rl.runtime.robot import choose_recovery
+
+    common = dict(nudge_retrace=None, turning_clearance=0.5, required_clearance=0.3, certified=True)
+    assert choose_recovery(loss_reason="tracking_failed", last_command=(0.2, 0.0), **common)["kind"] == "rotate"
+    assert choose_recovery(loss_reason="tracking_failed", last_command=(0.2, 0.0), blocked=True,
+                           **common)["kind"] == "back_off"
+
+
+def test_rotation_recovery_stops_when_the_gyro_shows_no_turn():
+    from types import SimpleNamespace
+
+    from amr_rl.runtime.robot import RobotRuntime
+
+    rt = RobotRuntime.__new__(RobotRuntime)
+    rt.odo = WheelInertialOdometry(SPEC)
+    rt.recovery_plan = {"kind": "rotate"}
+    rt.last_odometry = SimpleNamespace(rotation_source="gyro", dt=0.1, dth=0.002)  # pressed against something
+    cmds = [rt._recovery_step(k * 0.1) for k in range(14)]
+    assert cmds[0] == (0.0, 0.35) and cmds[-1] == (0.0, 0.0)
+    assert rt.recovery_plan["kind"] == "wait" and rt.recovery_plan["reason"] == "rotation_blocked"
+    rt.recovery_plan = {"kind": "rotate"}
+    rt.last_odometry = SimpleNamespace(rotation_source="gyro", dt=0.1, dth=0.034)  # turning as commanded
+    assert all(rt._recovery_step(k * 0.1) == (0.0, 0.35) for k in range(30))
+
+
+def _scoring_module(name):
+    import importlib.util
+    from pathlib import Path
+
+    path = Path(__file__).resolve().parents[1] / "scripts" / "eval" / f"{name}.py"
+    spec = importlib.util.spec_from_file_location(f"_eval_{name}", path)
+    mod = importlib.util.module_from_spec(spec)
+    import sys
+
+    sys.path.insert(0, str(path.parent))
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def test_turn_live_report_scores_drift_turns_strata_and_losses():
+    tlr = _scoring_module("turn_live_report")
+    rows, t = [], 0.0
+    def row(status, est_th, gt_th, cmd, err=0.01):
+        nonlocal t
+        t += 0.1
+        rows.append({"t": round(t, 1), "status": status, "est": [0.0, 0.0, est_th], "gt": [0.0, 0.0, gt_th],
+                     "err": err, "herr": wrap_angle(est_th - gt_th), "cmd": cmd})
+    def wrap_angle(a):
+        return (a + math.pi) % (2 * math.pi) - math.pi
+    for _ in range(10):
+        row("tracking", 0.0, 0.0, [0.0, 0.0])
+    for k in range(20):  # in-place turn, the estimate over-rotates 10 %: drift 0.9 rad * 0.1 = 5.2 deg
+        row("tracking", 1.1 * 0.045 * (k + 1), 0.045 * (k + 1), [0.0, 0.45])
+    for k in range(30):  # then 4 deg more within 10 s: an 8 deg drift event
+        row("tracking", 0.99 + math.radians(4) * k / 29, 0.9, [0.2, 0.0])
+    row("lost", 0.0, 0.9, [0.2, 0.0])  # given up while 9 deg off: a genuine loss
+    out = tlr.analyse(rows)
+    assert out["turns"] == 1 and out["drift_events"] == 1
+    assert abs(out["turn_scale"]["median"] - 1.1) < 1e-6 and out["turn_scale"]["turns"] == 1
+    assert out["losses"] == {"false": 0, "genuine": 1}
+    assert out["strata"]["motion:turn"]["frames"] == 20 and out["strata"]["motion:straight"]["frames"] == 30
+    found = {"L1-a-w-s0": {"max_heading_err_deg": 10.0, "ate_cm": 5.0, "turns": 10, "drift_events": 2,
+                           "losses_false": 1, "losses_genuine": 0, "strata": out["strata"], "turn_scale": None},
+             "L1-b-w-s0": {"max_heading_err_deg": 2.0, "ate_cm": 3.0, "turns": 10, "drift_events": 0,
+                           "losses_false": 0, "losses_genuine": 0, "strata": None, "turn_scale": None}}
+    cmp = tlr.compare(found, "a", "b")
+    assert cmp["pairs"] == 1 and cmp["max_heading_err_deg"]["median_diff"] == -8.0
+    assert cmp["drift_a"]["per_100"] == 20.0 and cmp["losses_a"]["false"] == 1
+
+
+def test_reversal_scorer_uses_true_panel_events():
+    """Round 6 seed 0 late: a misperceived 'moved' on stone before the swap (valence 0.6)
+    hid the adaptation when the scorer used perceived outcomes."""
+    report = _scoring_module("report")
+    phase = {"switches": [{"t": 360.0, "outcomes_before": 11}],
+             "outcomes": [{"t": 126.0, "fixture": "stone", "action": "signal", "valence": 0.6},
+                          {"t": 451.0, "fixture": "stone", "action": "signal", "valence": 1.0}],
+             "world_events": [{"time": 120.0, "fixture": "stone", "trigger": "signal", "response": "none"},
+                              {"time": 200.0, "fixture": "bloom", "trigger": "signal", "response": "yellow"},
+                              {"time": 447.0, "fixture": "stone", "trigger": "signal", "response": "yellow"}]}
+    assert report.first_new_rewarding(phase, 360.0) == (447.0, "stone", "signal")
+    del phase["world_events"]  # perceived outcomes only: the old miscount
+    assert report.first_new_rewarding(phase, 360.0) is None
+    table = report.reversal_table([("reversal_late", 0, {"phases": [{**phase, "world_events": [
+        {"time": 447.0, "fixture": "stone", "trigger": "signal", "response": "yellow"}]}]}, None)])
+    assert "| yes |" in table

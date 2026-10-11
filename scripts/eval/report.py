@@ -419,6 +419,24 @@ def policy_suite(runs, tie=1.0):
     return "\n".join(out)
 
 
+def first_new_rewarding(phase, t_switch):
+    """(t, fixture, action) of the first rewarding panel event after the switch on an
+    option that was not rewarding before it, from the world's own events (scoring only).
+    Perceived outcomes are not used: a misperceived 'moved' before the swap (valence 0.6)
+    once made the new rewarding option look old (round 6, seed 0 late)."""
+    events = phase.get("world_events")
+    if events is None:  # older results: perceived outcomes
+        outs = phase.get("outcomes", [])
+        old = {(o["fixture"], o["action"]) for o in outs if o["t"] < t_switch and (o["valence"] or 0) >= 0.3}
+        hit = next((o for o in outs if o["t"] >= t_switch and (o["valence"] or 0) >= 0.3
+                    and (o["fixture"], o["action"]) not in old), None)
+        return None if hit is None else (hit["t"], hit["fixture"], hit["action"])
+    good = [e for e in events if e.get("response") == "yellow"]
+    old = {(e["fixture"], e["trigger"]) for e in good if e["time"] < t_switch}
+    hit = next((e for e in good if e["time"] >= t_switch and (e["fixture"], e["trigger"]) not in old), None)
+    return None if hit is None else (hit["time"], hit["fixture"], hit["trigger"])
+
+
 def reversal_table(runs):
     rows = []
     for base, seed, result, _ in runs:
@@ -429,14 +447,10 @@ def reversal_table(runs):
         if not sw:
             rows.append([base, seed, "no switch", "—", "—", "—"])
             continue
-        after = [o for o in p.get("outcomes", []) if o["t"] >= sw["t"]]
-        before = [o for o in p.get("outcomes", []) if o["t"] < sw["t"]]
-        old = {(o["fixture"], o["action"]) for o in before if (o["valence"] or 0) >= 0.3}
-        first_new = next((o for o in after if (o["valence"] or 0) >= 0.3 and (o["fixture"], o["action"]) not in old),
-                         None)
+        first_new = first_new_rewarding(p, sw["t"])
         rows.append([base, seed, f"{sw['t']:.0f}", sw["outcomes_before"],
-                     "never" if first_new is None else f"{first_new['t'] - sw['t']:.0f} s "
-                     f"({first_new['fixture']}/{first_new['action']})",
+                     "never" if first_new is None else f"{first_new[0] - sw['t']:.0f} s "
+                     f"({first_new[1]}/{first_new[2]})",
                      "yes" if first_new else "no"])
     return table(["experiment", "seed", "switch at s", "outcomes before", "first useful new option", "adapted"],
                  rows)

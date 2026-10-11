@@ -155,14 +155,16 @@ def apply_turn_preset(cfg, name):
     return cfg
 
 
-def choose_recovery(*, loss_reason, last_command, nudge_retrace, turning_clearance, required_clearance, certified):
+def choose_recovery(*, loss_reason, last_command, nudge_retrace, turning_clearance, required_clearance, certified,
+                    blocked=False):
     """Bounded recovery after localisation was lost (pure; unit-tested).
 
     * a nudge in progress: retrace its straight approach;
     * vision disagreed with a forward command (``visual_motion_inconsistent_with_
-      commands``): the robot may be pressing on something it cannot see, so back
-      straight off by 10 cm along the path just driven and wait. Never rotate: round 5
-      rotated in place against a box for 18 s;
+      commands``), or the wheels show the robot blocked (``blocked``: commanded forward
+      travel not made without slip, judged without vision): the robot may be pressing
+      on something it cannot see, so back straight off by 10 cm along the path just
+      driven and wait. Never rotate: round 5 rotated in place against a box for 18 s;
     * otherwise rotate in place only if the last good pose was certified free AND
       nothing occupied (map or guard-asserted) lies within the turning circle;
     * else wait for the operator.
@@ -170,7 +172,7 @@ def choose_recovery(*, loss_reason, last_command, nudge_retrace, turning_clearan
     if nudge_retrace is not None:
         return {"kind": "retrace", "remaining": min(nudge_retrace + 0.02, 0.45)}
     v = last_command[0] if last_command else 0.0
-    if loss_reason == "visual_motion_inconsistent_with_commands" and v > 0.02:
+    if (loss_reason == "visual_motion_inconsistent_with_commands" or blocked) and v > 0.02:
         return {"kind": "back_off", "remaining": 0.10}
     if certified and turning_clearance is not None and turning_clearance >= required_clearance:
         return {"kind": "rotate"}
@@ -757,7 +759,9 @@ class RobotRuntime:
             loss_reason=None if self.last_track is None else self.last_track.reason,
             last_command=self.last_command, nudge_retrace=retrace,
             turning_clearance=clearance, required_clearance=self.planner.cfg.footprint_radius + self.nav.cfg.turn_margin,
-            certified=pose is not None and bool(self.planner.traversable_xy(self.grid, np.asarray(pose[:2])[None])[0]))
+            certified=pose is not None and bool(self.planner.traversable_xy(self.grid, np.asarray(pose[:2])[None])[0]),
+            blocked=self.odo is not None and self.slam.cfg.odo_blocked_check
+            and self.slam.blocked_by_odometry(self.now, window=0.5))
 
     def _recovery_step(self, now):
         plan = self.recovery_plan
@@ -774,6 +778,16 @@ class RobotRuntime:
             plan["kind"] = "wait"
             return 0.0, 0.0
         if plan["kind"] == "rotate":
+            # With the gyro: a turn that does not happen (pressed against something) is
+            # stopped rather than continued (round 5: 18 s rotating against a box).
+            step = self.last_odometry
+            if self.odo is not None and step is not None and step.rotation_source == "gyro":
+                plan["cmd_rot"] = plan.get("cmd_rot", 0.0) + 0.35 * step.dt
+                plan["rot"] = plan.get("rot", 0.0) + step.dth
+                if plan["cmd_rot"] >= 0.35 * 1.2 and abs(plan["rot"]) < 0.25 * plan["cmd_rot"]:
+                    plan["kind"] = "wait"
+                    plan["reason"] = "rotation_blocked"
+                    return 0.0, 0.0
             return 0.0, 0.35
         return 0.0, 0.0
 

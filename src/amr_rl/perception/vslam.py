@@ -349,6 +349,14 @@ class VSLAMConfig:
     odo_max_prediction_s: float = 4.0   # dead reckoning on odometry (bounded by the sigmas below)
     odo_max_heading_sigma_deg: float = 4.0
     odo_freeze_ratio: float = 0.25
+    # Blocked check (2026-10-11): with odometry the frozen-estimate check measures travel
+    # with the encoders, so wheels stalled against an obstacle the camera does not see
+    # (no counts) or spinning on it (slip-flagged, excluded) never trigger it, and the
+    # contact back-off (runtime choose_recovery) never starts. This also compares vision
+    # with the robot's own COMMANDED forward travel over freeze_window, as the
+    # camera-only robot does: commanded >= freeze_min_cmd and vision < odo_freeze_ratio
+    # of it -> "blocked" (a motion-consistency loss, so the robot backs off).
+    odo_blocked_check: bool = True
     odo_angular_check: float = 0.35     # rad + odo_angular_rel x |rotation|: vision vs gyro over the window
     odo_angular_rel: float = 0.25
     # Gyro scale from vision: a full in-place turn that returns to the same view
@@ -543,6 +551,8 @@ class PlanarVSLAM:
         self._last_quality = (0, 0.0)
         self.distance_travelled = 0.0
         self._odo = None          # odometry step of the current frame (fusion mode)
+        self._raw_cmd = None      # the robot's own command this frame (odometry replaces ``commanded``)
+        self._proprio_win = []    # (t, commanded forward travel, encoder travel not flagged as slip) per frame
         self._cov = None          # fused pose covariance (world frame), fusion mode only
         self._vision_pose = None  # last vision-only pose (fusion mode)
         self._odo_acc = None      # (relative motion, covariance, keyframe id, heading drift) since the newest keyframe
@@ -821,6 +831,14 @@ class PlanarVSLAM:
         self._now = timestamp
         odo = odometry if (odometry is not None and self.cfg.odo_fusion and dt > 0) else None
         self._odo = odo
+        self._raw_cmd = commanded
+        if odo is not None:
+            self._proprio_win.append((timestamp, 0.0 if commanded is None else abs(float(commanded[0])) * dt,
+                                      0.0 if odo.slip else float(odo.distance)))
+            while self._proprio_win and timestamp - self._proprio_win[0][0] > self.cfg.freeze_window + 1e-9:
+                self._proprio_win.pop(0)
+        else:
+            self._proprio_win.clear()
         if odo is not None:
             commanded = odo.as_command()  # measured (v, w) in place of the command
         self._wm_delta = None
@@ -1044,7 +1062,7 @@ class PlanarVSLAM:
         start of the consistency window. Landmarks created since then were placed from
         wrong poses (they would pull relocalisation back to the frozen pose), so they
         are removed; relocalisation is gated by dead reckoning from the window start."""
-        self._arm_dead_reckoning(t, remove_landmarks=True, frozen=self.inconsistency == "frozen")
+        self._arm_dead_reckoning(t, remove_landmarks=True, frozen=self.inconsistency in ("frozen", "blocked"))
 
     def _arm_dead_reckoning(self, t, *, remove_landmarks, frozen=False):
         """On any loss of tracking: anchor dead reckoning at the oldest pose of the
@@ -1096,8 +1114,10 @@ class PlanarVSLAM:
             while self._motion_log and t - self._motion_log[0][0] > self.cfg.consistency_window:
                 self._motion_log.pop(0)
             return self._odometry_consistent(t, modelled=True)
-        if odo is not None:  # measured: signed wheel travel, gyro rotation; slip marked
-            self._motion_log.append((t, np.asarray(pose, float).copy(), v * dt, odo.dth, bool(odo.slip)))
+        if odo is not None:  # measured: signed wheel travel, gyro rotation; slip marked; commanded travel
+            raw = self._raw_cmd
+            cmd_travel = 0.0 if raw is None else abs(float(raw[0])) * dt
+            self._motion_log.append((t, np.asarray(pose, float).copy(), v * dt, odo.dth, bool(odo.slip), cmd_travel))
         else:
             self._motion_log.append((t, np.asarray(pose, float).copy(), v * dt, w * dt))
         while self._motion_log and t - self._motion_log[0][0] > self.cfg.consistency_window:
@@ -1137,6 +1157,10 @@ class PlanarVSLAM:
             vis = float(np.hypot(*(recent[-1][1][:2] - recent[0][1][:2])))
             if travel >= cfg.freeze_min_cmd and vis < cfg.odo_freeze_ratio * travel:
                 self.inconsistency = "frozen"
+                return False
+            cmd = sum(e[5] for e in recent[1:] if len(e) > 5)
+            if cfg.odo_blocked_check and cmd >= cfg.freeze_min_cmd and vis < cfg.odo_freeze_ratio * cmd:
+                self.inconsistency = "blocked"
                 return False
         if len(log) < 10 or t - log[0][0] < 0.8 * cfg.consistency_window:
             return True
@@ -1295,10 +1319,35 @@ class PlanarVSLAM:
         self.position_sigma = max(xy, self.cfg.sigma_floor)
         self.heading_sigma = float(math.sqrt(max(self._cov[2, 2], 0.0))) + 0.001
 
+    def blocked_by_odometry(self, t, window=None):
+        """Without vision: commanded forward travel over ``window`` (freeze_window) that
+        the wheels did not make without slipping (stalled, or spinning on an obstacle).
+        On a slippery floor while vision is out this also fires; stopping is safe."""
+        cfg = self.cfg
+        window = cfg.freeze_window if window is None else window
+        recent = [e for e in self._proprio_win if t - e[0] <= window + 1e-9]
+        if len(recent) < 3 or t - recent[0][0] < 0.8 * window:
+            return False
+        cmd = sum(e[1] for e in recent[1:])
+        travel = sum(e[2] for e in recent[1:])
+        return cmd >= cfg.freeze_min_cmd * window / cfg.freeze_window and travel < cfg.odo_freeze_ratio * cmd
+
     def _predict_odometry(self, odo, t):
         """No visual fix this frame: dead-reckon on the measured motion with the
-        propagated covariance; LOST when the time or the uncertainty limits are hit."""
+        propagated covariance; LOST when the time or the uncertainty limits are hit,
+        or at once when the wheels show the robot is blocked (contact back-off)."""
         cfg = self.cfg
+        if cfg.odo_blocked_check and self.blocked_by_odometry(t):
+            self.inconsistency = "blocked"
+            self._on_frozen(t)
+            self.status = LOST
+            self.position_sigma = self.heading_sigma = None
+            self.velocity[:] = 0
+            self._motion_log.clear()
+            self._turn, self._turn_count = None, 0
+            self._cov = None
+            self._reset_vision_refs()
+            return TrackResult(LOST, None, None, None, 0, 0, False, t, "visual_motion_inconsistent_with_commands")
         cov = self._cov if self._cov is not None else np.diag([
             (self.position_sigma or cfg.sigma_floor) ** 2, (self.position_sigma or cfg.sigma_floor) ** 2,
             (self.heading_sigma or 0.002) ** 2])
