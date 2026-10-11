@@ -132,3 +132,69 @@ A review of the round-9 records against the evidence found these deviations from
 9. **Run length and units.** No validation run was longer than 7 minutes, so the thermal warm-up (τ up to 900 s) was only partly exercised. L1, slip and L3 used IMU unit 1 only.
 
 Every later change to the default is validated afresh on untouched starts, under its own pre-registration (addendum E).
+
+## Addendum E: re-validation of the default on untouched starts (written 2026-10-11, before any run)
+
+**Why.** Addendum D and [r9-followup.md](r9-followup.md) list what changed after adoption:
+- defects in the adopted default were fixed: sensor-gap re-integration, the IMU-missing heading, vision windows that never completed, the boot hold;
+- the loop-closure odometry guard and the blocked-robot check were added;
+- the simulator's caster contact was corrected.
+
+The correction changes the physics, so **every earlier number, in both arms, is under the old model**. Validations 2–4 also shared their starts, so this validation measures the current default afresh.
+
+**Candidate R9g** is `RuntimeConfig.odometry = "imu_encoders"` with every default frozen at the commit that adds this addendum:
+- the 2026-10-11 fixes;
+- `loop_odo_guard="heading"`;
+- `odo_blocked_check=True`;
+- the vision offset feedback off (`odo_bias_feedback=False`);
+- the straight-driving offset update off (`zaru=False`);
+- the stop policy unchanged (natural stops; a recalibration stop after 2 minutes or a 1 °C change, only if the offset is uncertain).
+
+Development (spent seeds 0–4, six scenarios, fixed physics; `work/evidence/r9g-dev-20261011/`) chose these switches: the base candidate averaged a maximum heading error of 1.02° (worst 1.31°), ATE 1.34 cm, no lost frames and 1.7 recalibration stops (about 3.5 s) per 7 minutes. Adding the straight-driving update gave 1.25° (1.94°); adding the vision windows gave 3.63° (10.4°) with 5 % of frames lost; both together gave 2.90° (9.39°). Camera only gave 13.6° (37.0°), ATE 9.2 cm, 19 % lost.
+
+**Baseline.** `odometry = "command"` (the camera-only robot) at the same commit and in the same physics.
+
+**Physics.** The corrected caster contact (the default world model since 5cd6db9), in both arms.
+
+**Untouched starts.**
+- Map builds and navigation use seeds 10–14 with `--heading-offset 18`: start headings 18°, 90°, 162°, 234° and 306°. They differ from every earlier start (0°, 72°, …; 36°, 108°, …; and the shadow builds' 54°, 126°, 198°).
+- The seeds' random streams (sensor noise, IMU power-on offset) were never used.
+- Learning keeps its five fixed starts, so L5 is not on untouched starts.
+
+### Checks
+
+Each check runs once, from a pinned worktree, paired (same commit, worlds and seeds). All checks are run, whatever the earlier ones show. Nothing is tuned on these starts.
+
+**Required checks**
+
+| Check | Runs | Pass if |
+|---|---|---|
+| L1 | coverage builds (`build_map.py --seconds 420 --coverage-seconds 150`): arena, arena_textured, home_a, heldout_b, heldout_c × seeds 10–14; 25 pairs | P1–P5 as pre-registered above |
+| L1-slip | `floor_friction=0.06` on arena and home_a × seeds 10–12 (6 pairs); two slip patches of friction 0.03 at the earlier positions on arena × seeds 10–12 (3 pairs) | P1 and P5 against the paired baseline; the slip detector fires in the patch runs |
+| L3 | navigation (`navigation.py --heading-offset 18`): home_a, heldout_b, heldout_c, home_a_dim × seeds 10–12; 12 pairs | supported goals reached at least baseline − 1 (pooled); contact episodes not up |
+| F | arena and home_a × seed 10, IMU arm with each fault (8 runs), against the L1 baseline on the same start | no crash; P5 holds; max heading error not above the paired camera-only run |
+
+Faults for F:
+- IMU dropouts of 0.5 s every 30 s from 20 s;
+- encoder dropouts of 0.5 s every 30 s from 20 s;
+- the left encoder stuck for 5 s at 60 s and at 200 s;
+- both sensors silent for 2 s at 100 s and at 250 s.
+
+**Reported checks** (not required)
+
+| Check | Runs | Reported |
+|---|---|---|
+| L1-long | 1800 s builds (coverage pass in the last 150 s): arena, home_a, heldout_c × seed 10; 3 pairs | max heading error per 5-minute window, recalibration stops (count, duration), ATE. Indicative only: P2 (no run above 15°) and P5 |
+| B | navigation with the near-field guard off (`--runtime near_field_guard=false`) on the four L3 rooms × seed 10; 4 pairs | contact episodes and their duration in the moved-obstacle test; whether a back-off followed. Compared with the camera-only arm |
+| U | units 2–5 with their calibrations (`imu-unit<n>.yaml`, sensor properties unaffected by the physics change), arena and home_a × seed 11; 8 runs. Unit 4 also with the datasheet prior only (2 runs) | P1 per run against the L1 baseline on the same start |
+| L5 | learning, as pre-registered above (arena_textured, starts 0–2, a map built by each arm) | drift events per 100 turns, outcomes |
+
+**Statistics.** As above: paired medians with BCa bootstrap 95 % intervals; drift-event rates pooled per arm. Also reported for L1:
+- the strata promised by the round-9 plan (motion class, turn-rate band);
+- per-turn scale error;
+- false and genuine losses;
+- recalibration stops per run.
+
+**Decision rule.**
+- **If all four required checks pass:** R9g stays the default and the round-9 claims are restated from this validation.
+- **If any required check fails:** the failure is documented, the claims are scoped to what passed, and any fix gets its own development on spent seeds and its own pre-registered validation on new starts.

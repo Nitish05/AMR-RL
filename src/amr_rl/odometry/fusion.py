@@ -48,9 +48,11 @@ class OdometryConfig:
     zupt_quiet_frames: int = 3
     zupt_floor: float = 0.005 * DPS  # rad/s per frame: residual creep, not averaged away
     zupt_gyro_gate: float = 0.03     # rad/s: |gyro_z - bias| above this is not still
-    # Zero-rotation update while driving straight. OFF: in simulation the chassis skids
-    # (0.1-0.3 dps of yaw with equal wheel travel; up to ~2 dps just after starting off),
-    # and one accepted window shifted the offset 0.08 dps (development run: 14 deg).
+    # Zero-rotation update while driving straight. OFF: in simulation the chassis skidded
+    # (0.1-0.3 dps of yaw with equal wheel travel), and one accepted window shifted the
+    # offset 0.08 dps (development run: 14 deg). That skid was the caster dragging at the
+    # floor's friction (fixed 2026-10-11); re-tested on the corrected model (6 scenarios):
+    # mean max heading error 1.25 deg against 1.02 without, 1.5 against 1.7 stops. No gain.
     zaru: bool = False
     zaru_max_frame_yaw: float = 0.003  # rad of encoder yaw per frame: "driving straight"
     zaru_window_s: float = 2.0

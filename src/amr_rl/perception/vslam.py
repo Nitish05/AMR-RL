@@ -181,8 +181,11 @@ class VSLAMConfig:
     # residual exceeds loop_odo_k sigma; full: also a 3-DoF Mahalanobis test.
     # Uncertainty: the chain's covariance plus the correlated terms it treats as
     # independent (gyro offset sigma x time, scale sigma x rotation) and the loop
-    # pose's own heading error (loop_odo_loop_deg).
-    loop_odo_guard: str = "off"
+    # pose's own heading error (loop_odo_loop_deg). "heading" since 2026-10-11: on a replay
+    # of validation 4's worst run it rejects the false closure (12.6 sigma) and passes the
+    # three true ones; 0 of 32 true constraints rejected in 15 shadow builds
+    # (docs/results/r9-followup.md). In re-validation (pre-registration addendum E).
+    loop_odo_guard: str = "heading"
     loop_odo_k: float = 3.0
     loop_odo_loop_deg: float = 0.5
     loop_odo_chi2: float = 16.27       # 3 degrees of freedom, 99.9 %
@@ -375,8 +378,10 @@ class VSLAMConfig:
     # Gyro offset from vision, one measurement per 15-90 s window (``_bias_window``). Off:
     # until 2026-10-11 the window was restarted whenever the temperature-compensated
     # offset changed, i.e. every frame, so no window ever completed (validation 4 ran
-    # without this feedback). Fixed (restarts only on a real re-measurement of the
-    # offset, a map correction or a tracking gap) but not yet evaluated.
+    # without this feedback). Fixed, then evaluated (development, 6 scenarios): mean max
+    # heading error 3.6 deg against 1.0 without, worst 10.4, 5 % of frames lost. The
+    # windows measure the map's heading inconsistency between regions, not the gyro
+    # offset, and their confident updates also suppressed the recalibration stops.
     odo_bias_feedback: bool = False
     odo_bias_max_rate: float = 0.25     # rad/s: window ends only while turning slower than this
     odo_bias_window_min: float = 15.0   # s
