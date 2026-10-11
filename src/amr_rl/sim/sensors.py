@@ -159,6 +159,7 @@ class ProprioSensors:
         self._dofs = None
         self._tick = 0
         self._imu: list[ImuSample] = []
+        self._stuck: dict = {}
         self._enc: list[EncoderSample] = []
 
     def attach(self, scene, robot):
@@ -173,17 +174,41 @@ class ProprioSensors:
         """After ``scene.build()``: resolve the wheel joints."""
         self._dofs = [self._robot.get_joint(n).dofs_idx_local[0] for n in ("left_wheel_joint", "right_wheel_joint")]
 
+    def _off(self, name, t):
+        """EVALUATION FAULTS: ``<name>_off`` (whole run), ``<name>_off_windows``
+        ([[t0, t1], ...] in sim seconds) or ``<name>_dropouts`` ({start, period, duration}:
+        a dropout of ``duration`` every ``period`` from ``start``)."""
+        f = self.faults
+        if f.get(f"{name}_off"):
+            return True
+        if any(a <= t < b for a, b in f.get(f"{name}_off_windows", ())):
+            return True
+        d = f.get(f"{name}_dropouts")
+        if d and t >= float(d.get("start", 0.0)):
+            return (t - float(d.get("start", 0.0))) % float(d["period"]) < float(d["duration"])
+        return False
+
     def sample(self, t: float):
         self._tick += 1
-        if self._tick % self.imu_every == 0 and not self.faults.get("imu_off"):
+        if self._tick % self.imu_every == 0:
             r = self._imu_sensor.read()
             omega = np.asarray(r.ang_vel, float).reshape(3)
             f = np.asarray(r.lin_acc, float).reshape(3)
-            g = self.imu_model.gyro(omega)
-            self._imu.append(ImuSample(t, g, self.imu_model.accel(f), self.imu_model.temperature()))
-        if self._tick % self.enc_every == 0 and not self.faults.get("encoders_off"):
+            g = self.imu_model.gyro(omega)  # the part keeps drifting and warming while its output is lost
+            a, temp = self.imu_model.accel(f), self.imu_model.temperature()
+            if not self._off("imu", t):
+                self._imu.append(ImuSample(t, g, a, temp))
+        if self._tick % self.enc_every == 0:
             q = np.asarray(self._robot.get_dofs_position(self._dofs), float).reshape(2)
-            self._enc.append(EncoderSample(t, self.encoders[0].count(float(q[0])), self.encoders[1].count(float(q[1]))))
+            counts = [self.encoders[0].count(float(q[0])), self.encoders[1].count(float(q[1]))]
+            # a stuck channel (connector, broken wire): that wheel's count stops changing
+            for i, side in enumerate(("left", "right")):
+                if self._off(f"{side}_encoder", t):
+                    counts[i] = self._stuck.setdefault(side, counts[i])
+                else:
+                    self._stuck.pop(side, None)
+            if not self._off("encoders", t):
+                self._enc.append(EncoderSample(t, counts[0], counts[1]))
 
     def drain(self) -> ProprioBatch:
         batch = ProprioBatch(self._imu, self._enc)

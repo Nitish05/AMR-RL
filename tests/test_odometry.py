@@ -621,3 +621,16 @@ def test_reversal_scorer_uses_true_panel_events():
     table = report.reversal_table([("reversal_late", 0, {"phases": [{**phase, "world_events": [
         {"time": 447.0, "fixture": "stone", "trigger": "signal", "response": "yellow"}]}]}, None)])
     assert "| yes |" in table
+
+
+def test_time_windowed_and_periodic_sensor_faults():
+    from amr_rl.sim.sensors import ProprioSensors
+
+    s = ProprioSensors.__new__(ProprioSensors)
+    s.faults = {"imu_off_windows": [[10.0, 10.5]], "encoders_dropouts": {"start": 30.0, "period": 60.0, "duration": 2.0},
+                "left_encoder_off_windows": [[5.0, 6.0]]}
+    assert not s._off("imu", 9.99) and s._off("imu", 10.0) and s._off("imu", 10.49) and not s._off("imu", 10.5)
+    assert not s._off("encoders", 29.0) and s._off("encoders", 31.0) and not s._off("encoders", 33.0)
+    assert s._off("encoders", 91.5) and s._off("left_encoder", 5.5) and not s._off("right_encoder", 5.5)
+    s.faults = {"imu_off": True}
+    assert s._off("imu", 0.0) and not s._off("encoders", 0.0)

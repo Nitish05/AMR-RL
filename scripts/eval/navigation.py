@@ -258,11 +258,13 @@ def fault_test(session, log, seed, fault, *, blackout=None, obstacle=False, min_
 
 def evaluate_world(name, out_root, map_seconds, seed, loop_closure=True, turn_preset="none"):
     """Seed 0 uses the configured start; seed k turns the start heading by k x 72 deg
-    (same position, so the start stays valid in every room)."""
+    (same position, so the start stays valid in every room) plus ``--heading-offset``
+    (fresh evaluation starts: seeds k and k + 5 share a heading otherwise)."""
     run_dir = out_root / (name if seed == 0 else f"{name}-s{seed}")
     cfg = load_world_config(name)
     start = list(cfg["robot_start"])
-    start[2] = float(start[2] + seed * 2 * math.pi / 5)
+    offset = 0.0 if RUNTIME_ARGS is None else math.radians(getattr(RUNTIME_ARGS, "heading_offset", 0.0))
+    start[2] = float(start[2] + seed * 2 * math.pi / 5 + offset)
     config = RuntimeConfig(supervisor=SupervisorConfig(require_heartbeat=False), policy="explore_only", seed=seed,
                            place_descriptor="megaloc" if loop_closure else None)
     if RUNTIME_ARGS is not None:
@@ -398,6 +400,8 @@ def main():
     parser.add_argument("--out", default=None)
     parser.add_argument("--no-loop-closure", action="store_true", help="A/B: run without loop closure")
     parser.add_argument("--turn-preset", default="none", help="A/B: named turn-handling preset (vslam.TURN_PRESETS)")
+    parser.add_argument("--heading-offset", type=float, default=0.0,
+                        help="extra start heading (deg) on top of seed x 72 deg (fresh evaluation starts)")
     add_runtime_args(parser)
     args = parser.parse_args()
     global RUNTIME_ARGS
