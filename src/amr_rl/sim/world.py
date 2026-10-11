@@ -45,6 +45,11 @@ class Frame:
     calibration_version: str = ""
 
 
+# Loose objects' own friction. 1.0 is what their floor contact has always had (the old
+# floor's 1.0 won the max over their former 0.6), so object behaviour is unchanged.
+LOOSE_FRICTION = 1.0
+
+
 def _require_display():
     """macOS renders through a window-system context: with the display asleep pyglet
     finds no screen and Genesis fails deep inside with an IndexError. Fail early and
@@ -124,10 +129,19 @@ class SimWorld:
             for item in light.get("points", [])
         ]
         ambient = float(light.get("ambient", 0.3))
+        # EVALUATION / diagnostics only: contact-model and solver variants (round-9 follow-up:
+        # Genesis gives a contact the larger of the two surfaces' frictions, so the caster
+        # meant to slide at 0.02 drags at the floor's 1.0). Keys: substeps, friction_cone
+        # (pyramidal | elliptic), plane_friction, wheel_armature.
+        phys = dict(cfg.get("physics") or {})
+        self.physics = phys
+        rigid_kw = {"enable_self_collision": False}
+        if "friction_cone" in phys:
+            rigid_kw["friction_cone"] = getattr(gs.friction_cone, str(phys["friction_cone"]))
         self.scene = gs.Scene(
             show_viewer=show_viewer,
-            sim_options=gs.options.SimOptions(dt=self.dt, substeps=1),
-            rigid_options=gs.options.RigidOptions(enable_self_collision=False),
+            sim_options=gs.options.SimOptions(dt=self.dt, substeps=int(phys.get("substeps", 1))),
+            rigid_options=gs.options.RigidOptions(**rigid_kw),
             vis_options=gs.options.VisOptions(
                 ambient_light=(ambient,) * 3, lights=lights, shadow=bool(light.get("shadow", True)),
                 background_color=(0.05, 0.05, 0.06),
@@ -145,11 +159,24 @@ class SimWorld:
                                            palette=palette)
             assets.export_glb(assets.textured_quad(lx + 2 * wall_t, ly + 2 * wall_t, image), floor_path, y_up=True)
         self.entity_names = {}
-        if "floor_friction" in cfg:  # EVALUATION: a slippery floor everywhere (polished, wet)
-            plane = self.scene.add_entity(gs.morphs.Plane(visualization=False),
-                                          material=gs.materials.Rigid(friction=float(cfg["floor_friction"])))
+        # Genesis gives a contact the LARGER of the two surfaces' frictions, so the floor
+        # carries the lowest friction of anything meant to slide on it (the robot's ball
+        # caster, spec caster.friction) and every other body brings its own (wheels 1.2,
+        # loose objects 1.0). Until 2026-10-11 the floor kept Genesis's default 1.0, so the
+        # caster dragged at 1.0: the wheels rolled ~11 % short of their radius and the
+        # chassis yawed 1-6 dps (heading-dependent: the pyramidal friction cone is aligned
+        # with the world axes) with equal wheel speeds (drive physics probe,
+        # docs/results/heading-r9.md). physics.legacy_floor reproduces that model.
+        if phys.get("legacy_floor"):
+            mu_floor = float(cfg["floor_friction"]) if "floor_friction" in cfg else None
         else:
-            plane = self.scene.add_entity(gs.morphs.Plane(visualization=False))
+            mu_floor = float(self.spec.caster["friction"])
+            if "floor_friction" in cfg:  # EVALUATION: a slippery floor everywhere (polished, wet)
+                mu_floor = min(mu_floor, float(cfg["floor_friction"]))
+        mu_floor = float(phys.get("plane_friction", mu_floor)) if "plane_friction" in phys else mu_floor
+        self.floor_friction = 1.0 if mu_floor is None else mu_floor
+        plane = self.scene.add_entity(gs.morphs.Plane(visualization=False), **(
+            {} if mu_floor is None else {"material": gs.materials.Rigid(friction=mu_floor)}))
         # EVALUATION: slippery patches (spilt liquid, a smooth mat) as 1 mm plates of their
         # own friction, invisible to the camera.
         for item in cfg.get("slip_patches", []):
@@ -242,13 +269,13 @@ class SimWorld:
                     assets.export_glb(assets.textured_sphere(radius, image), path, y_up=True)
                 entity = self.scene.add_entity(
                     gs.morphs.Mesh(file=str(path), pos=(*item["pos"], radius + 0.001)),
-                    material=gs.materials.Rigid(rho=float(item.get("density", 120.0)), friction=0.6),
+                    material=gs.materials.Rigid(rho=float(item.get("density", 120.0)), friction=LOOSE_FRICTION),
                 )
             elif item["shape"] == "sphere":
                 radius = float(item["size"][0]) / 2
                 entity = self.scene.add_entity(
                     gs.morphs.Sphere(radius=radius, pos=(*item["pos"], radius + 0.001)),
-                    material=gs.materials.Rigid(rho=float(item.get("density", 120.0)), friction=0.6),
+                    material=gs.materials.Rigid(rho=float(item.get("density", 120.0)), friction=LOOSE_FRICTION),
                     surface=gs.surfaces.Default(color=assets.PAINTS[item["paint"]][:3]),
                 )
             else:
@@ -301,6 +328,9 @@ class SimWorld:
         from ..control.genesis_backend import GenesisWheelBackend
 
         self.backend = GenesisWheelBackend(self.robot, spec)
+        if "wheel_armature" in phys:
+            a = float(phys["wheel_armature"])
+            self.robot.set_dofs_armature([a, a], self.backend._dofs)
         # EVALUATION FAULT INJECTION (world side): floor regions where the wheels lose
         # grip. Genesis combines contact friction as the larger of the two surfaces'
         # values, so besides the patch plate (above) a wheel's own friction is lowered
