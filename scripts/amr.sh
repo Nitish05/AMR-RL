@@ -15,7 +15,14 @@ case "$cmd" in
     # Isolated environment for AMR-RL only (does not touch BB8-RL or Studio envs).
     python3.12 -m venv "$ROOT/.venv"
     "$ROOT/.venv/bin/python" -m pip install --upgrade pip
-    "$ROOT/.venv/bin/python" -m pip install -e ".[simulation,dev,depth,place]"
+    # On the platform the evidence was produced on, install the exact versions (lock).
+    # The optional open-vocabulary detector needs the "perception" extra as well.
+    LOCK="$ROOT/requirements/lock-macos-arm64-py3.12.txt"
+    if [[ "$(uname -sm)" == "Darwin arm64" && -f "$LOCK" ]]; then
+      "$ROOT/.venv/bin/python" -m pip install -c "$LOCK" -e ".[simulation,dev,depth,place]"
+    else
+      "$ROOT/.venv/bin/python" -m pip install -e ".[simulation,dev,depth,place]"
+    fi
     ;;
   bench-setup)
     # Light environment for the learner testbed only (no Genesis, no torch): .venv-bench.
@@ -75,6 +82,11 @@ case "$cmd" in
   test-sim)
     RUN_GENESIS=1 "$PY" -m pytest -q -p no:cacheprovider -m genesis "$@"
     ;;
+  batch)
+    # Parallel evaluation jobs from a jobs file (scripts/eval/batch.py: concurrency cap,
+    # caffeinate on macOS, retries, failed logs kept).
+    "$PY" scripts/eval/batch.py "$@"
+    ;;
   generate-robot)
     "$PY" -m amr_rl.robot.generate "$@"
     ;;
@@ -91,6 +103,6 @@ case "$cmd" in
     "$PY" scripts/eval/learning.py "$@"
     ;;
   *)
-    echo "usage: scripts/amr.sh {setup|bench-setup|bench-test|learner-bench|fetch-depth-model|fetch-place-model|fetch-detector-model|fetch-vlm-model|test|test-sim|generate-robot|app|map|eval-nav|eval-learning} [args]"
+    echo "usage: scripts/amr.sh {setup|bench-setup|bench-test|learner-bench|fetch-depth-model|fetch-place-model|fetch-detector-model|fetch-vlm-model|test|test-sim|batch|generate-robot|app|map|eval-nav|eval-learning} [args]"
     ;;
 esac
