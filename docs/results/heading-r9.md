@@ -235,11 +235,153 @@ Every required pre-registered check passes: L1, L1-slip, L3 and F. **`RuntimeCon
 - no vision offset feedback (inactive by a defect);
 - L5 not run.
 
-A re-validation on untouched starts follows the 2026-10-11 fixes.
+A re-validation on untouched starts follows the 2026-10-11 fixes (validation 5 below).
 
 **Not yet evaluated in closed loop** (switches off):
 - WS1 wheel model;
 - WS2 command-model odometry (used as the fallback when no samples arrive);
 - WS4 depth floor mask;
-- WS5 view-aware turns;
-- the loop-closure heading guard above.
+- WS5 view-aware turns.
+
+The loop-closure heading guard is on in R9g and was part of validation 5.
+
+## Validation 5: R9g (aa143e3) on untouched starts, corrected physics (2026-10-11)
+
+Pre-registration addendum E. What R9g is: the default above, plus the 2026-10-11 fixes, the loop-closure odometry guard and the blocked-robot check ([r9-followup.md](r9-followup.md)). The simulator's caster contact was corrected first, so both arms ran under the new physics.
+- **Starts:** seeds 10–14 with heading offset 18°, never used before.
+- **Runs:** 124 jobs from the pinned worktree `work/wt/r9g-val-aa143e3`, 8 at a time, none failed.
+- **Evidence:** `work/evidence/r9g-val-20261011/`, scored by `analysis/val5.json` and `analysis/{L1,S1,S2,long}.json`.
+
+**A property of the baseline that matters for P4.** `build_map.py` ends a build after the operator has re-enabled autonomy 6 times; this rule has been there since the first commit (2026-09-30). Camera-only builds hit it often:
+- L1: 5 of 25 runs ended early (95–372 s of 420 s);
+- slip: 4 of 9;
+- 30-minute builds: all 3 (140–466 s).
+
+The IMU arm hit it once (slip patch, arena s10, 178 s). An early-ended run's ATE covers only the path it drove and the frames it tracked.
+
+**L1, 25 pairs:**
+
+| Metric | Camera only | R9g | Paired median Δ (95 % CI) |
+|---|---|---|---|
+| Max heading error per run, median (worst) | 17.3° (59.4°) | **1.38° (2.41°)** | −15.6° (−19.4, −6.2) |
+| Drift events per 100 in-place turns | 6.72 (96 / 1428) | **0 (0 / 1764)** | — |
+| ATE median (worst) | 6.70 cm (53.0) | **2.13 cm (6.35)** | −3.97 cm (−9.26, −1.17); worst pair **+5.03 cm** |
+| Keyframe map RMSE median | 6.96 cm | 2.00 cm | −5.46 cm (−10.65, −1.32) |
+| Lost fraction, mean (max) | 20.9 % (73.1 %) | **0.25 % (6.2 %)** | — |
+| Losses: false / genuine | 24 / 50 | 1 / 0 | — |
+| In-place turn scale (estimated / true), median of run medians | 1.0032 | 1.0004 | — |
+| Recalibration stops per run | — | 2.0 (max 3), 3.9 s in total | — |
+
+**Strata** (mean change of heading error per tracked frame, pooled):
+
+| Stratum | Camera only | R9g |
+|---|---|---|
+| Still | 0.118° | 0.0043° |
+| Straight | 0.172° | 0.0025° |
+| Arc | 0.199° | 0.0027° |
+| In-place turn | 0.169° | 0.0024° |
+| Turn rate < 0.15 rad/s | 0.158° | 0.0031° |
+| Turn rate 0.15–0.5 rad/s | 0.164° | 0.0023° |
+| Turn rate ≥ 0.5 rad/s | 0.212° | 0.0029° |
+
+Against the criteria:
+- **P1, P2, P3 pass.**
+- **P5 passes** at the arm level, as judged in validations 1–4: mean 0.25 % against 20.9 %. One pair is above its baseline + 1 pp: arena s14, 0 % → 6.2 %, one 26 s stop after the blocked-robot check fired against a wall (below).
+- **P4 fails on one pair.** heldout_c s11: 0.71 → 5.74 cm.
+  - The camera-only run ended at 174 s, after 6 re-enables. It drove 1.7 m and tracked 516 frames.
+  - The R9g run drove 12.7 m in 420 s without a loss. Its heading error stayed under 2°, and its position error grew to 10.9 cm during long drives into unmapped space between 150 and 210 s, before falling back to 3 cm.
+  - Over the same 174 s, R9g's ATE is 1.98 cm (+1.27 cm). This is a post-hoc observation, not a change of the criterion.
+- The same pattern is behind every P4 failure since validation 2. The two worst pairs of validations 3 and 4 are heldout_c s8 and home_a s5. Their camera-only runs, shared since validation 2, ended at 211 s and 90 s.
+
+**Slip (L1-slip), 9 pairs: pass.**
+
+| Condition | Camera only, max heading median (worst) | R9g | Lost, mean (camera / R9g) |
+|---|---|---|---|
+| Floor friction 0.06, 6 pairs | 5.29° (8.03°) | 1.76° (2.02°) | 29.2 % / 7.2 % |
+| Two patches of friction 0.03, 3 pairs | 4.26° (4.71°) | 1.18° (1.39°) | 73.5 % / 23.9 % |
+
+- P1: pooled median 1.39° against 4.71°.
+- P5: arm-level mean 12.7 % against 43.9 %. One pair is worse: patches, arena s10, 31.9 % → 59.4 %. That IMU run ended at 178 s.
+- The slip detector fires in all patch runs: the yaw check flagged 214, 416 and 638 frames.
+- Every IMU-arm loss here started with the blocked-robot check, while the pose was still within 5 cm of truth: the wheels spun without moving the robot (below).
+
+**Navigation (L3), 12 pairs: pass.**
+
+| | Camera only | R9g |
+|---|---|---|
+| Supported goals reached | 38 / 44 | **45 / 46** |
+| Reach goals reached | 9 / 48 | 19 / 48 |
+| Contact episodes | 0 | 0 |
+| Lens blackout goal: arrived / attempted | 7 / 8 | 12 / 12 |
+| Moved obstacle goal: arrived / attempted | 1 / 7 | 3 / 10 |
+| Mapping ATE | 0.75–11.0 cm | 0.48–5.08 cm |
+
+**Sensor faults (F), arena and home_a, seed 10: pass, all 8 runs.** The camera-only runs on these starts reached 17.3° and 6.3°.
+
+| Fault | arena | home_a |
+|---|---|---|
+| IMU dropouts, 0.5 s every 30 s | 0.67°, 1.3 cm | 1.29°, 0.8 cm |
+| Encoder dropouts, 0.5 s every 30 s | 1.35°, 2.2 cm | 1.36°, 2.8 cm |
+| Left encoder stuck 5 s, twice | 1.21°, 3.3 cm, 0.5 % lost | 1.50°, 3.0 cm |
+| Both sensors silent 2 s, twice | 1.10°, 1.9 cm | 2.65°, 7.5 cm |
+
+With both sensors silent, the command-model fallback ran for 38 frames.
+
+**Reported checks**
+
+**30-minute builds (L1-long), 3 worlds:**
+- **R9g:** worst heading error per 5-minute window:
+  - arena 1.05, 1.20, 1.22, 1.73, 0.89, 0.63°;
+  - home_a 1.46, 1.63, 1.92, 2.49, 2.56, 1.73°;
+  - heldout_c 1.61, 1.56, 0.61, 0.78, 1.68, 1.06°.
+- **ATE:** 3.8, 6.0 and 2.5 cm over 62–74 m of path; no loss.
+- **Stops:** 4–5 recalibration stops per 30 minutes, 7.4–9.9 s in total. The first was triggered by temperature, the rest by the 2-minute rule.
+- **Camera only:** none of the three runs lasted. They ended at 466, 334 and 140 s, reaching 12.8°, 19.2° and 1.5°.
+- **P2 and P5 hold.**
+
+**Blind box (B), near-field guard off, 4 worlds.**
+- **Camera only:** one contact in the moved-obstacle test, home_a, 1.9 s. It backed off at the end of the contact.
+- **R9g:** two contacts, home_a 0.8 s and home_a_dim 1.1 s. Both backed off.
+- **R9g reached the moved obstacle more often:** it attempted the test in all 4 rooms against 2, and arrived in 2.
+- The blocked check shortens a blind contact; it does not prevent one.
+
+**Other IMU units (U):**
+- **Calibrated units 2–5:** 0.63–1.05°. The camera-only runs on these starts reached 11.1° and 19.7°. Pass.
+- **Unit 4 with the datasheet prior only:** 22.5° (arena) and 14.9° (home_a). This fails the reported rule, as in validation 4.
+- Its in-run scale learning reached 0.9977 and 0.9922; the true scale is 0.990. **Units must be calibrated.**
+
+**Learning (L5):** run after this validation; results are in [r9-followup.md](r9-followup.md).
+
+**Loop closures** (scored against truth, all runs of this validation):
+
+| | Camera only, 37 builds | R9g, 63 builds |
+|---|---|---|
+| Closures applied | 120 | 212 |
+| False (> 10 cm or > 5.7°) | 3 | **0** |
+| Rejected by the odometry guard | — | 15 (5 episodes) |
+
+**What the guard rejected:**
+- **13 rejections, 4 episodes, all in arena_textured** (repetitive texture), seeds 11–13. Against truth they were 0.15–0.57 m and 7–32° wrong; every one would have been a false closure.
+- **2 rejections, 1 episode, in the uncalibrated unit-4 run:** a true loop. That gyro's −1 % scale error made the odometry chain disagree with it (3.7°, 3.7σ).
+
+The guard therefore depends on a calibrated gyro, like the rest of the fusion.
+
+**The blocked-robot check stops the robot by declaring the pose lost.** In this validation the IMU arm went from tracking to lost 9 times; 8 of these came from the motion-consistency check.
+- In 6 of the 8, the pose was within 5 cm of truth: the wheels were turning but the robot was not moving. Against a wall in arena s14; on the slippery floor and the patches in the slip runs.
+- By design, the loss starts a 10 cm back-off and then a wait for the operator (round 5: never rotate after a suspected contact). Each such stop lasted about 26 s.
+- On a patch, back-off and retry repeat. S2 arena s10 ended after 6 re-enables.
+- The pose is right in these cases, so declaring it lost is not needed. With encoders that show no slip-free travel agreeing with vision, the robot is blocked, not mislocalised.
+- **Next candidate:** keep the pose, raise "blocked" to the runtime, and back off without relocalising. Like any fix, it needs development on spent seeds and a new pre-registered validation.
+
+### Verdict
+
+- **L1 fails** the pre-registered rule on P4: one pair of 25 is 5.0 cm worse.
+- **L1-slip, L3 and F pass.**
+
+By the decision rule of addendum E:
+- the failure is documented here;
+- the claims are scoped to what passed: heading (P1–P3), losses (P5), slip, navigation and sensor faults on untouched starts;
+- "no pair worse than 3 cm" is **not** claimed; the median map error is lower (−4.0 cm, 95 % CI −9.3 to −1.2).
+- R9g remains the code default; the owner decides whether it stays (as after validation 3).
+
+**For future pre-registrations:** P4 should compare both arms over the span both runs lasted, or count a run that ends early as its own outcome. This is a recommendation for the next pre-registration, not applied here.

@@ -170,3 +170,11 @@ Six spent scenarios (arena s0, s3; arena_textured s2, s4; home_a s1; heldout_b s
 - Against truth, the loop was 5.8 cm and 2.2° wrong. That is below the "false" thresholds (10 cm, 5.7°), but it would have put a 2.2° error into the map.
 
 The re-validation (pre-registration addendum E) uses the base arm.
+
+## 8. Re-validation on untouched starts (addendum E)
+
+The full results are in [heading-r9.md](heading-r9.md#validation-5-r9g-aa143e3-on-untouched-starts-corrected-physics-2026-10-11). In brief:
+- **L1 fails on P4, one pair of 25:** heldout_c s11 is +5.0 cm. Its camera-only run ended at 174 s, at the 6-re-enable limit; over the same span the IMU run was +1.3 cm (post hoc).
+- **Every other required criterion passes,** and so do slip, navigation and the mid-run faults.
+- **The loop-closure guard** rejected 4 false episodes (7–32°, arena_textured); 0 false closures were applied in 63 IMU builds.
+- **The blocked-robot check** shortened blind contacts (back-off 0.8–1.1 s after contact). It also turned every wheel-spin event into a loss with a correct pose, about 26 s each.

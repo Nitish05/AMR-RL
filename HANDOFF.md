@@ -248,7 +248,12 @@ Other open items:
 - IMU + encoder odometry is the **default** (R9e f0748fc plus 811adbc). Validation 4 passed every required check. `docs/results/heading-r9.md` has the full story, including three failed or stopped validations.
 - **Recalibration policy** (owner decisions): the gyro offset is measured at natural stops; if needed, the robot stops after 2 minutes without a measurement or after a 1 °C chip temperature change.
 - **Each IMU unit needs `scripts/calibrate_imu.py` once.** Unit 4 uncalibrated reached 19° of heading error.
-- **Next:**
-  - a loop-closure heading guard using the gyro (one false closure: 12°);
-  - closed-loop evaluation of WS1, WS2, WS4 and WS5.
+- **Next** (2026-10-06): a loop-closure heading guard using the gyro (done 2026-10-11); closed-loop evaluation of WS1, WS2, WS4 and WS5.
+
+### Round 9 re-validation (2026-10-11)
+
+- R9g (aa143e3) = the default plus the 2026-10-11 fixes, the loop-closure odometry guard and the blocked-robot check, under corrected caster physics. Validation 5 on untouched starts (seeds 10–14, offset 18°): `docs/results/heading-r9.md`, evidence `work/evidence/r9g-val-20261011/`.
+- **L1 fails P4 on one pair** (heldout_c s11, +5.0 cm; the camera-only run ended at 174 s). Every other required check passes. The claims are scoped accordingly; whether R9g stays the default is the owner's call (it is the code default).
+- **Next candidate:** when the blocked check fires and vision agrees with the encoders, keep the pose and back off, instead of declaring it lost (about 26 s per event now). Develop on spent seeds; pre-register before validating.
+- **For the next pre-registration:** compare P4 over the span both runs lasted (camera-only builds often end at `build_map.py`'s 6-re-enable limit).
 - **Long runs: keep the Mac's display awake** (`caffeinate -dims`). When the display slept, Genesis' renderer found no screen and 12 jobs failed.

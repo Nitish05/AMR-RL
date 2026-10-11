@@ -198,3 +198,24 @@ Faults for F:
 **Decision rule.**
 - **If all four required checks pass:** R9g stays the default and the round-9 claims are restated from this validation.
 - **If any required check fails:** the failure is documented, the claims are scoped to what passed, and any fix gets its own development on spent seeds and its own pre-registered validation on new starts.
+
+## Outcome of addendum E (2026-10-11)
+
+All 124 runs completed. Details are in [heading-r9.md](heading-r9.md#validation-5-r9g-aa143e3-on-untouched-starts-corrected-physics-2026-10-11).
+
+**L1 fails on P4.** Pair heldout_c s11 is 5.0 cm worse (0.71 → 5.74 cm). Its camera-only run ended at 174 s, after the 6-re-enable limit of `build_map.py`. The other L1 criteria pass:
+- P1: median 1.38° against 17.3°.
+- P2: worst 2.41°.
+- P3: 0 drift events against 96.
+- P5: lost 0.25 % against 20.9 %.
+
+**L1-slip, L3 and F pass.**
+
+**Reported checks:**
+- U: calibrated units pass; uncalibrated unit 4 fails again.
+- L1-long: R9g ≤ 2.56° over 30 minutes. All three camera-only runs ended early.
+- B: back-off after every contact.
+
+As the rule requires, the claims are scoped to what passed. Nothing was tuned on these starts.
+
+**Deviation:** none in the runs. P5 was judged at the arm level, as in validations 1–4. The per-pair exceptions are listed in the results.
