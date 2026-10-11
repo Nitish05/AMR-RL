@@ -36,17 +36,26 @@ mechanics (`sim/`), planar monocular VSLAM (`perception/vslam.py`), plane-parall
 occupancy mapping (`mapping/`), conservative planner/navigator, frontier
 exploration, asynchronous semantic worker, activity chooser, runtime, operator
 console server and UI, screen expression, evaluation harness and scripts.
+Rounds 4–9 added the planar two-point relocalisation, loop closure and its pose
+graph (`perception/pose_graph.py`, `place_recognition.py`), the monocular depth
+guard (`perception/near_depth.py`, `navigation/near_field.py`), the open-vocabulary
+detector rules and re-ID (`perception/open_vocab.py`, `reid.py`), the IMU and
+encoder models (`sim/sensors.py`), wheel-inertial odometry (`odometry/`), the
+planar epipolar turn estimator, view-aware turning and the gyro calibration
+(`scripts/calibrate_imu.py`). All are new code; where a published method shaped
+a design, the results documents cite it.
 
 ## External dependencies (recorded per run by `evidence/provenance.py`)
 
 | Dependency | Version used for the recorded evidence | Notes |
 |---|---|---|
-| Python | 3.12.3 (Linux x86_64 cloud container) | macOS arm64 not exercised in this delivery |
-| genesis-world | 1.3.2 | Same version as the local Genesis Studio environment (`Genesis-Studio/.venv-genesis`); CPU backend, headless EGL/Mesa rasteriser |
-| torch | 2.13.0 (+cu130 wheel, run on CPU) | Genesis dependency only; no learned network weights are used |
-| numpy / scipy | 2.x / 1.18 | |
-| opencv-python-headless | 5.0.0 | ORB, homographies, PnP; the local Studio env has `opencv-python` 5.0.0.93 |
-| trimesh | 5.1.0 | asset generation (Studio env has 5.0.0) |
+| Python | 3.12.13 on macOS arm64 (evidence from 2026-10-02 on, rounds 4–9); 3.12.3 on Linux x86_64 for the five surviving directories from 2026-09-29/30 | full environment: `requirements/lock-macos-arm64-py3.12.txt`; each run records its own in `provenance/identity.json` |
+| genesis-world | 1.3.2 | Same version as the local Genesis Studio environment (`Genesis-Studio/.venv-genesis`); CPU backend |
+| torch / torchvision | 2.14.1 / 0.29.1 (macOS); 2.13.0 on Linux | Genesis dependency, and the runtime's optional learned models (depth guard, MegaLoc place recognition, open-vocabulary detector) |
+| transformers | 5.18.0 | the optional learned models above |
+| numpy / scipy | 2.5.3 / 1.18.1 | |
+| opencv-python | 5.0.0.93 | ORB, homographies, PnP; the GUI wheel, which genesis-world requires (the headless wheel was also installed until 2026-10-11 and shared `cv2`) |
+| trimesh | 5.1.1 | asset generation; the committed robot meshes are kept (5.1.1 would write them slightly differently) |
 | Genesis Studio | not imported | `docs/STUDIO.md` explains the optional project export; Studio revision `cd20c8c685f2b51263814fd0a6296bfd849bdce6` was read, never modified |
 
 No third-party model weights are committed. Optional models are fetched on request

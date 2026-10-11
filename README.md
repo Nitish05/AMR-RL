@@ -349,8 +349,13 @@ The full status of every capability is in
 
 ## Quick start
 
-Requires Python 3.12. Linux x86_64 with the CPU backend and headless EGL was
-used for all evidence; on macOS, Genesis uses its Metal/CPU backends.
+Requires Python 3.12. The evidence from 2026-10-02 on (rounds 4–9) was produced
+on macOS arm64 with Python 3.12.13, torch 2.14.1 and the Genesis CPU backend. The
+exact environment is in `requirements/lock-macos-arm64-py3.12.txt`, which `setup`
+uses on that platform. Only five evidence directories from before 2026-10-02 are
+kept (Linux x86_64, headless EGL); the rest of rounds 1–3 is not on disk. On macOS,
+rendering needs an awake display: run long jobs through `scripts/amr.sh batch`,
+which keeps it awake with `caffeinate`.
 
 ```bash
 git clone https://github.com/Nitish05/AMR-RL.git && cd AMR-RL
