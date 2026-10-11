@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import math
 import time
+import warnings
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -294,7 +295,16 @@ class RobotRuntime:
         self.odo = None
         if self.cfg.odometry == "imu_encoders":
             self.odo = WheelInertialOdometry(spec, self.cfg.odometry_cfg, calibration=self._load_imu_calibration())
+            if not self.imu_calibration_status.startswith("loaded"):
+                # Not silent: an uncalibrated unit with a -1 % sensitivity error drifted 19 deg
+                # in validation 4 (scripts/calibrate_imu.py calibrates a unit).
+                self.supervisor.note("imu_calibration", status=self.imu_calibration_status)
+                warnings.warn(f"IMU gyro calibration not used: {self.imu_calibration_status} "
+                              "(run scripts/calibrate_imu.py for this unit)", stacklevel=2)
         self.cmd_odo = CommandModelOdometry(spec) if self.cfg.odometry in ("imu_encoders", "command_model") else None
+        # Sensor liveness: time of the newest sample per source; state changes are logged.
+        self._sample_t = {"imu": None, "encoders": None}
+        self.sensor_state = {"imu": "waiting", "encoders": "waiting"}
         self.odo_fallbacks = 0
         self._zupt_hold_until = -math.inf
         self._zupt_hold_start = None
@@ -337,9 +347,27 @@ class RobotRuntime:
         """Raw IMU and encoder samples received since the last call (driver FIFOs)."""
         self._proprio.imu.extend(batch.imu)
         self._proprio.encoders.extend(batch.encoders)
+        for source, samples in (("imu", batch.imu), ("encoders", batch.encoders)):
+            if samples:
+                newest = max(s.t for s in samples)
+                last = self._sample_t[source]
+                self._sample_t[source] = newest if last is None else max(last, newest)
+
+    SENSOR_STALE_S = 0.3  # no samples for this long: the source counts as lost (flagged, not acted on)
+
+    def _check_sensors(self, now):
+        if self.odo is None:
+            return
+        for source, last in self._sample_t.items():
+            state = "waiting" if last is None else ("ok" if now - last <= self.SENSOR_STALE_S else "lost")
+            if state != self.sensor_state[source] and not (state == "waiting"):
+                self.supervisor.note("sensor", source=source, state=state,
+                                     age_s=None if last is None else round(now - last, 3))
+            self.sensor_state[source] = state
 
     def on_frame(self, frame):
         self.now = frame.timestamp
+        self._check_sensors(frame.timestamp)
         self.supervisor.observe_frame(frame.timestamp)
         self.last_frame = frame
         self.last_frame_record = self.archive.capture(frame.rgb, frame_index=frame.index, timestamp=frame.timestamp)
@@ -984,7 +1012,9 @@ class RobotRuntime:
                 "command_model_fallback_frames": self.odo_fallbacks, "zupt_holds": self.zupt_holds,
                 "zupt_hold_failures": self.zupt_hold_failures, "zupt_hold_active": self._zupt_hold_start is not None,
                 "temp_c": o.temp, "tempco_dps_per_c": math.degrees(o.tempco[0]),
-                "offset_updates": o.offset_updates, "zupt_frames": o.zupt_frames}
+                "offset_updates": o.offset_updates, "zupt_frames": o.zupt_frames,
+                "sensors": dict(self.sensor_state),
+                "sample_age_s": {k: None if v is None else round(self.now - v, 3) for k, v in self._sample_t.items()}}
 
     def snapshot(self):
         loc = self.slam.snapshot()

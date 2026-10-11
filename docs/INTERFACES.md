@@ -38,7 +38,9 @@ never simulator ground truth. `null` means unavailable/unknown, never zero.
       "zupt_holds": 1, "zupt_hold_failures": 0,   // recalibration stops (and ones that ran out of time)
       "zupt_hold_active": false,                  // true while the robot stands still to recalibrate
       "temp_c": 31.2, "tempco_dps_per_c": -0.006, // chip temperature and the learned offset tempco
-      "offset_updates": 52, "zupt_frames": 50     // offset measurements so far
+      "offset_updates": 52, "zupt_frames": 50,    // offset measurements so far
+      "sensors": {"imu": "ok", "encoders": "ok"}, // waiting | ok | lost (no samples for 0.3 s; flagged only)
+      "sample_age_s": {"imu": 0.004, "encoders": 0.004}
     }
   },
   "camera": {"frame_index": 120, "timestamp": 12.3, "age": 0.0, "fresh": true},

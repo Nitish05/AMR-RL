@@ -646,7 +646,51 @@ def test_interfaces_doc_lists_every_odometry_status_key():
     rt.cfg, rt.spec, rt.odo, rt.last_odometry = RuntimeConfig(), SPEC, WheelInertialOdometry(SPEC), None
     rt.slam = SimpleNamespace(fusion_log={})
     rt.imu_calibration_status, rt.odo_fallbacks, rt.zupt_holds, rt.zupt_hold_failures = "loaded", 0, 0, 0
-    rt._zupt_hold_start = None
+    rt._zupt_hold_start, rt.now = None, 0.0
+    rt._sample_t, rt.sensor_state = {"imu": None, "encoders": None}, {"imu": "waiting", "encoders": "waiting"}
     doc = (Path(__file__).resolve().parents[1] / "docs" / "INTERFACES.md").read_text()
     missing = [k for k in rt.odometry_status() if f'"{k}"' not in doc]
     assert not missing, f"document these odometry status keys in docs/INTERFACES.md: {missing}"
+
+
+
+def test_sensor_liveness_is_tracked_and_state_changes_logged():
+    from types import SimpleNamespace
+
+    from amr_rl.runtime.robot import RobotRuntime
+
+    notes = []
+    rt = RobotRuntime.__new__(RobotRuntime)
+    rt.odo = WheelInertialOdometry(SPEC)
+    rt.supervisor = SimpleNamespace(note=lambda kind, **d: notes.append((kind, d)))
+    rt._proprio = ProprioBatch([], [])
+    rt._sample_t, rt.sensor_state = {"imu": None, "encoders": None}, {"imu": "waiting", "encoders": "waiting"}
+    counts = [0.0, 0.0]
+    rt.on_proprio(_samples(0.0, 10, 0, 0, 0, 0, counts))
+    rt._check_sensors(0.1)
+    assert rt.sensor_state == {"imu": "ok", "encoders": "ok"}
+    b = _samples(0.1, 10, 0, 0, 0, 0, counts)
+    rt.on_proprio(ProprioBatch(b.imu, []))  # the encoders stop delivering
+    rt._check_sensors(0.5)
+    assert rt.sensor_state == {"imu": "ok", "encoders": "lost"}
+    rt.on_proprio(_samples(0.5, 10, 0, 0, 0, 0, counts))
+    rt._check_sensors(0.6)
+    assert [(n[1]["source"], n[1]["state"]) for n in notes] == [("imu", "ok"), ("encoders", "ok"),
+                                                                ("encoders", "lost"), ("encoders", "ok")]
+
+
+def test_imu_calibration_states(tmp_path):
+    from amr_rl.runtime.robot import RobotRuntime, RuntimeConfig
+
+    rt = RobotRuntime.__new__(RobotRuntime)
+    rt.spec = SPEC
+    rt.cfg = RuntimeConfig(imu_calibration=str(tmp_path / "missing.yaml"))
+    assert rt._load_imu_calibration() is None and rt.imu_calibration_status.startswith("missing")
+    cal = tmp_path / "imu.yaml"
+    cal.write_text(f"unit_serial: {SPEC.imu.get('unit_serial', 1)}\ngyro_scale: 1.0025\ngyro_scale_sigma: 0.0002\n")
+    rt.cfg = RuntimeConfig(imu_calibration=str(cal))
+    assert rt._load_imu_calibration()["gyro_scale"] == 1.0025 and rt.imu_calibration_status.startswith("loaded")
+    rt.cfg = RuntimeConfig(imu_calibration=str(cal), imu_unit_serial=4)  # another unit installed
+    assert rt._load_imu_calibration() is None and "mismatch" in rt.imu_calibration_status
+    rt.cfg = RuntimeConfig(imu_calibration=None)
+    assert rt._load_imu_calibration() is None

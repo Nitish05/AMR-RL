@@ -114,6 +114,10 @@ class Supervisor:
         self.backend.stop()
         self._record("revoke", reason=reason)
 
+    def note(self, kind, **detail):
+        """Record an event that does not change authority (e.g. a sensor state change)."""
+        self._record(kind, **detail)
+
     def _record(self, kind, **detail):
         entry = {"kind": kind, "generation": self.generation, "sim_time": self._last_now, **detail}
         self.log.append(entry)
