@@ -28,6 +28,19 @@ from .world import SimWorld, load_world_config
 CONTROL_PERIOD = 0.1
 
 
+# World-config keys that only evaluations set (sim/world.py, sim/sensors.py).
+EVALUATION_WORLD_KEYS = frozenset({"floor_friction", "slip_patches", "sensor_faults", "physics", "robot_start"})
+
+
+def apply_world_overrides(wc, overrides):
+    """EVALUATION: world config with overrides; unknown keys are an error (``wheel_friction``
+    was once accepted and silently did nothing)."""
+    unknown = sorted(set(overrides) - set(wc) - EVALUATION_WORLD_KEYS)
+    if unknown:
+        raise ValueError(f"unknown world override(s) {unknown}; world keys: {sorted(set(wc))}, "
+                         f"evaluation keys: {sorted(EVALUATION_WORLD_KEYS)}")
+    return {**wc, **overrides}
+
 class Session:
     def __init__(self, world_name, *, run_dir, memory_path, config: RuntimeConfig | None = None,
                  consequences=None, seed=0, inspection=True, map_dir=None, world_overrides=None,
@@ -35,7 +48,7 @@ class Session:
         spec = RobotSpec.load()
         wc = load_world_config(world_name)
         if world_overrides:
-            wc = {**wc, **world_overrides}
+            wc = apply_world_overrides(wc, world_overrides)
         self.world = SimWorld(wc, spec=spec, seed=seed, consequences=consequences, inspection=inspection)
         self.run_dir = Path(run_dir)
         self.run_dir.mkdir(parents=True, exist_ok=True)

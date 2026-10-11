@@ -193,8 +193,9 @@ def add_runtime_args(parser):
     parser.add_argument("--runtime", nargs="*", default=[], help="RuntimeConfig overrides key=value (JSON values)")
     parser.add_argument("--odo", nargs="*", default=[], help="OdometryConfig overrides key=value (JSON values)")
     parser.add_argument("--world-set", nargs="*", default=[],
-                        help="EVALUATION: world config overrides key=value (JSON), e.g. wheel_friction=0.4, "
-                             "slip_patches=[...], sensor_faults={\"imu_off\":true}")
+                        help="EVALUATION: world config overrides key=value (JSON), e.g. floor_friction=0.06, "
+                             "slip_patches=[...], sensor_faults={\"imu_off\":true}, physics={...}; unknown keys "
+                             "are an error")
     parser.add_argument("--record-frames", action="store_true",
                         help="keep every onboard frame (audit images) and raw sensor batch for live replay")
 

@@ -694,3 +694,15 @@ def test_imu_calibration_states(tmp_path):
     assert rt._load_imu_calibration() is None and "mismatch" in rt.imu_calibration_status
     rt.cfg = RuntimeConfig(imu_calibration=None)
     assert rt._load_imu_calibration() is None
+
+
+def test_unknown_world_overrides_are_rejected():
+    import pytest
+
+    from amr_rl.sim.harness import apply_world_overrides
+
+    wc = {"name": "arena", "room": {"size": [4, 4]}}
+    assert apply_world_overrides(wc, {"floor_friction": 0.06})["floor_friction"] == 0.06
+    assert apply_world_overrides(wc, {"room": {"size": [5, 5]}})["room"]["size"] == [5, 5]
+    with pytest.raises(ValueError, match="wheel_friction"):
+        apply_world_overrides(wc, {"wheel_friction": 0.4})
