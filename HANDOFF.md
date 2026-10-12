@@ -61,7 +61,9 @@ newest first.
    learning-style batches are queued after the detector suite). The face's style (tempo,
    blink) comes from one latent state (the logged need) rescaled by the tempo trait, and a
    15 s boot cue names the session, remembered objects and any character change
-   (`docs/EXPRESSION.md`, "Style"). Open: a duplicate identity
+   (`docs/EXPRESSION.md`, "Style"). At `close()` the character consolidates by engineered
+   rules on the session's logged statistics (≤ 0.05 per trait per session, no mean
+   reversion; `character.EVOLVES`); approach tempo and persistence have no rule yet. Open: a duplicate identity
    of a disliked fixture can be chosen before it is merged, and aversion learned in one
    visual context does not carry to another (3 second red panels in 99 round-9 phases);
    16 % of interactions with the tall cylinder still end in a tracking loss.

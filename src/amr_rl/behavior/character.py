@@ -84,6 +84,21 @@ def clip_write(current, proposed, lo, hi, provenance, cfg: CharacterConfig):
     return value, abs(value - float(proposed)) > 1e-12
 
 
+# How each trait evolves at session end (ExperienceMemory.consolidate_character): the logged
+# statistic, its target, theta += eta (target - theta), clipped to the per-session cap and the
+# bounds; no mean reversion. Engineered rules, documented here for the inspector.
+EVOLVES = {
+    "caution": "toward 0.5 + 0.5 x reserve, reserve = EMA(0.3) of (useful - aversive) / outcomes per session "
+               "(asset protection; empty or benign sessions let it decay toward 0.5)",
+    "surprise_weighting": "toward 0.5 (symmetric evidence) in a session with a detected rule change; toward "
+                          "0.5 + 0.1 x useful rate otherwise (a mild confirmation bias where the world is stable)",
+    "curiosity_type": "toward the fraction of options engaged 3+ times this session with no learning progress",
+    "novelty_bias": "toward the fraction of this session's probes (first attempts on an option) that paid off",
+    "approach_tempo": "no rule yet (perturbation meta-rule pending); owner-set only",
+    "persistence": "no rule yet (perturbation meta-rule pending); owner-set only",
+}
+
+
 # ---------------------------------------------------------------- what the traits set
 # A trait value x in [0, 1] scales a parameter by GAIN(x) = 2 ** (2 (x - 0.5)): 0.5 leaves it
 # as it was, 0 halves it, 1 doubles it. Engineered; the mapping is the whole of what a trait

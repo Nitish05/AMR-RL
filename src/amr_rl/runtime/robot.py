@@ -162,6 +162,9 @@ class RuntimeConfig:
     # identifiability gate has been run (docs/research/PERSONALITY_RESEARCH_2.md section 1).
     character_preset: str = "default"
     character_active: bool = False
+    # Session-end consolidation (memory.consolidate_character): bounded, logged writes to the
+    # store at close(); they change behaviour only when character_active is on.
+    character_evolve: bool = True
     # This robot's gyro calibration (scripts/calibrate_imu.py); used when its unit
     # serial matches the spec's. None = datasheet prior only (+-1 % sensitivity).
     imu_calibration: str | None = "configs/calibration/imu.yaml"
@@ -1284,6 +1287,7 @@ class RobotRuntime:
         self.supervisor.stop("disabled")
         if self.semantic is not None:
             self.semantic.close()
+        self.character_changes = self.memory.consolidate_character(self.now) if self.cfg.character_evolve else []
         self.memory.close()
 
 

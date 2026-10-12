@@ -140,6 +140,9 @@ class ExperienceMemory:
             elif agent_id is not None and self._meta("agent_id") != agent_id:
                 raise ValueError("Memory belongs to a different agent identity")
             self._set_meta("sessions", str(int(self._meta("sessions")) + 1))
+            # where this session's events start (the consolidation rule reads only this session)
+            last = self.db.execute("SELECT COALESCE(MAX(seq), 0) FROM events").fetchone()[0]
+            self._set_meta("session_start_seq", str(int(last)))
         self.agent_id = self._meta("agent_id")
 
     # ------------------------------------------------------------ meta
@@ -670,6 +673,91 @@ class ExperienceMemory:
                              json.dumps({**(detail or {}), "proposed": float(value), "clipped": bool(clipped)})))
         return applied
 
+    # ------------------------------------------------------------ session-end consolidation
+    def session_statistics(self):
+        """Logged statistics of this session (events since the memory was opened), the inputs
+        of the consolidation rule. Observer-measurable; no inner state."""
+        start = int(self._meta("session_start_seq") or 0)
+        with self.lock:
+            rows = self.db.execute("SELECT seq, event_id, entity_id, action, valence FROM events WHERE seq>? "
+                                   "ORDER BY seq", (start,)).fetchall()
+            ids = [r["event_id"] for r in rows]
+            changes = 0
+            if ids:
+                marks = ",".join("?" * len(ids))
+                for (detail,) in self.db.execute(f"SELECT detail FROM updates WHERE event_id IN ({marks})", ids):
+                    changes += bool(json.loads(detail).get("change_hypothesis"))
+            # a probe: one of the first initial_probes outcomes an option ever had
+            rank = {}
+            probes = []
+            for r in rows:
+                n_before = self.db.execute("SELECT COUNT(*) FROM events WHERE entity_id=? AND action=? AND seq<?",
+                                           (r["entity_id"], r["action"], r["seq"])).fetchone()[0]
+                rank[r["seq"]] = n_before
+                if n_before < self.cfg.initial_probes:
+                    probes.append(r)
+            per_option = {}
+            for r in rows:
+                per_option.setdefault((r["entity_id"], r["action"]), []).append(r["valence"])
+        useful = sum(r["valence"] >= self.cfg.useful_valence for r in rows)
+        aversive = sum(r["valence"] < 0 for r in rows)
+        engaged = [(k, len(v)) for k, v in per_option.items() if len(v) >= 3]
+        zero_lp = [k for k, _ in engaged if self.learning_progress(*k) < 0.01]
+        return {"outcomes": len(rows), "useful": useful, "aversive": aversive, "change_hypotheses": changes,
+                "probes": len(probes), "probes_useful": sum(r["valence"] >= self.cfg.useful_valence for r in probes),
+                "options_engaged_3plus": len(engaged), "options_zero_progress": len(zero_lp),
+                "distinct_options": len(per_option)}
+
+    def consolidate_character(self, t, eta=0.1):
+        """Session-end evolution of the character (owner decision 2026-10-12; docs/research/
+        PERSONALITY_RESEARCH_2.md section 2): for each trait with a rule, theta <- theta + eta x
+        (target(statistic) - theta), then clipped to one per-session cap (CharacterConfig.
+        session_cap, by set_trait) and to the bounds. No mean reversion: a session with no
+        evidence for a rule leaves its trait where it is. Every change is logged with the
+        statistic, the target and the rule. Engineered rules; the statistics are logged
+        behaviour. Returns the list of writes (also the no-ops, with their reason)."""
+        from ..behavior.character import EVOLVES
+
+        if getattr(self, "character_cfg", None) is None:
+            return []
+        s = self.session_statistics()
+        n = s["outcomes"]
+        current = {k: r["value"] for k, r in self.character().items()}
+        targets = {}
+        # caution: a bounded "reserve" of good against bad outcomes (asset protection); empty or
+        # benign sessions let the reserve decay toward 0, so caution returns toward 0.5
+        x = (s["useful"] - s["aversive"]) / n if n else 0.0
+        reserve = float(self._meta("reserve") or 0.0)
+        reserve += 0.3 * (x - reserve)
+        with self.lock, self.db:
+            self._set_meta("reserve", repr(reserve))
+        targets["caution"] = (0.5 + 0.5 * max(-1.0, min(1.0, reserve)), {"reserve": reserve, "net_rate": x})
+        # surprise weighting: symmetric evidence (ratio 1 = trait 0.5) when a rule change was
+        # detected; a mild confirmation bias when the world stayed stable and paid
+        if s["change_hypotheses"] > 0:
+            targets["surprise_weighting"] = (0.5, {"change_hypotheses": s["change_hypotheses"]})
+        elif n:
+            targets["surprise_weighting"] = (0.5 + 0.1 * s["useful"] / n, {"useful_rate": s["useful"] / n})
+        # curiosity type: toward learning progress when engaged objects stop being learnable
+        if s["options_engaged_3plus"]:
+            frac = s["options_zero_progress"] / s["options_engaged_3plus"]
+            targets["curiosity_type"] = (frac, {"zero_progress_fraction": frac})
+        # novelty bias: the fraction of this session's probes that paid off
+        if s["probes"]:
+            frac = s["probes_useful"] / s["probes"]
+            targets["novelty_bias"] = (frac, {"probes_useful_fraction": frac})
+        # approach_tempo and persistence: no rule yet (the perturbation meta-rule is pending)
+        writes = []
+        for key, (target, stat) in targets.items():
+            if key not in current:
+                continue
+            proposed = current[key] + eta * (target - current[key])
+            applied = self.set_trait(key, proposed, cause="session_end", provenance="consolidation", t=t,
+                                     detail={"rule": EVOLVES[key], "statistic": stat, "target": target, "eta": eta,
+                                             "session_statistics": s})
+            writes.append({"key": key, "before": current[key], "after": applied, "target": target, "statistic": stat})
+        return writes
+
     def character_log(self, limit=50):
         with self.lock:
             rows = self.db.execute("SELECT * FROM character_log ORDER BY seq DESC LIMIT ?", (int(limit),)).fetchall()
@@ -710,6 +798,8 @@ class ExperienceMemory:
         with self.lock:
             counts = {r[0]: r[1] for r in self.db.execute(
                 "SELECT provenance, COUNT(*) FROM character_log WHERE cause != 'created' GROUP BY provenance")}
+        from ..behavior.character import EVOLVES
+
         return {"preset": self._meta("character_preset"), "traits": traits, "log": log,
-                "writes_by_provenance": counts, "boots": self.boots(limit=5),
+                "writes_by_provenance": counts, "boots": self.boots(limit=5), "evolution": EVOLVES,
                 "reads": "no behaviour reads these values yet (store and audit only)"}

@@ -100,6 +100,7 @@ never simulator ground truth. `null` means unavailable/unknown, never zero.
     "log": [{"t": 0.0, "session": 1, "key": "caution", "before": null, "after": 0.5, "cause": "created",
              "provenance": "engineered_default", "detail": "{…}"}],
     "writes_by_provenance": {}, "boots": [{"t": 0.0, "session": 1, "event": "restart", "detail": {}}],
+    "evolution": {"caution": "toward 0.5 + 0.5 x reserve, ..."},  // the session-end rule per trait (character.EVOLVES); cause "session_end" in the log
     "reads": "no behaviour reads these values yet (character_active is off)"  // or what reads them when active
   }
 }

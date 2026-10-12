@@ -344,7 +344,8 @@ The full status of every capability is in
   admission gate shows they are identifiable from behaviour
   ([criteria](docs/results/character-gate-prereg.md)); the two learning-style traits
   (surprise weighting, curiosity type) are mapped onto the memory under the same switch and
-  gate; no trait is a learned or inner quantity.
+  gate; between sessions four of the six move by bounded engineered rules on logged
+  statistics (≤ 0.05 per session); no trait is a learned or inner quantity.
 * **Nudge reach:** fixed and re-evaluated in the loop: 24/24 completed nudges on
   fixtures with rules touched them (round 9), 32/33 in round 6.
 * **Blocked or slipping wheels:** with the IMU, the robot notices within about
