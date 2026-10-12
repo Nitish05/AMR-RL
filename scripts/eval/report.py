@@ -187,13 +187,16 @@ def phase_row(name, p):
             s.get("outcomes_learned"), s.get("useful_outcomes"), s.get("aversive_outcomes"),
             s.get("total_valence"), (s.get("total_valence") or 0) / max(1, len(outs)),
             s.get("ambiguous"), s.get("navigation_failures"), s.get("interrupted"),
-            s.get("idle_fraction"), contact_split(p.get("contacts", []), p.get("interactions", [])),
+            s.get("idle_fraction"), contact_split(p.get("contacts", []), p.get("interactions", []),
+                                                  p.get("decisions", [])),
             s.get("enable_interventions"), s.get("operator_turns")]
 
 
-def contact_split(contacts, interactions=(), gap=0.5):
+def contact_split(contacts, interactions=(), decisions=(), gap=0.5):
     """'intended/unintended' contact episodes. Intended = inside the time window of a
-    nudge interaction (touching is that action); anything else is unintended."""
+    nudge interaction (touching is that action); anything else is unintended. A nudge
+    still in progress when the phase ends is in no interaction record: its window runs
+    from the last decision that chose it to the end."""
     eps, last = [], None
     for c in contacts or []:
         if last is None or c["t"] - last > gap:
@@ -202,6 +205,10 @@ def contact_split(contacts, interactions=(), gap=0.5):
         last = c["t"]
     windows = [(i.get("started") or i["t"], i["t"] + 0.5) for i in interactions or ()
                if i.get("action") == "nudge"]
+    final = (decisions or [None])[-1]
+    if final and (final.get("chosen") or {}).get("action") == "nudge" and not any(
+            (i.get("started") or i["t"]) >= final["t"] for i in interactions or ()):
+        windows.append((final["t"], float("inf")))
     intended = sum(all(any(a <= c["t"] <= b for a, b in windows) for c in e) for e in eps)
     return f"{intended}/{len(eps) - intended}"
 

@@ -44,19 +44,19 @@ Right: the same moment from Pip's onboard camera, the only sensor it perceives i
 
 ## Results summary
 
-Latest results: navigation in 4 rooms × 3 seeds (rounds 5–6), and the learning
-suite on 5 start poses (round 6). That is enough to see failure modes, not to
-report statistics. Navigation and learning were evaluated separately. Full
+Latest results (round 9, the IMU default): navigation in 4 rooms × 3 untouched
+starts, paired with the camera-only robot, and the learning suite on 5 start poses.
+That is enough to see failure modes, not to report statistics. Navigation and learning were evaluated separately. Full
 tables with every denominator are in
 [docs/NAVIGATION_RESULTS.md](docs/NAVIGATION_RESULTS.md) and
 [docs/LEARNING_RESULTS.md](docs/LEARNING_RESULTS.md).
 
 | Question | Result |
 |---|---|
-| Does remembered experience change later choices? | **Yes, 10/10** in round 6 (5 starts × 2 opposite histories). After a restart, every robot that had learned a liked option chose it first; the first completed interaction was on that fixture in 9/10 and with that action in 7/10. All 5 starts relocalised correctly (worst 3 cm). |
+| Does remembered experience change later choices? | **Yes, 9/9** with the IMU default (round 9: 5 starts × 2 opposite histories; in one run training produced no liked option). After a restart the robot chose the learned option first and completed it first in every case. All 5 starts relocalised (worst 3.4 cm). Round 6, camera only: 10/10. |
 | Does it survive a restart without keeping motion permission? | **Yes.** In all 9 restart phases, autonomy started disabled and was enabled only after relocalising from fresh images. |
-| Does it avoid what hurt it? | **Yes, 14/14 learned runs.** It saw the red panel once per run and never went back to that fixture or to a duplicate of it. (In round 1 a duplicate identity was re-targeted; duplicates are now merged.) |
-| Does it adapt when the rules change? | **7/10 in round 6** (early and late swap × 5 starts; re-scored from true panel events, the round-6 report's 6/10 missed seed 0's late adaptation). Seed 4 never tries the swapped fixtures: with its engineered need satisfied, idling outscores every untried option. Seed 3's early swap (at 33 s) did not find the new option before the run ended. |
+| Does it avoid what hurt it? | **In 44 of 45 phases** (round 9). It got a red panel at most once, except once in the noisy world: it chose a duplicate identity of the red-panel fixture, which was merged with the original 3.5 s too late. Round 6: 45 of 45. |
+| Does it adapt when the rules change? | **10/10 with the IMU default** (round 9, early and late swap × 5 starts; scored from true panel events), 74–244 s after the swap. Round 6, camera only: 7/10; its start 4 idled after the swap, which no longer happens at the current code. In the textured arena with the colour detector: 2/6 ([details](docs/results/r9-followup.md)). |
 | Is it better than simple baselines? | **Yes, in one arena** (round 4, pre-registered, camera-only robot; [details](docs/results/policy-comparison.md)). Over 3 rule permutations × 4 relocalised starts (12 cells), the learned policy with its engineered drive clamped beat random in 12/12, nearest-first in 11/12 and fixed-order in 11/12 on true panel valence (median +13.0 to +13.5). The two losses were cells where a baseline started next to the rewarding fixture. One map, fixed fixture positions, engineered valences. |
 | Can it reach goals in its own map? | **45/46 supported goals with the IMU default** against 38/44 camera only (round 9 re-validation, 4 rooms × 3 untouched starts; [details](docs/results/heading-r9.md)). Camera only, earlier physics: 38/46 (83 %) with loop closure, 35/44 (80 %) without, in round 5 ([details](docs/results/loop-closure.md)); 20/37 (54 %) in round 3; 5/16 in round 1. |
 | Does it refuse goals it cannot justify? | **Yes, 36/36.** Unknown space is never treated as free. |
@@ -331,12 +331,16 @@ The full status of every capability is in
   positions more than 0.5 m from any keyframe mostly do not relocalise (2/12), and
   there is no way to relocalise while stationary once recovery is used up
   ([details](docs/results/relocalisation.md)). Camera only: wrong fixes of 10–20 cm.
-* **Tracking near tall objects:** approaching or nudging the cylinder can blind
-  the camera; this caused the seed-0 learning failure.
-* **Map quality:** 29–73 % coverage in 300 s; the floor test still lets a few
-  hits inside obstacles become free (up to 103 deep false-free cells in one run).
-* **Nudge reach (fixed, not re-evaluated):** the creep used to be planned from the
-  estimated centre, which is 10+ cm off for boxes seen at an angle.
+* **Tracking near tall objects:** approaching the cylinder can blind the camera;
+  16 % of interactions aimed at it ended in a tracking loss with the IMU (round 9),
+  18 % camera only.
+* **Map quality:** with the IMU, 42–79 % free coverage in 420 s builds; the floor
+  test still lets a few hits inside obstacles become free (up to 26 deep false-free
+  cells in one of 35 round-9 builds; up to 103 camera only).
+* **Duplicate identities:** a second identity for a disliked fixture can be chosen
+  before it is merged with the first (once in 45 round-9 learning phases).
+* **Nudge reach:** fixed and re-evaluated in the loop: 24/24 completed nudges on
+  fixtures with rules touched them (round 9), 32/33 in round 6.
 * **Blocked or slipping wheels:** with the IMU, the robot notices within about
   a second that it is not moving as commanded, but it handles this by declaring
   its pose lost, backing off and waiting for the operator (about 26 s), even

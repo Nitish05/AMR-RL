@@ -623,6 +623,22 @@ def test_reversal_scorer_uses_true_panel_events():
     assert "| yes |" in table
 
 
+def test_contact_split_counts_a_nudge_unfinished_at_phase_end_as_intended():
+    """Suite inert s4 (2026-10-11): the last decision (479.2 s) chose a nudge on the
+    roller; the phase ended before it finished, so its contacts were scored unintended."""
+    report = _scoring_module("report")
+    contacts = [{"t": 470.0}, {"t": 485.1}, {"t": 486.5}, {"t": 487.0}]
+    interactions = [{"started": 463.0, "t": 479.1, "action": "nudge"}]
+    nudge_last = [{"t": 479.2, "chosen": {"activity": "engage", "action": "nudge"}}]
+    assert report.contact_split(contacts, interactions) == "1/2"
+    assert report.contact_split(contacts, interactions, nudge_last) == "3/0"
+    signal_last = [{"t": 479.2, "chosen": {"activity": "engage", "action": "signal"}}]
+    assert report.contact_split(contacts, interactions, signal_last) == "1/2"
+    # a nudge decision whose interaction was recorded opens no extra window
+    done = interactions + [{"started": 479.2, "t": 484.0, "action": "nudge"}]
+    assert report.contact_split(contacts, done, nudge_last) == "1/2"
+
+
 def test_report_labels_the_sensors_each_run_used():
     report = _scoring_module("report")
     assert report.sensors_label([{"odometry": {"source": "imu_encoders"}}]) == "onboard RGB + IMU + wheel encoders"

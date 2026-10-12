@@ -22,6 +22,57 @@ Evidence: `work/evidence/learning-20260930-154854`; control run
 `work/evidence/learning-control-oldmap`. Regenerate:
 `python scripts/eval/report.py --learning work/evidence/learning-20260930-154854 --out <file>`.
 
+## Round 9 (2026-10-11): the suite on the IMU default
+
+Rounds 1–6 below are camera-only. This is the round-6 suite repeated on the default robot
+(IMU + wheel encoders), with the same map (`i3-nocov-arena-s4`), starts and experiments,
+chosen before the run (`MAP_CHOICE.md`).
+
+**Setup:**
+- 7 experiments × 5 starts, 45 phases, 0 crashes.
+- Code `8946f9e`: validation-5 defaults (loop-closure guard, blocked check), the corrected
+  caster physics, frustration renewal off.
+- No paired camera-only arm at this commit: round 6 is the reference, with the code and
+  the caster physics changed in between.
+- Evidence: `work/evidence/r9g-suite-20261011/`, report `analysis/report.md`, extra metrics
+  `analysis/suite.json`.
+
+| | round 9, IMU (45 phases) | round 6, camera only (45 phases) |
+|---|---|---|
+| starts relocalised (worst error at start) | 5 / 5 (3.4 cm, 2.9°) | 5 / 5 (3.1 cm, 2.9°) |
+| relocalisations during the runs: all / false | 131 / **0** | 152 / 6 |
+| drift events (≥ 8° in 10 s) | **0 in 1295 in-place turns** (worst heading error 3.5°) | not measured |
+| restart: first decision = learned option | **9 / 9** (first completed: that fixture and action 9 / 9) | 10 / 10 (9 / 10, 7 / 10) |
+| reversal adapted | **10 / 10** | 7 / 10 |
+| nudges that reached the target (fixtures with rules) | 24 / 24 | 32 / 33 |
+| interactions cut short by a tracking loss: bloom (tall cylinder) / stone | 43 / 262, 20 / 238 | 38 / 213, 17 / 231 |
+| contact episodes: unintended (intended nudges) | 0 (97) | 0 (112) |
+| operator re-enables | 84 | 107 |
+| forced recalibration stops | 0 | — |
+
+- **Reversal 10 / 10**, 74–244 s after the swap, all on stone/signal. Start 4, which idled
+  through round 6's swaps, now adapts (also on the camera-only robot at this code:
+  [results/r9-followup.md](results/r9-followup.md#frustration-renewal-ab-development-switch-chooserconfigfrustration_renewal_s-off-by-default)).
+- **Restart:** history_b s3 learned no liked option in training. In the other 9, the robot
+  chose the learned option first and completed it first.
+- **Settling (inert world), outcomes in the first vs second half:** 6 → 3, 8 → 0, 8 → 3,
+  1 → 0, 5 → 11. Start 4 kept nudging the roller, whose rolling is physics and reads as a
+  useful "moved".
+- **Aversion held in 44 / 45 phases.** In noisy s2 the robot signalled grump a second time
+  (red at 48 s and 214 s). The second target was a duplicate identity of grump, 0.24 m from
+  the first, with no history. The identity merge that joined them came 3.5 s after the
+  choice. Duplicates of a disliked entity can still be chosen before they are merged.
+- **Tracking beside the tall cylinder is not better:** 16 % of interactions aimed at bloom
+  ended in a tracking loss (round 6: 18 %).
+- **Scorer fix:** a nudge still in progress when a phase ends is no longer counted as
+  unintended contact (inert s4's last nudge on the roller, 485–488 s; test
+  `test_contact_split_counts_a_nudge_unfinished_at_phase_end_as_intended`).
+
+**Textured world (arena_textured) and the colour detector:** see
+[results/r9-followup.md §9](results/r9-followup.md#9-learning-on-the-imu-default-2026-10-11).
+Localisation held there too, but the colour detector limits learning (restart 2 / 4,
+reversal 2 / 6).
+
 ## Round 6 (2026-10-03): the suite re-run on current code
 
 **Setup:**
