@@ -48,9 +48,10 @@ newest first.
 3. **Relocalisation range:** beyond 0.5 m from any keyframe, 2/12 on the IMU robot; no way
    to relocalise while stationary once recovery is used up; no autonomous retry after
    `recovery_exhausted`.
-4. **Learning:** plain arena restart 9/9, reversal 10/10 (round-9 suite). Textured arena
-   6/6 and 6/6 only with the optional open-vocabulary detector (2/4 and 2/6 with the default
-   colour detector); making it the default is an owner decision. Open: a duplicate identity
+4. **Learning:** plain arena restart 9/9, reversal 10/10 (round-9 suite, colour detector).
+   Textured arena 6/6 and 6/6 only with the open-vocabulary detector (2/4 and 2/6 with the
+   colour detector), which is therefore the default since 2026-10-12 when its model is cached
+   (`RuntimeConfig.detector`); the plain-arena suite is being re-run under it. Open: a duplicate identity
    of a disliked fixture can be chosen before it is merged, and aversion learned in one
    visual context does not carry to another (3 second red panels in 99 round-9 phases);
    16 % of interactions with the tall cylinder still end in a tracking loss.

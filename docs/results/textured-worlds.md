@@ -3,7 +3,7 @@
 **Status:**
 - Textured worlds: added (`configs/worlds/arena_textured.yaml`; held out:
   `home_a_textured.yaml`).
-- Open-vocabulary detector: implemented and benchmarked; **off by default**
+- Open-vocabulary detector: implemented and benchmarked; **the default since 2026-10-12 when its model is cached** (owner decision after the round-9 textured-arena learning runs below; the colour detector is the fallback)
   (`RuntimeConfig.detector = "fixture"`).
 - Measured error presets: added to the learner testbed.
 

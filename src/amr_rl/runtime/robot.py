@@ -72,11 +72,14 @@ class RuntimeConfig:
     # loaded only from the local cache (scripts/amr.sh fetch-place-model); without it
     # the VSLAM runs without loop closure and the state says so.
     place_descriptor: str | None = "megaloc"
-    # Object detector: "fixture" (engineered saturated-colour detector) or "open_vocab"
-    # (OmDet-Turbo boxes + engineered floor-contact and flag rules, perception/open_vocab.py;
-    # docs/results/textured-worlds.md). Optional model from the local cache only; without
-    # it the colour detector is used and detector_status says so.
-    detector: str = "fixture"
+    # Object detector: "open_vocab" (OmDet-Turbo boxes + engineered floor-contact and flag
+    # rules, perception/open_vocab.py; docs/results/textured-worlds.md) or "fixture" (the
+    # engineered saturated-colour detector). The model comes from the local cache only
+    # (scripts/amr.sh fetch-detector-model); without it the colour detector is used and
+    # detector_status says so. Default since 2026-10-12 (owner decision): with the IMU
+    # robot in the textured arena, learning worked only with this detector (restart 6/6,
+    # reversal 6/6 against 2/4 and 2/6 with the colour detector).
+    detector: str = "open_vocab"
     # Round 8 (docs/results/turn-drift.md): when the VSLAM flags a frame's heading as
     # doubtful (info["degraded"]: a gated or flagged in-place turn), do not mark the
     # grid or place entities from it; in-place alignment turns may continue through

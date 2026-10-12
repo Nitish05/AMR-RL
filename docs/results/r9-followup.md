@@ -350,3 +350,18 @@ and the blocked probe's detection of the kept-pose verdict.
 
 Nothing was tuned on any validation start.
 
+## 11. The open-vocabulary detector becomes the default (2026-10-12)
+
+`RuntimeConfig.detector = "open_vocab"` (owner decision). The model is loaded from the local cache
+only (`scripts/amr.sh fetch-detector-model`); without it the engineered colour detector runs and
+`detector_status` says so, as the depth guard does. Basis: in the textured arena the IMU robot
+learned only with this detector (restart 6/6, reversal 6/6 against 2/4 and 2/6; §9), and its
+held-out benchmark is recall 1.0, precision 0.97 ([textured-worlds.md](textured-worlds.md)).
+
+**Check, written before the run.** The plain-arena learning suite (7 experiments × 5 starts on the
+round-6 map, as in [LEARNING_RESULTS.md](../LEARNING_RESULTS.md) round 9) is repeated with the new
+default. Not worse means: starts relocalised 5/5; restart first decision = learned option in at
+least 8 of the runs that learned one; reversal adapted ≥ 8/10; at most one red panel per phase in
+≥ 43 of 45 phases; 0 unintended contact episodes; 0 false relocalisations. If it is worse, the
+default goes back to the colour detector and the result is documented.
+

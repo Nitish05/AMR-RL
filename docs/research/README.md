@@ -56,8 +56,7 @@ number is quoted; "preprint" marks unreviewed work carrying design weight.
 - **Blocked or spinning wheels:** keep the pose and back off, or keep declaring it lost.
 - **First recalibration stop:** a 0.5 °C trigger, or a heading-uncertainty budget.
 - **Default version:** keep the re-validated round-9 build despite the failed map-error criterion.
-- **Open-vocabulary detector as default:** it is the only configuration in which learning worked
-  in the textured arena.
+- ~~Open-vocabulary detector as default~~: decided 2026-10-12, it is the default when its model is cached.
 - **Character:** accept the trait definitions, no mean reversion, session-end-only change, the
   LLM gate and cadence, whether ratings may feed back, and the identifiability gate.
 - **Speaker:** no speech; the acoustic signature as a convention to validate.

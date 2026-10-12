@@ -302,7 +302,9 @@ def main():
                         help="one run per seed; seed k starts at ARENA_STARTS[k %% 5] (seed 0 = configured start)")
     parser.add_argument("--out", default=None)
     parser.add_argument("--world", default="arena", help="arena or arena_textured (same layout and rules)")
-    parser.add_argument("--detector", default="fixture", choices=["fixture", "open_vocab"])
+    parser.add_argument("--detector", default="open_vocab", choices=["fixture", "open_vocab"],
+                        help="object detector (RuntimeConfig.detector); open_vocab falls back to the colour "
+                             "detector when the model is not in the local cache")
     parser.add_argument("--detector-device", default="auto")
     parser.add_argument("--vslam", nargs="*", default=[], help="VSLAMConfig overrides key=value (JSON values)")
     parser.add_argument("--turn-preset", default="none", help="named turn-handling preset (vslam.TURN_PRESETS)")
