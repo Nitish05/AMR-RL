@@ -350,7 +350,7 @@ With both sensors silent, the command-model fallback ran for 38 frames.
 - **Unit 4 with the datasheet prior only:** 22.5° (arena) and 14.9° (home_a). This fails the reported rule, as in validation 4.
 - Its in-run scale learning reached 0.9977 and 0.9922; the true scale is 0.990. **Units must be calibrated.**
 
-**Learning (L5):** run after this validation; results are in [r9-followup.md](r9-followup.md).
+**Learning (L5, reported):** run after this validation ([r9-followup.md](r9-followup.md#9-learning-on-the-imu-default-2026-10-11)). Drift events per 100 in-place turns: 0.08 with the IMU against 33.9 camera only (pass); outcomes 384 against 118 (not worse). The camera-only arm relocalised in only 9 of 27 phases on its own map, whose build ended at 94.8 s; on the IMU arm's map (post hoc) it relocalised in all 27 and drifted 18.8 events per 100 turns.
 
 **Loop closures** (scored against truth, all runs of this validation):
 

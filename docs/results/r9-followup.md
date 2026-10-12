@@ -8,7 +8,8 @@ A review of the adopted IMU + wheel-encoder default ([heading-r9.md](heading-r9.
 5. the caster-friction effect in the simulator;
 6. evaluation tooling.
 
-The re-validation on untouched starts follows under its own pre-registration ([heading-r9-prereg.md](heading-r9-prereg.md), addendum E).
+The re-validation on untouched starts follows under its own pre-registration ([heading-r9-prereg.md](heading-r9-prereg.md), addendum E, §8).
+Then learning on the IMU default (§9). Relocalisation range and the coverage-pass A/B are in [relocalisation.md](relocalisation.md#round-9-range-on-the-imu-robots-maps-2026-10-11-development-not-pre-registered), and the round-9 navigation check in [NAVIGATION_RESULTS.md](../NAVIGATION_RESULTS.md).
 
 Sources consulted are cited where they shaped a design. Library behaviour was checked against the installed source and, for Genesis, its documentation via Context7.
 
@@ -191,3 +192,83 @@ The full results are in [heading-r9.md](heading-r9.md#validation-5-r9g-aa143e3-o
 **Options for the owner** (each would need development on spent seeds and its own pre-registration; not done):
 - trigger the first temperature stop at 0.5 °C, until the tempco has been measured. This costs about one more 2-s stop early in a run;
 - or stop when the heading uncertainty that the offset uncertainty has added since the last stop exceeds a budget (for example 0.5°), instead of fixed 2 minutes and 1 °C.
+
+## 9. Learning on the IMU default (2026-10-11)
+
+Evidence: `work/evidence/r9g-learn-20261011/` (maps chosen before any run, `MAP_CHOICE.md`;
+scored in `analysis/learning.json` and `analysis/report-*.md`).
+
+### L5 as pre-registered (addendum E; reported, not required)
+
+arena_textured, starts 0–2, 7 experiments, each arm on its own validation-5 map of seed 10,
+code aa143e3. 27 phases per arm.
+
+| | camera only | IMU + encoders |
+|---|---|---|
+| phases relocalised at start | **9 / 27** (start 0 only) | **27 / 27** |
+| drift events (≥ 8° in 10 s) per 100 in-place turns | 33.9 (140 / 413) | **0.08** (1 / 1214) |
+| per-run max heading error, median (worst) | 30.1° (31.4°) | 1.5° (6.1°) |
+| relocalisations during the runs: all / false | 38 / **25** | 38 / **0** |
+| attempts / outcomes / useful / aversive | 591 / 118 / 25 / 0 | 1828 / 384 / 119 / 3 |
+| forced recalibration stops | — | 0 (natural stops kept the offset current) |
+
+- **Drift: pass** (halved many times over). **Outcomes: not worse** (384 against 118).
+- **The comparison is confounded by the camera-only map.** Its seed-10 build ended at 94.8 s
+  after 6 re-enables (1.1 m of path). Starts 1 and 2 never relocalised on it, and start 0
+  ran with heading errors up to 31°. The supplementary L5x arm below separates map from
+  odometry.
+- **Learning in arena_textured is limited by the colour detector, not by localisation.**
+  - IMU arm: 61 % of attempts (1113 / 1828) were abandoned because the target was not
+    confirmed in fresh images; 715 were aimed at no real fixture (texture read as objects).
+  - Stone and bloom, the fixtures whose rules the history and reversal experiments change,
+    were engaged twice in 27 phases.
+  - So history_a and history_b, and reversal_early and reversal_late, ran identical
+    trajectories until stone was first touched (deterministic simulator):
+    - restart: the first decision targeted the learned option in 2 / 4;
+    - reversal: adapted in 2 / 6 (both seed 2).
+  - This matches the round-4 testbed prediction for the colour detector in textured worlds
+    (restart 6 / 20, reversal 14 / 20; [textured-worlds.md](textured-worlds.md#5d-measured-errors-in-the-learner-testbed)).
+  - The open-vocabulary arm below tests the detector swap.
+
+### L5x: the camera-only robot on the IMU arm's map (post hoc, labelled)
+
+Added after the camera-only L5 phases failed to relocalise and before any IMU-arm L5 result
+was read (`MAP_CHOICE.md`). Same experiments, starts and code; only the map differs from L5.
+
+| on one shared map (L1-odo-arena_textured-s10) | camera only (L5x) | IMU + encoders (L5) |
+|---|---|---|
+| phases relocalised at start | 27 / 27 | 27 / 27 |
+| drift events per 100 in-place turns | 18.8 (225 / 1195) | **0.08** (1 / 1214) |
+| per-run max heading error, median (worst) | 15.8° (34.6°) | **1.5° (6.1°)** |
+| relocalisations during the runs: all / false | 110 / 14 | 38 / **0** |
+| attempts / outcomes / useful / aversive | 1926 / 443 / 105 / 5 | 1828 / 384 / 119 / 3 |
+| restart: first decision = learned option | 3 / 5 | 2 / 4 |
+| reversal adapted | 2 / 6 | 2 / 6 |
+
+- **The camera-only L5 failure was its map:** on the IMU arm's map every start relocalised.
+- **Localisation still differs sharply:** the camera-only robot drifts (16° median worst heading)
+  and makes false relocalisations; the IMU robot does neither.
+- **Learning counts do not differ much.** In this world they are set by the colour detector
+  (see L5 above), not by localisation. The drifting robot wandered more widely and touched bloom and
+  stone more often (113 attempts against 2), but adapted no more often.
+
+### Frustration renewal A/B (development; switch `ChooserConfig.frustration_renewal_s`, off by default)
+
+The switch renews one probe on long-untried options when the robot has idled for that long
+with an unsatisfied need. It targets the round-6 start-4 idle trap (idle from the rule swap to
+the end of the run). Off (0) against 60 s; reversal_early and reversal_late; code 2ba9f93.
+
+| runs | map | relocalised | adapted, off | adapted, 60 s | renewal fired |
+|---|---|---|---|---|---|
+| IMU, starts 0–4 | L1-odo-arena-s10 | 8 / 10 (start 4 never) | 8 / 8 | 8 / 8 | 1 run |
+| start 4, IMU and camera only | round-6 map `i3-nocov-arena-s4` | 8 / 8 | 4 / 4 | 4 / 4 | never |
+
+- **The round-6 trap no longer occurs.** On the round-6 map, start 4 adapted in every run, with
+  either odometry, 35–244 s after the swap (stone/signal). The code and the simulator's caster
+  physics have changed since round 6, and its path with them; which change removed the trap was
+  not analysed.
+- **Renewal fired in one run of 20** (reversal_early s3 on the first map: 4 renewals from 321 s).
+  There the robot found the new option 520 s after the swap instead of 705 s (4 s before the
+  end), with 8 useful outcomes instead of 3. The other runs were identical with and without it.
+- **Kept off.** It helped in its one firing and changed nothing elsewhere, but n = 1 is not
+  evidence of a general gain. Enabling it is a small owner decision.
