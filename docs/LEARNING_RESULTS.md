@@ -68,10 +68,11 @@ chosen before the run (`MAP_CHOICE.md`).
   unintended contact (inert s4's last nudge on the roller, 485–488 s; test
   `test_contact_split_counts_a_nudge_unfinished_at_phase_end_as_intended`).
 
-**Textured world (arena_textured) and the colour detector:** see
-[results/r9-followup.md §9](results/r9-followup.md#9-learning-on-the-imu-default-2026-10-11).
-Localisation held there too, but the colour detector limits learning (restart 2 / 4,
-reversal 2 / 6).
+**Textured world (arena_textured), 3 starts:** localisation held there too
+([results/r9-followup.md §9](results/r9-followup.md#9-learning-on-the-imu-default-2026-10-11)).
+With the default colour detector, learning is limited (restart 2 / 4, reversal 2 / 6). With
+the optional open-vocabulary detector it matches the plain arena: restart 6 / 6, reversal 6 / 6
+([results/textured-worlds.md](results/textured-worlds.md#5d-measured-errors-in-the-learner-testbed)).
 
 ## Round 6 (2026-10-03): the suite re-run on current code
 

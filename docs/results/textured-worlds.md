@@ -89,8 +89,13 @@ and 3.4 → 6.3 cm).
 
 **This criterion is not met by the default configuration.** It stays off by default
 because changing the default VSLAM front end needs the navigation and relocalisation
-validation of earlier rounds. Textured-world runtime experiments use it
+validation of earlier rounds. Textured-world runtime experiments up to round 6 used it
 (`--vslam floor_feature_share=0.7`).
+
+**With the IMU (round 9) the share is not needed:** the validation-5 arena_textured builds lost
+0 frames in 5 of 5 without it (worst heading error 1.8°; camera only 7–39 % lost), and the
+round-9 textured learning runs used the default front end. The switch stays off; whether to
+retire it is open.
 
 ## 5b: open-vocabulary detector behind `Detection`
 
@@ -194,5 +199,34 @@ localisation holds. Identity purity is not yet measured over enough runs.
 With the open-vocabulary detector's measured errors, the learner does as well as
 with clean perception. With the colour detector in textured worlds, it does not.
 
-The Genesis learning suite on the textured worlds (the rest of 5d) waits for the
-VSLAM fix.
+**The Genesis learning suite in arena_textured, colour detector** (2026-10-11, IMU robot,
+7 experiments × 3 starts; [r9-followup.md](r9-followup.md#9-learning-on-the-imu-default-2026-10-11)).
+Localisation held: every phase relocalised, 1 drift event in 1214 turns, no false
+relocalisation. The detector did not:
+- 61 % of 1828 attempts were abandoned because the target was not confirmed in fresh images;
+- 715 were aimed at no real fixture (texture read as objects);
+- bloom and stone, whose rules the experiments change, were engaged twice in 27 phases;
+- restart: the first decision targeted the learned option in 2 / 4; reversal adapted in 2 / 6.
+
+This is the testbed's prediction for the colour detector in textured worlds (table above).
+**The same runs with the open-vocabulary detector** (OmDet-Turbo on MPS; only the detector
+differs; `work/evidence/r9g-learn-20261011/L5ov-*`):
+
+| arena_textured, IMU robot, 7 experiments × 3 starts | colour detector | open-vocabulary detector |
+|---|---|---|
+| restart: first decision = learned option | 2 / 4 | **6 / 6** (completed first: 6 / 6) |
+| reversal adapted | 2 / 6 | **6 / 6** (34–304 s after the swap) |
+| attempts abandoned: target not confirmed in fresh images | 61 % of 1828 | 28 % of 610 |
+| useful outcomes per attempt | 0.07 (119 / 1828) | 0.20 (122 / 610) |
+| phases with a second red panel | 0 / 27 | 2 / 27 |
+| relocalisations false; drift events per 100 turns | 0 / 38; 0.08 | 0 / 67; 0 |
+
+- **The detector swap works in the loop** once localisation holds: the textured arena now
+  gives the plain arena's restart and reversal results (round-9 suite: 9 / 9, 10 / 10).
+- **Second red panels:** the colour detector rarely reached grump at all. With this detector,
+  noisy s2 chose a duplicate identity of grump 1.7 s before the merge (the round-9 suite's
+  failure mode). In reversal_late s1 the robot signalled grump again while its red flag was
+  up: an interrupted attempt had raised it without an outcome being recorded, and the robot
+  had no experience of grump in that visual context.
+- n = 3 starts on one map; the detector runs at 0.08 s per frame on MPS and has only seen
+  simulated objects.

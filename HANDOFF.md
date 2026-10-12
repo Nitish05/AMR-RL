@@ -1,24 +1,130 @@
-# Handoff (2026-10-02, updated after the first local session): where AMR-RL stands
+# Handoff (2026-10-11): where AMR-RL stands
 
-Written at the end of a cloud session so a local Claude Code session can continue.
 Project rules are in `AGENTS.md` (read it first). Results with denominators are in
-`README.md`, `docs/NAVIGATION_RESULTS.md`, `docs/LEARNING_RESULTS.md` and
-`docs/CAPABILITY_LEDGER.md`.
+`README.md`, `docs/NAVIGATION_RESULTS.md`, `docs/LEARNING_RESULTS.md`,
+`docs/CAPABILITY_LEDGER.md` and `docs/results/`. The history of every round is below,
+newest first.
 
 ## State of the repository
 
-* Last commit on `main`: `3577fe5` (monocular depth near-field guard). Pushed by the owner
-  if `git status` says "up to date with origin/main".
-* **Uncommitted, never executed** (written in the cloud session, copied here):
-  - `src/amr_rl/sim/learner_bench.py` — learner testbed (see below)
-  - `scripts/eval/learner_bench.py` — runs the experiment grid in parallel, writes
-    `work/evidence/learner-bench-<stamp>/rows.jsonl` and `report.md`
-  - `tests/test_learner_bench.py`
-  - `scripts/amr.sh` — new commands `bench-setup`, `bench-test`, `learner-bench`
-  Expect first-run bugs. Fix them, keep `scripts/amr.sh test` green, then commit.
+- **Branch `main`**, local and ahead of `origin/main` (`7b3d425`); pushing is the owner's
+  decision.
+- **Default robot:** onboard RGB camera + IMU (ST LSM6DSOX) + wheel encoders (Pololu 4754),
+  `RuntimeConfig.odometry = "imu_encoders"`. Re-validated on untouched starts on 2026-10-11
+  (validation 5, R9g `aa143e3`): every required check passed except L1's P4 on one pair
+  (`docs/results/heading-r9.md`). On by default:
+  - loop closure, with the gyro/encoder consistency guard;
+  - the blocked-robot check;
+  - gyro offset recalibration at natural stops, plus a forced stop after 2 min without a
+    measurement or a 1 °C temperature change.
+- **Camera-only robot:** `--odometry command` (`RuntimeConfig.odometry = "command"`).
+- **Each IMU unit needs `scripts/calibrate_imu.py` once** (`configs/calibration/imu.yaml`).
+  Unit 4 uncalibrated reached 22.5° of heading error.
 
+**Running things:**
+- Setup: `bash scripts/amr.sh setup` (installs against `requirements/lock-macos-arm64-py3.12.txt`
+  on macOS arm64). Models: `fetch-place-model`, `fetch-depth-model`, `fetch-detector-model`
+  (the open-vocabulary detector also needs the `perception` extra).
+- Tests: `scripts/amr.sh test` (non-simulation suite, ruff, UI checks; also the CI job in
+  `.github/workflows/ci.yml`) and `scripts/amr.sh test-sim`.
+- Evaluations: `scripts/amr.sh batch <jobs.txt> --jobs 8 --cwd work/wt/<pinned worktree>`.
+  - The batch runs under `caffeinate -dims`: with the display asleep, Genesis' renderer
+    finds no screen.
+  - About 2–2.5 GB per simulation: at most 8 in parallel on this 48 GB machine.
+- Evidence goes in fresh `work/evidence/` directories, from pinned worktrees under `work/wt/`
+  (retention rule in `docs/PROVENANCE.md`).
 
-## Update: round 8 (2026-10-04): near-surface turn tail
+## Open items, in order
+
+1. **Blocked or spinning wheels (owner decision).** The blocked check fires correctly but
+   declares the pose lost, backs off and waits for the operator (about 26 s), although
+   the pose is right. Proposed: keep the pose, report "blocked", back off without
+   relocalising (Mars rovers' slip check; Kilic et al., Field Robotics 2022). Develop
+   on spent seeds, then pre-register.
+2. **First recalibration stop (owner decision).** 72 % of the median run's worst heading
+   error builds up before the first stop when the chip warms slowly. Options: a 0.5 °C
+   first trigger, or a heading-uncertainty budget (`docs/results/r9-followup.md` §8).
+3. **Relocalisation range:** beyond 0.5 m from any keyframe, 2/12 on the IMU robot; no way
+   to relocalise while stationary once recovery is used up; no autonomous retry after
+   `recovery_exhausted`.
+4. **Learning:** plain arena restart 9/9, reversal 10/10 (round-9 suite). Textured arena
+   6/6 and 6/6 only with the optional open-vocabulary detector (2/4 and 2/6 with the default
+   colour detector); making it the default is an owner decision. Open: a duplicate identity
+   of a disliked fixture can be chosen before it is merged, and aversion learned in one
+   visual context does not carry to another (3 second red panels in 99 round-9 phases);
+   16 % of interactions with the tall cylinder still end in a tracking loss.
+5. **Unevaluated switches:** WS1 `VSLAMConfig.wheel_model`, WS2 `odometry="command_model"`,
+   WS4 `VSLAMConfig.depth_floor_mask`, WS5 `RuntimeConfig.view_aware_turns`.
+   `floor_feature_share` is not needed with the IMU (textured builds lost 0 frames without
+   it); keep it for the camera-only robot or retire it. Retiring rejected switches
+   (`static_hypothesis_when_moving`, `command_consistency_score`, `reloc_local_first`,
+   `suppress_free_above_bases`, `pnp`, `--legacy-loop-candidates`) needs the owner's agreement.
+6. **Map quality:** parallax-floor free evidence inside obstacles (up to 26 deep
+   false-free cells in one of 35 round-9 IMU builds).
+7. **Statistical learning evaluation:** randomised fixture placements, 10+ seeds, baselines
+   on every seed.
+8. **Simulation realism:** camera degradation (blur, exposure), a motor/armature model,
+   global bundle adjustment; real-time operation.
+9. **Repository:** licence (owner), pushing (owner), removing the merged worktrees
+   `work/wt/r9f-logcheck` (its staged changes are saved as a patch in
+   `work/evidence/r9g-lcreplay-20261011/`), `r9g-ce5cf69` and `r9g-dev-dd638a4`.
+
+## History, newest first
+
+### Round 9 (2026-10-05): IMU + wheel encoders
+
+- **Owner decisions:**
+  - Add an IMU and wheel encoders that can be bought (ST LSM6DSOX on Adafruit 4438; Pololu 4754 encoders) and keep wheel slip in mind.
+  - Implement the round-9 plan.
+  - Calibrate the gyro offset at natural stops; if the robot has not stopped for 2 minutes, stop and recalibrate if necessary.
+- **Where things are:**
+  - Results: `docs/results/heading-r9.md`.
+  - Pre-registration and its addenda (A–E by 2026-10-11): `docs/results/heading-r9-prereg.md`.
+  - Parts: `docs/ROBOT.md`.
+- **Switch:** `RuntimeConfig.odometry = "imu_encoders"` (at the time the default was `"command"`, byte-identical to before; `"imu_encoders"` became the default on 2026-10-06). It needs `configs/calibration/imu.yaml`, produced by `scripts/calibrate_imu.py`.
+- **Validation 3 (R9c, 890646c, plus the encoder-dropout fix d237559):**
+  - Large gains in heading, drift, losses, slip, navigation and sensor faults.
+  - P4 fails on 2 of 25 pairs: the camera-only arm was lost for long stretches there, and the IMU arm's heading drifts slowly in long non-stop runs. Adoption was then the owner's decision (made 2026-10-06, after validation 4).
+- **Plan items not yet evaluated in closed loop:**
+  - WS1 `VSLAMConfig.wheel_model`;
+  - WS2 `odometry="command_model"`;
+  - WS4 `VSLAMConfig.depth_floor_mask` plus `RuntimeConfig.depth_device`;
+  - WS5 `RuntimeConfig.view_aware_turns`.
+  - WS0 live replay (`scripts/dev/live_replay.py`, `--record-frames`) is ready for them.
+- **Machine limits:** about 2–2.5 GB per simulation; run at most 8 in parallel on this 48 GB machine. More triggered memory-pressure kills.
+
+#### Round 9 outcome (2026-10-06)
+
+- IMU + encoder odometry is the **default** (R9e f0748fc plus 811adbc). Validation 4 passed every required check. `docs/results/heading-r9.md` has the full story, including three failed or stopped validations.
+- **Recalibration policy** (owner decisions): the gyro offset is measured at natural stops; if needed, the robot stops after 2 minutes without a measurement or after a 1 °C chip temperature change.
+- **Each IMU unit needs `scripts/calibrate_imu.py` once.** Unit 4 uncalibrated reached 19° of heading error.
+- **Next** (2026-10-06): a loop-closure heading guard using the gyro (done 2026-10-11); closed-loop evaluation of WS1, WS2, WS4 and WS5.
+
+#### Round 9 re-validation (2026-10-11)
+
+- R9g (aa143e3) = the default plus the 2026-10-11 fixes, the loop-closure odometry guard and the blocked-robot check, under corrected caster physics. Validation 5 on untouched starts (seeds 10–14, offset 18°): `docs/results/heading-r9.md`, evidence `work/evidence/r9g-val-20261011/`.
+- **L1 fails P4 on one pair** (heldout_c s11, +5.0 cm; the camera-only run ended at 174 s). Every other required check passes. The claims are scoped accordingly; whether R9g stays the default is the owner's call (it is the code default).
+- **Next candidate:** when the blocked check fires and vision agrees with the encoders, keep the pose and back off, instead of declaring it lost (about 26 s per event now). Develop on spent seeds; pre-register before validating.
+- **For the next pre-registration:** compare P4 over the span both runs lasted (camera-only builds often end at `build_map.py`'s 6-re-enable limit).
+- **Long runs: keep the Mac's display awake** (`caffeinate -dims`). When the display slept, Genesis' renderer found no screen and 12 jobs failed.
+
+#### Round 9 learning, relocalisation and hygiene (2026-10-11, after validation 5)
+
+- **Learning on the IMU default** (`docs/LEARNING_RESULTS.md` round 9; `docs/results/r9-followup.md` §9):
+  - plain arena, round-6 suite: restart 9/9, reversal 10/10, 0 false relocalisations;
+  - L5 (pre-registered, reported): drift 0.08 vs 33.9 events per 100 turns; the camera-only
+    arm's own map was too short to relocalise on (L5x on the IMU map: post hoc);
+  - textured arena: restart 6/6 and reversal 6/6 with the open-vocabulary detector, 2/4 and 2/6
+    with the colour detector (`docs/results/textured-worlds.md`);
+  - frustration renewal: the round-6 idle trap no longer occurs; the switch stays off.
+- **Relocalisation range and coverage pass** (`docs/results/relocalisation.md` round 9): IMU
+  maps 22/24 within 0.5 m of a keyframe, 0 wrong; the coverage pass no longer harms the map
+  but does not extend the range (stays off); explained-share floor not built.
+- **Navigation, round-9 section** in `docs/NAVIGATION_RESULTS.md`.
+- **Hygiene:** CI workflow (not yet pushed), report labels the sensors used, camera-only labels
+  on pre-round-9 benchmarks, scorer fix for nudges unfinished at phase end.
+
+### Round 8 (2026-10-04): near-surface turn tail
 
 - The tail is wrong depth (wall/box faces lifted to the floor, times the lever arm), not edge aliasing.
 - Finalist **FA** passed every held-out criterion (`docs/results/turn-drift.md`, round 8). It is a combination of switches, all off by default:
@@ -42,7 +148,7 @@ Project rules are in `AGENTS.md` (read it first). Results with denominators are 
   - Next: build the benchmark from logged live command sequences, settle at turn start, estimate slip per rate band.
   - FAm stays off; the `fam` preset is kept for comparison.
 
-## Update: round 7 (2026-10-04): heading drift in in-place turns
+### Round 7 (2026-10-04): heading drift in in-place turns
 
 - Research: code map, 354-run analysis, literature.
 - Benchmark: `scripts/dev/turn_capture.py`, `turn_bench.py`.
@@ -54,7 +160,7 @@ Project rules are in `AGENTS.md` (read it first). Results with denominators are 
 - Next: a degeneracy-aware gate that keeps the lock (spread of matches along the turn, slip-scaled dead reckoning, longer prediction while turning).
 - Harness now logs the command per frame.
 
-## Update: round 6 (2026-10-03): the five open items worked in order
+### Round 6 (2026-10-03): the five open items worked in order
 
 1. **Safety** (`7ec324e`): fixed (0 contacts in 12 navigation runs).
 2. **Loop closure:** uncertainty slots, revisits and covisibility edges were
@@ -79,7 +185,7 @@ Project rules are in `AGENTS.md` (read it first). Results with denominators are 
 Models (all pinned, local cache): `scripts/amr.sh fetch-detector-model`, `fetch-vlm-model`;
 the `perception` extra adds `timm`.
 
-## Update: round 5 (2026-10-03): loop closure
+### Round 5 (2026-10-03): loop closure
 
 Done (`73da7e2`, `211d626`, `c9a7694` and the docs commit; `docs/results/loop-closure.md`):
 * **Research choice:**
@@ -117,7 +223,7 @@ Open, in order:
    round-4/5 code.
 5. **Perception swap** in simulation.
 
-## Update: round 4 (2026-10-03): open items worked through
+### Round 4 (2026-10-03): open items worked through
 
 Done (`7c301c5` .. `0bf21dc` and this commit; results in `docs/results/`):
 * **Relocalisation:** planar two-point RANSAC with verification, view-change
@@ -145,7 +251,7 @@ Open, in order:
 4. **The agreed plan:** swap in real perception inside the simulation (a detector,
    and a VLM for outcomes).
 
-## Update: first local session (macOS arm64), 2026-10-02
+### First local session (macOS arm64), 2026-10-02
 
 Done (commits `c416ccd` .. this one):
 * Learner testbed committed and run (20 seeds x 4 noise levels). Main failure at high
@@ -168,7 +274,11 @@ Open, in order:
    largest remaining testbed error; keeping 6 pre-action frames is measured but only
    matters with a noisier detector).
 
-## Immediate task (original, now done): learner testbed under perception noise
+### Original cloud handoff (2026-10-02)
+
+Its repository state (last commit `3577fe5`, an uncommitted learner testbed) is long superseded; the task and plan are kept for the record.
+
+#### Immediate task (original, now done): learner testbed under perception noise
 
 Goal (agreed with the owner): the learning layer must survive the errors real
 perception (an open-vocabulary detector + a VLM describing outcomes) will make,
@@ -197,7 +307,7 @@ aversive repeats, reversal adaptation and restart choice degrade from `clean` to
 breaks (likely: outcome-label fragmentation, identity splits, noise-triggered change
 detection), with each fix measured on the same grid.
 
-## Agreed plan after that
+#### Agreed plan after that
 
 1. Swap perception inside simulation first (textured objects; open-vocabulary detector
    + re-identification; VLM before/after outcome descriptions mapped to categories).
@@ -213,47 +323,9 @@ Other open items:
 * Localisation drift in held-out rooms is now the main cause of missed goals (10/17).
 * The Genesis learning suite has not been re-run since the nudge fix and the depth guard.
 
-## Notes
+#### Notes
 
 * Arrival tolerance is 0.15 m (the docs said 0.25 m until round 3; corrected).
 * The full Genesis environment is `bash scripts/amr.sh setup` (+ `fetch-depth-model`);
   one Genesis process uses ~3–5 GB RAM, so run simulations one at a time.
 * Commits: author Nitish <rrnitish@gmail.com>.
-
-
-## Update: round 9 (2026-10-05): IMU + wheel encoders
-
-- **Owner decisions:**
-  - Add an IMU and wheel encoders that can be bought (ST LSM6DSOX on Adafruit 4438; Pololu 4754 encoders) and keep wheel slip in mind.
-  - Implement the round-9 plan.
-  - Calibrate the gyro offset at natural stops; if the robot has not stopped for 2 minutes, stop and recalibrate if necessary.
-- **Where things are:**
-  - Results: `docs/results/heading-r9.md`.
-  - Pre-registration with addenda A and B: `docs/results/heading-r9-prereg.md`.
-  - Parts: `docs/ROBOT.md`.
-- **Switch:** `RuntimeConfig.odometry = "imu_encoders"` (default `"command"`, which is byte-identical to before). It needs `configs/calibration/imu.yaml`, produced by `scripts/calibrate_imu.py`.
-- **Validation 3 (R9c, 890646c, plus the encoder-dropout fix d237559):**
-  - Large gains in heading, drift, losses, slip, navigation and sensor faults.
-  - P4 fails on 2 of 25 pairs: the camera-only arm was lost for long stretches there, and the IMU arm's heading drifts slowly in long non-stop runs. Adoption as the default awaits the owner.
-- **Plan items not yet evaluated in closed loop:**
-  - WS1 `VSLAMConfig.wheel_model`;
-  - WS2 `odometry="command_model"`;
-  - WS4 `VSLAMConfig.depth_floor_mask` plus `RuntimeConfig.depth_device`;
-  - WS5 `RuntimeConfig.view_aware_turns`.
-  - WS0 live replay (`scripts/dev/live_replay.py`, `--record-frames`) is ready for them.
-- **Machine limits:** about 2–2.5 GB per simulation; run at most 8 in parallel on this 48 GB machine. More triggered memory-pressure kills.
-
-### Round 9 outcome (2026-10-06)
-
-- IMU + encoder odometry is the **default** (R9e f0748fc plus 811adbc). Validation 4 passed every required check. `docs/results/heading-r9.md` has the full story, including three failed or stopped validations.
-- **Recalibration policy** (owner decisions): the gyro offset is measured at natural stops; if needed, the robot stops after 2 minutes without a measurement or after a 1 °C chip temperature change.
-- **Each IMU unit needs `scripts/calibrate_imu.py` once.** Unit 4 uncalibrated reached 19° of heading error.
-- **Next** (2026-10-06): a loop-closure heading guard using the gyro (done 2026-10-11); closed-loop evaluation of WS1, WS2, WS4 and WS5.
-
-### Round 9 re-validation (2026-10-11)
-
-- R9g (aa143e3) = the default plus the 2026-10-11 fixes, the loop-closure odometry guard and the blocked-robot check, under corrected caster physics. Validation 5 on untouched starts (seeds 10–14, offset 18°): `docs/results/heading-r9.md`, evidence `work/evidence/r9g-val-20261011/`.
-- **L1 fails P4 on one pair** (heldout_c s11, +5.0 cm; the camera-only run ended at 174 s). Every other required check passes. The claims are scoped accordingly; whether R9g stays the default is the owner's call (it is the code default).
-- **Next candidate:** when the blocked check fires and vision agrees with the encoders, keep the pose and back off, instead of declaring it lost (about 26 s per event now). Develop on spent seeds; pre-register before validating.
-- **For the next pre-registration:** compare P4 over the span both runs lasted (camera-only builds often end at `build_map.py`'s 6-re-enable limit).
-- **Long runs: keep the Mac's display awake** (`caffeinate -dims`). When the display slept, Genesis' renderer found no screen and 12 jobs failed.

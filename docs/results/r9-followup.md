@@ -198,6 +198,10 @@ The full results are in [heading-r9.md](heading-r9.md#validation-5-r9g-aa143e3-o
 Evidence: `work/evidence/r9g-learn-20261011/` (maps chosen before any run, `MAP_CHOICE.md`;
 scored in `analysis/learning.json` and `analysis/report-*.md`).
 
+### The round-6 suite on the IMU default
+
+7 experiments × 5 starts in the plain arena, on the round-6 map, code 8946f9e: restart 9/9, reversal **10/10** (round 6, camera only: 7/10), 0 of 131 relocalisations false, 0 drift events in 1295 in-place turns, nudges reached their target 24/24. Full table: [LEARNING_RESULTS.md](../LEARNING_RESULTS.md#round-9-2026-10-11-the-suite-on-the-imu-default).
+
 ### L5 as pre-registered (addendum E; reported, not required)
 
 arena_textured, starts 0–2, 7 experiments, each arm on its own validation-5 map of seed 10,
@@ -251,6 +255,19 @@ was read (`MAP_CHOICE.md`). Same experiments, starts and code; only the map diff
 - **Learning counts do not differ much.** In this world they are set by the colour detector
   (see L5 above), not by localisation. The drifting robot wandered more widely and touched bloom and
   stone more often (113 attempts against 2), but adapted no more often.
+
+### L5ov: the IMU arm with the open-vocabulary detector (development)
+
+Same map, experiments, starts and code as L5's IMU arm; `--detector open_vocab` (chosen before
+the run, `MAP_CHOICE.md`). All 27 phases relocalised; 0 of 67 relocalisations false; 0 drift
+events in 853 turns.
+- **Restart 6 / 6 and reversal 6 / 6**, against 2 / 4 and 2 / 6 with the colour detector.
+- Attempts abandoned for an unconfirmed target fell from 61 % to 28 %; useful outcomes per
+  attempt rose from 0.07 to 0.20.
+- Two phases got a second red panel from grump: one duplicate identity chosen 1.7 s before
+  its merge, and one re-probe while grump's flag was already raised (a visual context the
+  robot had no experience of).
+- Full table: [textured-worlds.md](textured-worlds.md#5d-measured-errors-in-the-learner-testbed).
 
 ### Frustration renewal A/B (development; switch `ChooserConfig.frustration_renewal_s`, off by default)
 
