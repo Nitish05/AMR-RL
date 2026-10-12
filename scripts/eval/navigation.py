@@ -270,6 +270,11 @@ def evaluate_world(name, out_root, map_seconds, seed, loop_closure=True, turn_pr
     if RUNTIME_ARGS is not None:
         apply_runtime_args(config, RUNTIME_ARGS)
     apply_turn_preset(config, turn_preset)  # camera-only presets: after --odometry
+    for item in getattr(RUNTIME_ARGS, "vslam", None) or []:  # A/B overrides win over the preset
+        key, value = item.split("=", 1)
+        if not hasattr(config.vslam, key):
+            raise SystemExit(f"unknown VSLAMConfig field {key}")
+        setattr(config.vslam, key, json.loads(value))
     session = Session(name, run_dir=run_dir, memory_path=run_dir / "throwaway-memory.sqlite", config=config,
                       seed=seed, inspection=False,
                       world_overrides=world_overrides(RUNTIME_ARGS, {"robot_start": start}) if RUNTIME_ARGS
@@ -401,6 +406,7 @@ def main():
     parser.add_argument("--out", default=None)
     parser.add_argument("--no-loop-closure", action="store_true", help="A/B: run without loop closure")
     parser.add_argument("--turn-preset", default="none", help="A/B: named turn-handling preset (vslam.TURN_PRESETS)")
+    parser.add_argument("--vslam", nargs="*", default=[], help="A/B: VSLAMConfig overrides key=value (JSON values)")
     parser.add_argument("--heading-offset", type=float, default=0.0,
                         help="extra start heading (deg) on top of seed x 72 deg (fresh evaluation starts)")
     add_runtime_args(parser)
