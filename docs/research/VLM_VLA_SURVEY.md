@@ -25,7 +25,7 @@ and expression together. Models can take over individual layers:
 | NavFoM (PKU, Sep 2025) | Quadruped, drone, wheeled, car | 1–8 RGB cameras → trajectories | not stated | weights not confirmed | RTX 5090 | Reference only |
 | ABot-N0 / N1 (Alibaba, 2026) | Navigation | Vision + language → trajectories; topological memory | not verified | not verified | unknown | Watch |
 | NaVILA (RSS 2025) | Legged | RGB frames → language mid-level actions | 8B | Apache-2.0 code | multi-GPU | Text-action interface fits a supervisor; too heavy |
-| π0 / π0.5 (openpi), GR00T N1.7, SmolVLA, OpenVLA-OFT, Magma | Arms / humanoids | RGB + state → arm or joint actions | 0.5–9B | mostly open | GPU (SmolVLA CPU-feasible) | Wrong embodiment |
+| π0 / π0.5 (openpi), GR00T N1.7, SmolVLA, OpenVLA-OFT, Magma | Arms / humanoids | RGB + state → arm or joint actions | 0.5–9B (SmolVLA: see the addendum) | mostly open | GPU; SmolVLA's CPU claim is unmeasured here | Wrong embodiment |
 | Gemini Robotics-ER 2 (preview, 2026) | Embodied reasoning | Images/video → points, boxes, trajectories, plans | closed | API only | cloud | Strong semantic layer; network-dependent |
 | **Qwen3-VL** 2B/4B/8B (Oct 2025) | General VLM | Image/video → text, 2D boxes, points | 2–8B | Apache-2.0 | Mac (llama.cpp/MLX), Jetson Orin | Best open semantic backbone |
 | RoboBrain 2.5 (BAAI, Jan 2026) | Embodied VLM | RGB → points, affordances, trajectories, task progress | 4B / 8B | Apache-2.0 | GPU | Good for outcome / progress judging |
@@ -105,3 +105,11 @@ found in primary sources — measure them).
 - https://huggingface.co/nvidia/Cosmos-Reason2-2B · https://www.jetson-ai-lab.com/tutorials/cosmos-reason2-vlm/
 - https://huggingface.co/moondream/moondream-2b-2025-04-14
 - https://arxiv.org/html/2606.10927v1
+
+## Addendum (2026-10-12): small VLAs, decided
+
+A second review ([VLA_FOR_PIP.md](VLA_FOR_PIP.md), about 115 papers) asked whether a small VLA
+such as SmolVLA could help Pip. Decision recorded there: no VLA in the control loop, none for
+the personality work; the asynchronous chunked-inference pattern is borrowed; VLMs and LLMs are
+used only at the edges, read-only or within bounds. The "CPU-feasible" cell above was a model-card
+claim; it is unmeasured for a 10 Hz camera loop and is not relied on.
