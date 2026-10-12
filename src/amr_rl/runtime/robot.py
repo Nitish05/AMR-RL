@@ -18,7 +18,7 @@ from pathlib import Path
 import numpy as np
 
 from ..behavior.activities import Survey
-from ..behavior.character import CharacterConfig
+from ..behavior.character import CharacterConfig, config_for, effective
 from ..behavior.chooser import ActivityChooser, ChooserConfig, Motivation, MotivationConfig
 from ..behavior.frontier import frontier_goals
 from ..control.supervisor import Supervisor, SupervisorConfig
@@ -156,6 +156,12 @@ class RuntimeConfig:
     # trait values with bounds and provenance, persisted in the experience memory. Nothing
     # reads them yet.
     character: CharacterConfig = field(default_factory=CharacterConfig)
+    # The owner's preset seeds a new character (behavior/character.PRESETS); an existing
+    # store keeps its values. character_active applies the trait values to the chooser, the
+    # navigator and the probe budgets at boot (character.effective); off until the
+    # identifiability gate has been run (docs/research/PERSONALITY_RESEARCH_2.md section 1).
+    character_preset: str = "default"
+    character_active: bool = False
     # This robot's gyro calibration (scripts/calibrate_imu.py); used when its unit
     # serial matches the spec's. None = datasheet prior only (+-1 % sensitivity).
     imu_calibration: str | None = "configs/calibration/imu.yaml"
@@ -274,13 +280,17 @@ class RobotRuntime:
                 self.detector_status = f"open_vocab ({repo}@{rev[:8]}, {ov.device})"
         self.memory = ExperienceMemory(memory_path, config=self.cfg.learning)
         self.memory.invalidate_positions(self.slam.map_version)
+        if self.cfg.character_preset != "default" and not self.cfg.character.values:
+            self.cfg.character = config_for(self.cfg.character_preset)
         self.memory.ensure_character(self.cfg.character, t=0.0)
         self.memory.record_boot(0.0, "restart", map_version=self.slam.map_version, map_loaded=map_dir is not None,
                                 **{k: v for k, v in self.memory.counts().items() if isinstance(v, int)})
+        self.character_effective, self._character_base = None, None
         self.tracker = EntityTracker(self.memory)
         self.semantic = SemanticWorker() if self.cfg.semantic else None
         self.archive = ImageEvidenceArchive(self.run_dir, audit=self.cfg.audit_images)
         self.motivation = Motivation(self.cfg.motivation)
+        self._apply_character()
         self.chooser = ActivityChooser(self.cfg.chooser, policy=self.cfg.policy,
                                        rng=np.random.default_rng(self.cfg.seed))
         self.activity = None
@@ -826,6 +836,33 @@ class RobotRuntime:
             return True
         return False
 
+    def _apply_character(self):
+        """With character_active, set the parameters the trait values produce
+        (character.effective) on the chooser config, the navigator and the memory's probe
+        budgets. Engineered mapping; recorded in the state's character block."""
+        if not self.cfg.character_active:
+            self.character_effective = None
+            return
+        if self._character_base is None:  # the configured values, read once so re-applying never compounds
+            self._character_base = {"chooser.min_interval": self.cfg.chooser.min_interval,
+                                    "chooser.avoid_radius": self.cfg.chooser.avoid_radius,
+                                    "chooser.margin": self.cfg.chooser.margin, "navigator.v_max": self.nav.cfg.v_max,
+                                    "learning.initial_probes": self.memory.cfg.initial_probes,
+                                    "learning.change_failures": self.memory.cfg.change_failures}
+        values = {k: r["value"] for k, r in self.memory.character().items()}
+        eff = effective(values)
+        self.cfg.chooser.info_gain = eff["chooser.info_gain"]
+        self.cfg.chooser.value_z = eff["chooser.value_z"]
+        self.cfg.chooser.min_interval = self._character_base["chooser.min_interval"] * eff["chooser.min_interval_gain"]
+        self.cfg.chooser.avoid_radius = self._character_base["chooser.avoid_radius"] * eff["chooser.avoid_radius_gain"]
+        self.cfg.chooser.margin = self._character_base["chooser.margin"] * eff["chooser.margin_gain"]
+        self.nav.cfg.v_max = self._character_base["navigator.v_max"] * eff["navigator.v_max_gain"]
+        self.memory.cfg.initial_probes = eff["learning.initial_probes"]
+        self.memory.cfg.change_failures = eff["learning.change_failures"]
+        self.character_effective = {**eff, "values": values, "chooser.min_interval": self.cfg.chooser.min_interval,
+                                    "chooser.avoid_radius": self.cfg.chooser.avoid_radius,
+                                    "chooser.margin": self.cfg.chooser.margin, "navigator.v_max": self.nav.cfg.v_max}
+
     def _on_blocked(self, now):
         """The wheels were driven but vision and the encoders agree the robot did not
         move: the pose is right and something blocks the drive (owner decision
@@ -1200,7 +1237,11 @@ class RobotRuntime:
                 **({} if self.guard is None else self.guard.stats)}},
             "trajectory": self.trajectory[-600:],
             "memory": {"agent_id": self.memory.agent_id, "db": self.memory.path, **self.memory.counts()},
-            "character": self.memory.character_inspector(),
+            "character": {**self.memory.character_inspector(), "active": self.cfg.character_active,
+                          "effective": self.character_effective,
+                          "reads": ("the chooser, navigator and probe budgets (engineered mapping, character.effective)"
+                                    if self.cfg.character_active else
+                                    "no behaviour reads these values yet (character_active is off)")},
             "map": {**self.grid.counts(), "map_version": self.grid.map_version,
                     "start_clearance_attested": self.cfg.start_clearance_attested if self._attested else None,
                     "loop_closure": {"status": self.place_status, "closures": len(self.loop_closures),

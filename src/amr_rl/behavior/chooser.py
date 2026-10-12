@@ -43,6 +43,11 @@ class ChooserConfig:
     explore_weight: float = 0.15
     investigate_value: float = 0.10
     margin: float = 0.08
+    # Character (behavior/character.py; set by RobotRuntime when character_active): a gain on
+    # every information-value term, and decision-time pessimism, value = expected valence
+    # minus value_z x its uncertainty (0 = the mean). Both 1.0 / 0.0 leave behaviour as it was.
+    info_gain: float = 1.0
+    value_z: float = 0.0
     min_interval: float = 3.0
     max_switches_per_minute: int = 6
     avoid_radius: float = 0.75
@@ -108,12 +113,13 @@ def option_values(memory, entity_id, context, now, *, need, novelty, distance, c
     for action in ACTIONS:
         pred = preds[action]
         best_other = max([0.0] + [e for a, e in evs.items() if a != action])
-        info = memory.information_value(pred, best_other) * (0.3 + 0.7 * need)
+        info = cfg.info_gain * memory.information_value(pred, best_other) * (0.3 + 0.7 * need)
         cost = cfg.travel_cost * distance + cfg.action_cost[action]
         ev = pred["expected_valence"]
+        ev_used = ev - cfg.value_z * pred["uncertainty"]  # caution: a pessimistic (or optimistic) read of the value
         out.append({"action": action, "prediction": pred, "state": memory.option_state(entity_id, action, now),
                     "expected_value": ev, "information_value": info, "cost": cost,
-                    "value": need * ev * novelty + info - cost})
+                    "value": need * ev_used * novelty + info - cost})
     return out
 
 
@@ -203,9 +209,10 @@ class ActivityChooser:
                 })
             if (att["interactions"] == 0 or blocked) and not rt.was_investigated(eid) and dist > 1.2:
                 cost = self.cfg.travel_cost * dist
+                iv = self.cfg.info_gain * self.cfg.investigate_value
                 out.append({"activity": "investigate", "entity_id": eid, "action": None,
-                            "value": self.cfg.investigate_value * (0.5 + need) - cost, "expected_value": None,
-                            "information_value": self.cfg.investigate_value, "cost": cost, "xy": xy,
+                            "value": iv * (0.5 + need) - cost, "expected_value": None,
+                            "information_value": iv, "cost": cost, "xy": xy,
                             "basis": ("no certified interaction pose yet; look closer to map its surroundings"
                                       if blocked else "never interacted; improve identity/appearance evidence")})
         frontiers = rt.frontiers()
@@ -214,7 +221,7 @@ class ActivityChooser:
             dist = float(np.linalg.norm(np.asarray(goal) - pose))
             # Engineered curiosity about space, scaled by measured map-growth progress.
             progress = min(1.0, rt.map_progress / 150.0)
-            info = self.cfg.explore_weight * min(1.0, gain / 60.0) * progress
+            info = self.cfg.info_gain * self.cfg.explore_weight * min(1.0, gain / 60.0) * progress
             cost = self.cfg.travel_cost * dist
             out.append({"activity": "explore", "entity_id": None, "action": None,
                         "value": info * (0.5 + need) - cost, "expected_value": None, "information_value": info,
@@ -330,8 +337,9 @@ class ActivityChooser:
 
     def snapshot(self):
         keep = ("activity", "entity_id", "action", "value", "expected_value", "information_value", "cost", "basis")
-        return {"chosen": self.chosen, "candidates": [{k: c.get(k) for k in keep} for c in
-                                                      sorted(self.candidates, key=lambda c: -c["value"])[:10]],
+        return {"chosen": self.chosen, "candidates": [{**{k: c.get(k) for k in keep},
+                                                       "uncertainty": (c.get("prediction") or {}).get("uncertainty")}
+                                                      for c in sorted(self.candidates, key=lambda c: -c["value"])[:10]],
                 "reconsiderations": self.reconsiderations, "policy": self.policy}
 
 

@@ -567,10 +567,18 @@
 
   function renderCharacter(s) {
     // The character store: engineered trait values with bounds and the provenance of the
-    // last write (amr_rl.state.v1 "character"). Honesty: nothing reads them yet.
+    // last write (amr_rl.state.v1 "character"). Honesty: the "reads" line says whether any
+    // behaviour uses the values (character_active) and "effective" what they set.
     var ch = s.character || {};
     var traits = Array.isArray(ch.traits) ? ch.traits : [];
     setText('char-reads', ch.reads || '');
+    byId('char-tag').textContent = ch.active ? 'engineered · active' : 'engineered · inert';
+    var eff = ch.effective || null;
+    setText('char-eff', eff ? ('sets: v_max ' + fmt(eff['navigator.v_max'], 3) + ' m/s · min interval ' +
+      fmt(eff['chooser.min_interval'], 1) + ' s · margin ' + fmt(eff['chooser.margin'], 3) + ' · avoid radius ' +
+      fmt(eff['chooser.avoid_radius'], 2) + ' m · info gain ' + fmt(eff['chooser.info_gain'], 2) + ' · value z ' +
+      fmt(eff['chooser.value_z'], 2) + ' · probes ' + eff['learning.initial_probes'] + ' · change failures ' +
+      eff['learning.change_failures']) : '');
     setText('char-meta', 'preset ' + (ch.preset || DASH) + ' · ' +
       (Array.isArray(ch.log) ? ch.log.filter(function (e) { return e.cause !== 'created'; }).length : DASH) +
       ' changes logged · ' + (Array.isArray(ch.boots) ? ch.boots.length : DASH) + ' boots recorded');

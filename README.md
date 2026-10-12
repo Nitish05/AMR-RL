@@ -339,6 +339,11 @@ The full status of every capability is in
   cells in one of 35 round-9 builds; up to 103 camera only).
 * **Duplicate identities:** a second identity for a disliked fixture can be chosen
   before it is merged with the first (once in 45 round-9 learning phases).
+* **Character:** the four temperament traits are engineered gains on existing
+  parameters (`behavior/character.py`), switched off by default until the pre-registered
+  admission gate shows they are identifiable from behaviour
+  ([criteria](docs/results/character-gate-prereg.md)); the learning-style traits are
+  stored but not mapped; no trait is a learned or inner quantity.
 * **Nudge reach:** fixed and re-evaluated in the loop: 24/24 completed nudges on
   fixtures with rules touched them (round 9), 32/33 in round 6.
 * **Blocked or slipping wheels:** with the IMU, the robot notices within about

@@ -57,7 +57,7 @@ never simulator ground truth. `null` means unavailable/unknown, never zero.
     "chosen": {"activity": "engage", "entity_id": "ent-3f2a", "action": "signal", "value": 0.51},
     "candidates": [
       {"activity": "engage", "entity_id": "ent-3f2a", "action": "signal",
-       "value": 0.51, "expected_value": 0.62, "information_value": 0.02, "cost": 0.13,
+       "value": 0.51, "expected_value": 0.62, "information_value": 0.02, "cost": 0.13, "uncertainty": 0.21,
        "basis": "6 outcomes; P(yellow_flag)=0.83"}
     ],
     "reconsiderations": 4
@@ -84,7 +84,12 @@ never simulator ground truth. `null` means unavailable/unknown, never zero.
                  "status": "following", "rejected_goals": 1, "last_rejection": "goal in unknown space"},
   "trajectory": [[0.0, 0.0], [0.1, 0.0]],
   "memory": {"agent_id": "pip-…", "db": "…", "outcomes": 12, "entities": 4},
-  "character": {                   // the character store (behavior/character.py); engineered values, nothing reads them yet
+  "character": {                   // the character store (behavior/character.py); engineered values
+    "active": false,               // RuntimeConfig.character_active: whether any behaviour reads the values
+    "effective": null,             // when active: the parameters the values set (character.effective), e.g.
+                                   // {"values": {...}, "navigator.v_max": 0.275, "chooser.min_interval": 2.4,
+                                   //  "chooser.margin": 0.09, "chooser.avoid_radius": 0.56, "chooser.info_gain": 1.41,
+                                   //  "chooser.value_z": -0.82, "learning.initial_probes": 3, "learning.change_failures": 3, ...}
     "preset": "default",
     "traits": [{"key": "caution", "value": 0.5, "lo": 0.0, "hi": 1.0, "anchor": 0.5, "drift": 0.0,
                 "provenance": "engineered_default",  // engineered_default | owner | consolidation | llm_advised | human_rating | migration
@@ -92,7 +97,7 @@ never simulator ground truth. `null` means unavailable/unknown, never zero.
     "log": [{"t": 0.0, "session": 1, "key": "caution", "before": null, "after": 0.5, "cause": "created",
              "provenance": "engineered_default", "detail": "{…}"}],
     "writes_by_provenance": {}, "boots": [{"t": 0.0, "session": 1, "event": "restart", "detail": {}}],
-    "reads": "no behaviour reads these values yet (store and audit only)"
+    "reads": "no behaviour reads these values yet (character_active is off)"  // or what reads them when active
   }
 }
 ```

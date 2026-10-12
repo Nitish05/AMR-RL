@@ -193,6 +193,9 @@ def add_runtime_args(parser):
     parser.add_argument("--runtime", nargs="*", default=[], help="RuntimeConfig overrides key=value (JSON values)")
     parser.add_argument("--odo", nargs="*", default=[], help="OdometryConfig overrides key=value (JSON values)")
     parser.add_argument("--chooser", nargs="*", default=[], help="ChooserConfig overrides key=value (JSON values)")
+    parser.add_argument("--trait", nargs="*", default=[],
+                        help="character trait values key=value seeded into a FRESH store (behavior/character.TRAITS); "
+                             "applied to behaviour only with --runtime character_active=true")
     parser.add_argument("--world-set", nargs="*", default=[],
                         help="EVALUATION: world config overrides key=value (JSON), e.g. floor_friction=0.06, "
                              "slip_patches=[...], sensor_faults={\"imu_off\":true}, physics={...}; unknown keys "
@@ -223,6 +226,9 @@ def apply_runtime_args(cfg, args):
         if not hasattr(cfg.chooser, key):
             raise SystemExit(f"unknown ChooserConfig field {key}")
         setattr(cfg.chooser, key, value)
+    for key, value in _kv(getattr(args, "trait", [])).items():
+        cfg.character.spec(key)  # KeyError for an unknown trait
+        cfg.character.values[key] = float(value)
     if args.record_frames:
         cfg.audit_images = True
     return cfg
