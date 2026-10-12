@@ -1,0 +1,21 @@
+# Light CI: the non-simulation test suite, ruff and the UI checks (scripts/amr.sh test)
+# with only the core dependencies. No Genesis, torch or model weights: the simulation
+# suite (scripts/amr.sh test-sim) and the evaluations run locally.
+name: ci
+on:
+  push:
+    branches: [main]
+  pull_request:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: pyproject.toml
+      - run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libgl1  # opencv-python
+      - run: python -m pip install -e ".[dev]"
+      - run: AMR_PYTHON=python bash scripts/amr.sh test

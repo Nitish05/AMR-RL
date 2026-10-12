@@ -623,6 +623,14 @@ def test_reversal_scorer_uses_true_panel_events():
     assert "| yes |" in table
 
 
+def test_report_labels_the_sensors_each_run_used():
+    report = _scoring_module("report")
+    assert report.sensors_label([{"odometry": {"source": "imu_encoders"}}]) == "onboard RGB + IMU + wheel encoders"
+    assert report.sensors_label([{}]) == "onboard RGB only"  # before round 9: no odometry record
+    assert report.sensors_label([{"odometry": {"source": "imu_encoders"}}, {}]) == (
+        "onboard RGB only; onboard RGB + IMU + wheel encoders")
+
+
 def test_time_windowed_and_periodic_sensor_faults():
     from amr_rl.sim.sensors import ProprioSensors
 

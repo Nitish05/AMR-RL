@@ -39,6 +39,17 @@ def run_label(r):
     return r["world"] if not r.get("seed") else f'{r["world"]} s{r["seed"]}'
 
 
+SENSOR_LABELS = {"imu_encoders": "onboard RGB + IMU + wheel encoders", "command": "onboard RGB only",
+                 "command_model": "onboard RGB + commanded-motion model"}
+
+
+def sensors_label(results):
+    """What the localisation used, from each run's recorded odometry source (runs before
+    round 9 record none: they were camera-only)."""
+    srcs = {(r.get("odometry") or {}).get("source", "command") for r in results}
+    return "; ".join(SENSOR_LABELS.get(s, s) for s in sorted(srcs)) or "no runs"
+
+
 def navigation(nav_dirs) -> str:
     nav_dirs = [nav_dirs] if isinstance(nav_dirs, Path) else list(nav_dirs)
     results = []
@@ -51,7 +62,7 @@ def navigation(nav_dirs) -> str:
     ok = [r for r in results if not r.get("failed")]
     lines.append(f"Runs: {len(results)}; crashed runs: {len(failed)} {failed or ''}")
     lines += ["", "### Summary by room (all seeds)", "", nav_summary(ok), ""]
-    lines += ["", "### Mapping by exploration (onboard RGB only)", ""]
+    lines += ["", f"### Mapping by exploration ({sensors_label(ok)})", ""]
     rows = []
     for r in ok:
         m, t = r["mapping"], r["mapping"]["trajectory"]

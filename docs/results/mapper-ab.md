@@ -1,5 +1,7 @@
 # Mapper A/B on identical trajectories (evaluation only)
 
+> **Camera-only, before round 9.** These runs (2026-09-30) localised from the image and the commanded motion only; the IMU and wheel encoders (the default since 2026-10-06) did not exist yet. The numbers describe that robot, not the current default.
+
 `scripts/dev/mapper_ab.py`: the robot explores with the default mapper; a shadow
 mapper with one setting changed receives the same keyframes and every other map
 input into its own grid. Both maps are scored against ground truth after 240 s.

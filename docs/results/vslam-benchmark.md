@@ -1,5 +1,7 @@
 # VSLAM variant benchmark (evaluation only)
 
+> **Camera-only, before round 9.** These runs (2026-09-30) localised from the image and the commanded motion only; the IMU and wheel encoders (the default since 2026-10-06) did not exist yet. The numbers describe that robot, not the current default.
+
 `scripts/dev/slam_bench.py`: 300 s of autonomous exploration per scenario, scored against
 ground truth. `seed k` turns the start heading by k × 72°. Cells: ATE / worst error (cm), frames lost.
 
