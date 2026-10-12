@@ -19,10 +19,20 @@ def final_error(rows):
 
 
 def test_switches_off_leave_tracking_unchanged():
-    """Recorded with the code before any turn switch existed."""
+    """Recorded with the code before any turn switch existed, on macOS arm64, where the
+    poses must match to the last digit. Other platforms' numpy/OpenCV builds differ in
+    the last bits (Linux x86_64 CI: 3e-8), so there the poses must agree to 1e-6."""
+    import platform
+
     _, rows = run_turn(box_dist=0.30, turn_deg=360, start_heading=math.pi)
     now = [None if r[4].pose is None else [round(float(v), 9) for v in r[4].pose] for r in rows]
-    assert now == json.loads(BASELINE.read_text())["box030_360"]
+    base = json.loads(BASELINE.read_text())["box030_360"]
+    if (platform.system(), platform.machine()) == ("Darwin", "arm64"):
+        assert now == base
+    else:
+        assert [p is None for p in now] == [p is None for p in base]
+        np.testing.assert_allclose([p for p in now if p is not None], [p for p in base if p is not None],
+                                   rtol=0, atol=1e-6)
 
 
 def test_turn_state_follows_the_command():
