@@ -197,6 +197,10 @@ def render(expr: ExpressionState, size: tuple[int, int] = (192, 132)) -> np.ndar
     shift = gx * 7 * k  # the whole face drifts a little toward the gaze (image px)
     lx, rx = w / 2 - sep + shift, w / 2 + sep + shift
 
+    if expr.cue:
+        # boot transparency cue, hinted on the face (full text in the console / state)
+        hint = expr.cue if len(expr.cue) <= 18 else expr.cue[:17].rstrip() + "…"
+        c.text(hint.replace("…", "."), c.p(0.03, 0.16), 0.32 * k, (150, 170, 190), 1)
     if expr.signal_pattern:
         _rings(c, w / 2 + shift, cy, min(h * 0.46, w * 0.4))
 

@@ -419,3 +419,69 @@ def test_blocked_backoff_has_its_own_face_and_caption():
                      "reason": "drive blocked (stalled); pose kept", "since": 10.0}
     e = expression_from(s)
     assert e.face == "wary" and e.caption == "Blocked - backing off"
+
+
+# ---------------------------------------------------------------- style: one latent state
+def test_style_defaults_are_the_identity_without_motivation_or_character():
+    e = expression_from(make_state())
+    assert (e.activation, e.tempo, e.blink_interval_s, e.cue) == (0.5, 1.0, 4.0, "")
+    d = e.to_dict()
+    assert d["style"] == {"activation": 0.5, "tempo": 1.0, "blink_interval_s": 4.0} and d["cue"] == ""
+    assert e.basis["activation"] == ["motivation.stimulation_need"] and "character.active" in e.basis["tempo"]
+
+
+def test_tempo_is_monotone_in_the_logged_need_and_the_blink_interval_follows():
+    tempos = [expression_from(make_state(motivation={"stimulation_need": n})).tempo for n in (0.0, 0.25, 0.5, 1.0)]
+    assert tempos == sorted(tempos) and tempos[0] == 0.75 and tempos[2] == 1.0 and tempos[3] == 1.25
+    e = expression_from(make_state(motivation={"stimulation_need": 1.0}))
+    assert e.blink_interval_s == pytest.approx(4.0 / 1.25)
+
+
+def test_the_approach_tempo_trait_rescales_the_face_tempo_only_when_the_character_is_active():
+    traits = [{"key": "approach_tempo", "value": 1.0}]
+    inert = expression_from(make_state(motivation={"stimulation_need": 0.5},
+                                       character={"active": False, "traits": traits}))
+    active = expression_from(make_state(motivation={"stimulation_need": 0.5},
+                                        character={"active": True, "traits": traits}))
+    slow = expression_from(make_state(motivation={"stimulation_need": 0.5},
+                                      character={"active": True, "traits": [{"key": "approach_tempo", "value": 0.0}]}))
+    assert inert.tempo == 1.0 and active.tempo == 1.25 and slow.tempo == 0.75  # the navigator's speed cap
+    assert "character.traits[approach_tempo].value" in active.basis["tempo"]
+    assert "character.traits[approach_tempo].value" not in inert.basis["tempo"]
+
+
+def test_calm_faces_clamp_the_tempo_no_eager_idiom_while_avoiding_or_stopped():
+    s = make_state(motivation={"stimulation_need": 1.0})
+    s["activity"] = {"name": "avoid", "target_entity": "ent-b", "phase": "", "reason": "", "since": 1.0}
+    e = expression_from(s)
+    assert e.face == "wary" and e.tempo == 1.0 and "face" in e.basis["tempo"]
+    s["activity"] = {"name": "explore", "target_entity": None, "phase": "", "reason": "", "since": 1.0}
+    assert expression_from(s).tempo == 1.25
+
+
+def test_boot_cue_is_templated_from_logged_fields_for_fifteen_seconds():
+    boots = [{"t": 0.0, "session": 11, "event": "restart"}, {"t": 100.0, "session": 12, "event": "restart"}]
+    s = make_state(sim_time=105.0, memory={"entities": 4}, character={"active": False, "boots": boots, "log": []})
+    e = expression_from(s)
+    assert e.cue == "Session 12 · 4 objects remembered"
+    assert e.basis["cue"] == ["sim_time", "character.boots", "memory.entities"]
+    s["sim_time"] = 116.0
+    assert expression_from(s).cue == ""
+    s["sim_time"] = 99.0  # before the boot: no cue either
+    assert expression_from(s).cue == ""
+    reset = {**s, "sim_time": 101.0, "character": {"boots": boots[:1] + [{**boots[1], "event": "reset:all"}]}}
+    assert expression_from(reset).cue == "Session 12 · 4 objects remembered · reset all"
+    changed = {**s, "sim_time": 101.0, "character": {"boots": boots, "log": [
+        {"t": 50.0, "key": "caution", "cause": "consolidation"}, {"t": 0.0, "key": "caution", "cause": "created"}]}}
+    e = expression_from(changed)
+    assert e.cue.endswith("· character changed") and "character.log" in e.basis["cue"]
+    stale = {**changed, "character": {"boots": boots, "log": [{"t": -5.0, "key": "caution", "cause": "consolidation"}]}}
+    assert "changed" not in expression_from(stale).cue  # a change before the previous boot is old news
+
+
+def test_the_cue_is_hinted_on_the_screen_and_renders_deterministically():
+    plain = expression_from(make_state())
+    cued = ExpressionState(**{**plain.__dict__, "cue": "Session 12 · 4 objects remembered"})
+    a, b = render(plain), render(cued)
+    assert a.shape == b.shape and not np.array_equal(a, b)
+    assert np.array_equal(render(cued), b)

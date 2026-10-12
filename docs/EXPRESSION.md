@@ -57,11 +57,29 @@ Openness per face (engineered): neutral 0.90, curious 1.00, focused 0.72, happy
 | Concentric yellow/magenta rings (large, centred between the eyes) | `signal_pattern` | `interaction.action`, `interaction.status` | drawn **if and only if** `interaction.action == "signal"` and `interaction.status` ∈ {`acting`, `signalling`}. The world can perceive this pattern with a camera, so it is tied exactly to the real signal action and to nothing else. It is drawn even when another rule (for example, stopped) picks the face |
 | Caption (UI and `state.expression`, not drawn on the screen) | `caption` | `activity.name`, target `label`, `localization.status`, `authority.*` | "Lost - stopped" / "Lost" / "Relocalizing"; "Stopped" or "Stopped (<revoked_reason>)"; "Signalling <label>"; "Inspecting / Engaging / Revisiting / Avoiding <label>"; "Resting" (idle), "Exploring", "Recovering", "Manual drive"; at most 28 characters (truncated with "...") |
 
+## Style: one latent expressive state
+
+Research rule (docs/research/PERSONALITY_RESEARCH_2.md §2): one latent expressive state,
+computed from logged quantities, drives face, motion and sound through fixed monotone
+mappings; traits only rescale the mappings; a context check stops eager idioms in the wrong
+place. Pip's version, all engineered:
+
+| Field | Snapshot field(s) | Rule |
+|---|---|---|
+| `style.activation` | `motivation.stimulation_need` | the chooser's engineered stimulation need, clamped to [0, 1]; 0.5 when missing |
+| `style.tempo` | `activation`, `character.active`, `character.traits[approach_tempo].value`, `face` | `(0.75 + 0.5 × activation) × g`; `g = clamp(2^(2(x − 0.5)), 0.75, 1.25)` from the approach-tempo trait **only when `character.active`**, otherwise 1 — the same capped gain that scales the navigator's cruise speed, so face and motion share one tempo; clamped to ≤ 1 for the `wary`, `stopped` and `confused` faces (no eager idiom while avoiding, blocked, stopped or lost) |
+| `style.blink_interval_s` | `tempo` | `4.0 / tempo`; the console blinks the screen image once per interval |
+| `cue` | `sim_time`, `character.boots`, `memory.entities`, `character.log` | transparency cue for the first 15 s after the latest boot: "Session *n* · *k* objects remembered", plus the boot event when it is not a plain restart (e.g. "reset all"), plus "character changed" when the character log holds a non-creation write since the previous boot. Empty outside the window. Hinted on the screen (small text, top left; truncated) and shown in full in the console |
+
+Identical snapshots still give identical faces and pixels; the style reads no clock (the
+cue uses the snapshot's own `sim_time`).
+
 ## Output
 
 `ExpressionState.to_dict()` gives the JSON form for `state["expression"]`:
 `face`, `gaze`, `openness`, `uncertainty`, `attitude`, `caption`,
-`signal_pattern` and `basis` (element → list of snapshot field paths).
+`signal_pattern`, `style` (`activation`, `tempo`, `blink_interval_s`), `cue` and `basis`
+(element → list of snapshot field paths).
 `screen.render_png(expr)` returns PNG bytes for `GET /api/screen.png`.
 
 ## Tests

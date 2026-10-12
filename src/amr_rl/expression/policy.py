@@ -21,6 +21,16 @@ Rule order (first match wins for ``face``):
 
 A missing ``localization`` block (or ``position_sigma: null``) does not change
 the face; it sets uncertainty to 1 and centres the gaze.
+
+Style (one latent expressive state, docs/research/PERSONALITY_RESEARCH_2.md section 2):
+``activation`` is the chooser's engineered stimulation need as logged in the snapshot;
+``tempo`` is a fixed monotone function of it, rescaled by the approach-tempo trait only
+when the character is active (the same gain that scales the cruise speed, so face and
+motion share one tempo), and clamped to 1 for the wary / stopped / confused faces (no
+eager idiom while avoiding or stopped). The blink interval follows 1/tempo. ``cue`` is the
+transparency cue shown for the first seconds after a boot, templated from logged fields
+only (session count, remembered objects, the boot event, a character change since the
+previous boot).
 """
 
 from __future__ import annotations
@@ -63,6 +73,17 @@ GAZE_FULL_SCALE = 0.65
 #: Interaction statuses during which a ``signal`` action is being emitted.
 SIGNAL_STATUSES = ("acting", "signalling")
 CAPTION_MAX = 28
+#: Style constants (engineered): tempo = (TEMPO_BASE + TEMPO_NEED_GAIN x activation) x trait gain,
+#: so a need of 0.5 without a character gives exactly 1; the trait gain is capped like the
+#: navigator's speed gain; blink interval = BLINK_BASE_S / tempo.
+TEMPO_BASE = 0.75
+TEMPO_NEED_GAIN = 0.5
+TEMPO_TRAIT_CAP = (0.75, 1.25)
+BLINK_BASE_S = 4.0
+#: Faces during which the tempo is clamped to 1 (context check: no eager idiom).
+CALM_FACES = ("wary", "stopped", "confused")
+#: Seconds after a boot during which the transparency cue is shown.
+BOOT_CUE_S = 15.0
 
 _ENGAGE_FACE = {
     "liked": "happy",
@@ -114,6 +135,12 @@ class ExpressionState:
     attitude: str = "none"
     caption: str = ""
     signal_pattern: bool = False
+    #: Style: the one latent expressive state and its fixed monotone mappings.
+    activation: float = 0.5
+    tempo: float = 1.0
+    blink_interval_s: float = BLINK_BASE_S
+    #: Transparency cue after a boot (logged fields only); empty otherwise.
+    cue: str = ""
     basis: dict[str, list[str]] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
@@ -126,6 +153,9 @@ class ExpressionState:
             "attitude": self.attitude,
             "caption": self.caption,
             "signal_pattern": self.signal_pattern,
+            "style": {"activation": round(self.activation, 4), "tempo": round(self.tempo, 4),
+                      "blink_interval_s": round(self.blink_interval_s, 3)},
+            "cue": self.cue,
             "basis": {k: list(v) for k, v in self.basis.items()},
         }
 
@@ -191,6 +221,66 @@ def _caption(text: str) -> str:
     if len(text) <= CAPTION_MAX:
         return text
     return text[: CAPTION_MAX - 3].rstrip() + "..."
+
+
+def _trait_value(character: dict, key: str) -> float | None:
+    for row in character.get("traits") or ():
+        if isinstance(row, dict) and row.get("key") == key:
+            return _num(row.get("value"))
+    return None
+
+
+def _style(state: dict, face: str, basis: dict) -> tuple[float, float, float]:
+    """(activation, tempo, blink interval): one latent state from the logged stimulation
+    need, a fixed monotone mapping, the approach-tempo trait as a gain only when the
+    character is active, and the context clamp for calm faces."""
+    need = _num(_dict(state.get("motivation")).get("stimulation_need"))
+    activation = _clamp(need) if need is not None else 0.5
+    basis["activation"] = ["motivation.stimulation_need"]
+    character = _dict(state.get("character"))
+    gain, gb = 1.0, ["character.active"]
+    if character.get("active") is True:
+        value = _trait_value(character, "approach_tempo")
+        if value is not None:
+            gain = _clamp(2.0 ** (2.0 * (_clamp(value) - 0.5)), *TEMPO_TRAIT_CAP)
+            gb.append("character.traits[approach_tempo].value")
+    tempo = (TEMPO_BASE + TEMPO_NEED_GAIN * activation) * gain
+    basis["tempo"] = ["activation"] + gb
+    if face in CALM_FACES:
+        tempo = min(tempo, 1.0)
+        basis["tempo"].append("face")
+    basis["blink_interval_s"] = ["tempo"]
+    return activation, tempo, BLINK_BASE_S / tempo
+
+
+def _boot_cue(state: dict, basis: dict) -> str:
+    """The transparency cue for the first BOOT_CUE_S seconds after the latest boot, from
+    logged fields only; '' outside that window or without the fields."""
+    now = _num(state.get("sim_time"))
+    character = _dict(state.get("character"))
+    boots = [b for b in character.get("boots") or () if isinstance(b, dict) and _num(b.get("t")) is not None]
+    basis["cue"] = ["sim_time", "character.boots"]
+    if now is None or not boots:
+        return ""
+    boots.sort(key=lambda b: _num(b["t"]))
+    last = boots[-1]
+    if not 0.0 <= now - _num(last["t"]) <= BOOT_CUE_S:
+        return ""
+    parts = [f"Session {last.get('session')}" if last.get("session") is not None else "New session"]
+    objects = _num(_dict(state.get("memory")).get("entities"))
+    if objects is not None:
+        parts.append(f"{int(objects)} objects remembered")
+        basis["cue"].append("memory.entities")
+    event = last.get("event")
+    if isinstance(event, str) and event != "restart":
+        parts.append(event.replace("_", " ").replace(":", " "))
+    previous = _num(boots[-2]["t"]) if len(boots) > 1 else None
+    changes = [e for e in character.get("log") or () if isinstance(e, dict) and e.get("cause") != "created"
+               and _num(e.get("t")) is not None and (previous is None or _num(e["t"]) >= previous)]
+    if changes:
+        parts.append("character changed")
+        basis["cue"].append("character.log")
+    return " · ".join(parts)
 
 
 def expression_from(state: dict | None) -> ExpressionState:
@@ -315,6 +405,10 @@ def expression_from(state: dict | None) -> ExpressionState:
             cap = "Waiting"
         basis["caption"] = ["activity.name", "activity.target_entity", "entities[target].label"]
 
+    # --- style and the boot cue -----------------------------------------
+    activation, tempo, blink = _style(state, face, basis)
+    cue = _boot_cue(state, basis)
+
     return ExpressionState(
         face=face,
         gaze=(gx, 0.0),
@@ -323,5 +417,9 @@ def expression_from(state: dict | None) -> ExpressionState:
         attitude=attitude,
         caption=_caption(cap),
         signal_pattern=bool(signal),
+        activation=float(activation),
+        tempo=float(tempo),
+        blink_interval_s=float(blink),
+        cue=cue,
         basis=basis,
     )

@@ -533,7 +533,16 @@
       ['gaze', Array.isArray(ex.gaze) ? fmtSigned(ex.gaze[0], 2) + ', ' +
         fmtSigned(ex.gaze[1], 2) : DASH],
       ['signal pattern', yesNo(ex.signal_pattern), ex.signal_pattern ? 'warn-text' : ''],
+      ['tempo', ex.style ? fmt(ex.style.tempo, 2) + ' (activation ' + fmt(ex.style.activation, 2) +
+        ', blink every ' + fmt(ex.style.blink_interval_s, 1) + ' s)' : DASH],
+      ['boot cue', ex.cue || DASH],
     ]);
+    // the blink period on the screen image follows the style field (CSS animation duration)
+    var screenImg = byId('img-screen');
+    if (screenImg && screenImg.style) {
+      screenImg.style.setProperty('--blink-s', (ex.style && isNum(ex.style.blink_interval_s) ?
+        ex.style.blink_interval_s : 4) + 's');
+    }
     var basisEl = byId('expr-basis');
     if (ex.basis && typeof ex.basis === 'object') {
       basisEl.innerHTML = Object.keys(ex.basis).map(function (k) {

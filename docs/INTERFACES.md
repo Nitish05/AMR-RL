@@ -81,6 +81,7 @@ never simulator ground truth. `null` means unavailable/unknown, never zero.
   ],
   "motivation": {"stimulation_need": 0.4, "engineered": true},
   "expression": {"face": "happy", "gaze": [0.2, 0.0], "uncertainty": 0.1,
+                  "style": {"activation": 0.5, "tempo": 1.0, "blink_interval_s": 4.0}, "cue": "",  // docs/EXPRESSION.md "Style"
                  "attitude": "liked", "caption": "Greeting cyan cylinder"},
   "navigation": {"goal": [1.0, 0.5], "path": [[0.4, -0.2], [1.0, 0.5]],
                  "status": "following", "rejected_goals": 1, "last_rejection": "goal in unknown space"},

@@ -58,7 +58,10 @@ newest first.
    memory's evidence weighting and curiosity bonus, behind `RuntimeConfig.character_active`,
    OFF until the pre-registered admission gates pass (`docs/results/character-gate-prereg.md`,
    `scripts/eval/character_gate.py`; the 27-run temperament batch and three 9-run
-   learning-style batches are queued after the detector suite). Open: a duplicate identity
+   learning-style batches are queued after the detector suite). The face's style (tempo,
+   blink) comes from one latent state (the logged need) rescaled by the tempo trait, and a
+   15 s boot cue names the session, remembered objects and any character change
+   (`docs/EXPRESSION.md`, "Style"). Open: a duplicate identity
    of a disliked fixture can be chosen before it is merged, and aversion learned in one
    visual context does not carry to another (3 second red panels in 99 round-9 phases);
    16 % of interactions with the tall cylinder still end in a tracking loss.

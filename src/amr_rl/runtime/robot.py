@@ -1261,7 +1261,7 @@ class RobotRuntime:
         state["expression"] = self.expression.to_dict()
         key = (self.expression.face, round(self.expression.gaze[0], 1), round(self.expression.gaze[1], 1),
                round(self.expression.openness, 2), round(self.expression.uncertainty, 2), self.expression.attitude,
-               self.expression.signal_pattern, self.expression.caption)
+               self.expression.signal_pattern, self.expression.caption, self.expression.cue)
         if key != getattr(self, "_face_key", None):
             self.screen = render_face(self.expression)
             self._face_key = key

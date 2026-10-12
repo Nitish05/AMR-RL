@@ -154,6 +154,9 @@ body {
   border-radius: 6px; overflow: hidden; aspect-ratio: 4 / 3;
 }
 .imgbox img { display: block; width: 100%; height: 100%; object-fit: contain; }
+/* the robot screen blinks once per style.blink_interval_s (set by app.js as --blink-s) */
+.imgbox.screen img { animation: blink var(--blink-s, 4s) linear infinite; transform-origin: 50% 44%; }
+@keyframes blink { 0%, 96%, 100% { transform: scaleY(1); } 98% { transform: scaleY(0.08); } }
 .imgbox.insp { aspect-ratio: 16 / 9; }
 .imgbox.map img { image-rendering: pixelated; }
 .imgbox.map.clickable img { cursor: crosshair; }
