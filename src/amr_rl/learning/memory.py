@@ -107,6 +107,18 @@ class ExperienceMemory:
             CREATE TABLE IF NOT EXISTS merges(
                 seq INTEGER PRIMARY KEY AUTOINCREMENT, kept TEXT NOT NULL, dropped TEXT NOT NULL UNIQUE,
                 t REAL NOT NULL, reason TEXT NOT NULL);
+            CREATE TABLE IF NOT EXISTS character(
+                key TEXT PRIMARY KEY, value REAL NOT NULL, lo REAL NOT NULL, hi REAL NOT NULL,
+                anchor REAL NOT NULL, provenance TEXT NOT NULL, updated REAL NOT NULL, session INTEGER NOT NULL);
+            CREATE TABLE IF NOT EXISTS character_log(
+                seq INTEGER PRIMARY KEY AUTOINCREMENT, t REAL NOT NULL, session INTEGER NOT NULL, key TEXT NOT NULL,
+                before REAL, after REAL NOT NULL, cause TEXT NOT NULL, provenance TEXT NOT NULL, detail TEXT);
+            CREATE TABLE IF NOT EXISTS character_archive(
+                seq INTEGER PRIMARY KEY AUTOINCREMENT, t REAL NOT NULL, session INTEGER NOT NULL,
+                agent_id TEXT NOT NULL, reason TEXT NOT NULL, snapshot TEXT NOT NULL);
+            CREATE TABLE IF NOT EXISTS boots(
+                seq INTEGER PRIMARY KEY AUTOINCREMENT, t REAL NOT NULL, session INTEGER NOT NULL,
+                event TEXT NOT NULL, detail TEXT NOT NULL);
         """)
         with self.db:
             existing = self._meta("schema_version")
@@ -529,16 +541,127 @@ class ExperienceMemory:
                 "sessions": self.sessions,
             }
 
-    def reset(self, confirm: str):
-        """Explicit, irreversible memory reset for this agent (new identity)."""
+    def reset(self, confirm: str, level: str = "all", t: float = 0.0):
+        """Explicit memory reset. ``level="objects"``: forget objects, places and outcomes
+        but keep the identity and the character (its traits, bounds and log). ``level="all"``:
+        a new identity; the character is archived (not deleted) first, so a character can be
+        restored from the record. Both are recorded in the boots table."""
         if confirm != "RESET":
             raise ValueError("Memory reset requires explicit confirmation")
+        if level not in ("objects", "all"):
+            raise ValueError(f"unknown reset level {level!r}")
         with self.lock, self.db:
-            for table in ("entities", "options", "budgets", "events", "updates", "distinct_pairs", "merges",
-                          "meta"):
+            if level == "all":
+                self._archive_character(t, "reset:all")
+            for table in ("entities", "options", "budgets", "events", "updates", "distinct_pairs", "merges"):
                 self.db.execute(f"DELETE FROM {table}")
-            self._set_meta("schema_version", str(SCHEMA_VERSION))
-            self._set_meta("agent_id", f"pip-{uuid.uuid4().hex[:8]}")
-            self._set_meta("change_epoch", "0")
-            self._set_meta("sessions", "1")
+            if level == "all":
+                for table in ("character", "character_log", "meta"):
+                    self.db.execute(f"DELETE FROM {table}")
+                self._set_meta("schema_version", str(SCHEMA_VERSION))
+                self._set_meta("agent_id", f"pip-{uuid.uuid4().hex[:8]}")
+                self._set_meta("change_epoch", "0")
+                self._set_meta("sessions", "1")
+            else:
+                for key in [r[0] for r in self.db.execute("SELECT key FROM meta WHERE key LIKE 'armed%'")]:
+                    self.db.execute("DELETE FROM meta WHERE key=?", (key,))
+                self.db.execute("DELETE FROM meta WHERE key='change_time'")
+            self.db.execute("INSERT INTO boots(t,session,event,detail) VALUES(?,?,?,?)",
+                            (float(t), self.sessions, f"reset:{level}", "{}"))
         self.agent_id = self._meta("agent_id")
+
+    # ------------------------------------------------------------ character store
+    # Owner decisions 2026-10-12 (behavior/character.py): the engineered traits live here so
+    # that they persist across restarts with the rest of the robot's memory, with bounds, an
+    # anchor (the value they started from), the provenance of the last write and a log of
+    # every change. Nothing reads them yet.
+    def ensure_character(self, cfg, t: float = 0.0):
+        """Create any missing trait rows from the config (defaults or the owner's preset).
+        Existing rows are kept: the character persists; the config only seeds it."""
+        self.character_cfg = cfg
+        with self.lock, self.db:
+            if self._meta("character_preset") is None:
+                self._set_meta("character_preset", cfg.preset)
+            present = {r[0] for r in self.db.execute("SELECT key FROM character")}
+            for spec in cfg.traits:
+                if spec.key in present:
+                    continue
+                value = cfg.initial(spec.key)
+                prov = "owner" if spec.key in cfg.values else "engineered_default"
+                self.db.execute("INSERT INTO character(key,value,lo,hi,anchor,provenance,updated,session)"
+                                " VALUES(?,?,?,?,?,?,?,?)",
+                                (spec.key, value, spec.lo, spec.hi, value, prov, float(t), self.sessions))
+                self.db.execute("INSERT INTO character_log(t,session,key,before,after,cause,provenance,detail)"
+                                " VALUES(?,?,?,?,?,?,?,?)",
+                                (float(t), self.sessions, spec.key, None, value, "created", prov,
+                                 json.dumps({"preset": cfg.preset})))
+
+    def character(self):
+        with self.lock:
+            rows = self.db.execute("SELECT * FROM character ORDER BY key").fetchall()
+        return {r["key"]: dict(r) for r in rows}
+
+    def set_trait(self, key, value, *, cause, provenance, t, detail=None):
+        """Write a trait within its bounds and its provenance's cap (character.clip_write);
+        returns the value applied. Every write is logged with its cause."""
+        from ..behavior.character import clip_write
+
+        cfg = getattr(self, "character_cfg", None)
+        if cfg is None:
+            raise ValueError("ensure_character() first")
+        with self.lock, self.db:
+            row = self.db.execute("SELECT * FROM character WHERE key=?", (key,)).fetchone()
+            if row is None:
+                raise KeyError(key)
+            applied, clipped = clip_write(row["value"], value, row["lo"], row["hi"], provenance, cfg)
+            self.db.execute("UPDATE character SET value=?, provenance=?, updated=?, session=? WHERE key=?",
+                            (applied, provenance, float(t), self.sessions, key))
+            self.db.execute("INSERT INTO character_log(t,session,key,before,after,cause,provenance,detail)"
+                            " VALUES(?,?,?,?,?,?,?,?)",
+                            (float(t), self.sessions, key, row["value"], applied, cause, provenance,
+                             json.dumps({**(detail or {}), "proposed": float(value), "clipped": bool(clipped)})))
+        return applied
+
+    def character_log(self, limit=50):
+        with self.lock:
+            rows = self.db.execute("SELECT * FROM character_log ORDER BY seq DESC LIMIT ?", (int(limit),)).fetchall()
+        return [dict(r) for r in rows]
+
+    def record_boot(self, t, event, **detail):
+        with self.lock, self.db:
+            self.db.execute("INSERT INTO boots(t,session,event,detail) VALUES(?,?,?,?)",
+                            (float(t), self.sessions, str(event), json.dumps(detail, default=float)))
+
+    def boots(self, limit=10):
+        with self.lock:
+            rows = self.db.execute("SELECT * FROM boots ORDER BY seq DESC LIMIT ?", (int(limit),)).fetchall()
+        return [{**dict(r), "detail": json.loads(r["detail"])} for r in rows]
+
+    def _archive_character(self, t, reason):
+        snap = {"agent_id": self.agent_id, "preset": self._meta("character_preset"), "traits": self.character(),
+                "log": self.character_log(limit=1000)}
+        self.db.execute("INSERT INTO character_archive(t,session,agent_id,reason,snapshot) VALUES(?,?,?,?,?)",
+                        (float(t), self.sessions, self.agent_id or "", reason, json.dumps(snap, default=float)))
+
+    def character_inspector(self, limit=20):
+        """Everything the console shows about the character: values with bounds, anchors,
+        the provenance of the last write, the recent log and boots. Honesty line included:
+        the traits are engineered parameters, and nothing reads them yet."""
+        cfg = getattr(self, "character_cfg", None)
+        specs = {s.key: s for s in (cfg.traits if cfg is not None else ())}
+        traits = []
+        for key, r in self.character().items():
+            s = specs.get(key)
+            traits.append({"key": key, "value": r["value"], "lo": r["lo"], "hi": r["hi"], "anchor": r["anchor"],
+                           "drift": r["value"] - r["anchor"], "provenance": r["provenance"], "updated": r["updated"],
+                           "sets": None if s is None else s.sets, "analogue": None if s is None else s.analogue,
+                           "kind": "engineered parameter" if r["provenance"] in ("engineered_default", "owner", "migration")
+                           else ("learned via an engineered update" if r["provenance"] == "consolidation"
+                                 else f"{r['provenance']} (bounded, logged)")})
+        log = self.character_log(limit=limit)
+        with self.lock:
+            counts = {r[0]: r[1] for r in self.db.execute(
+                "SELECT provenance, COUNT(*) FROM character_log WHERE cause != 'created' GROUP BY provenance")}
+        return {"preset": self._meta("character_preset"), "traits": traits, "log": log,
+                "writes_by_provenance": counts, "boots": self.boots(limit=5),
+                "reads": "no behaviour reads these values yet (store and audit only)"}

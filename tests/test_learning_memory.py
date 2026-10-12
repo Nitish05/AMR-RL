@@ -274,3 +274,61 @@ def test_frustration_renewal_reopens_exhausted_options(tmp_path):
     rt.motivation.need = 0.1  # satisfied: idling is fine
     assert not ch._frustrated(rt, idle, 400.0) and not ch._frustrated(rt, idle, 500.0)
     assert not ActivityChooser(ChooserConfig())._frustrated(rt, idle, 1000.0)  # off by default
+
+
+def test_character_store_persists_traits_with_bounds_and_provenance(tmp_path):
+    from amr_rl.behavior.character import CharacterConfig
+
+    cfg = CharacterConfig(preset="bold", values={"caution": 0.2})
+    m = ExperienceMemory(tmp_path / "m.sqlite", agent_id="a", config=LearningConfig())
+    m.ensure_character(cfg, t=0.0)
+    ch = m.character()
+    assert set(ch) == {s.key for s in cfg.traits}
+    assert ch["caution"]["value"] == 0.2 and ch["caution"]["provenance"] == "owner"
+    assert ch["novelty_bias"]["value"] == 0.5 and ch["novelty_bias"]["provenance"] == "engineered_default"
+    assert ch["caution"]["anchor"] == 0.2
+    # an engineered or owner write may go anywhere in the bounds; capped provenances move by a cap at most
+    assert m.set_trait("caution", 0.9, cause="owner preset change", provenance="owner", t=1.0) == 0.9
+    assert m.set_trait("caution", 0.2, cause="session consolidation", provenance="consolidation", t=2.0) == 0.85
+    assert m.set_trait("caution", 1.5, cause="llm proposal", provenance="llm_advised", t=3.0) == 0.9
+    with pytest.raises(ValueError):
+        m.set_trait("caution", 0.5, cause="x", provenance="feeling", t=4.0)
+    with pytest.raises(KeyError):
+        m.set_trait("bravery", 0.5, cause="x", provenance="owner", t=4.0)
+    log = m.character_log()
+    assert log[0]["key"] == "caution" and log[0]["before"] == 0.85 and log[0]["after"] == 0.9
+    assert json.loads(log[0]["detail"])["clipped"] is True and log[0]["provenance"] == "llm_advised"
+    insp = m.character_inspector()
+    assert insp["preset"] == "bold" and insp["writes_by_provenance"] == {"owner": 1, "consolidation": 1, "llm_advised": 1}
+    caution = next(t for t in insp["traits"] if t["key"] == "caution")
+    assert caution["kind"] == "llm_advised (bounded, logged)" and abs(caution["drift"] - 0.7) < 1e-9
+    assert "no behaviour reads" in insp["reads"]
+    m.db.close()
+    # the character persists across a restart; the config only seeds missing rows
+    m2 = ExperienceMemory(tmp_path / "m.sqlite", agent_id="a", config=LearningConfig())
+    m2.ensure_character(CharacterConfig(), t=10.0)
+    assert m2.character()["caution"]["value"] == 0.9 and m2.character()["caution"]["anchor"] == 0.2
+    assert len(m2.character_log(limit=100)) == len(log)
+    m2.record_boot(10.0, "restart", entities=3)
+    assert m2.boots()[0]["event"] == "restart" and m2.boots()[0]["detail"] == {"entities": 3}
+
+
+def test_memory_reset_levels_keep_or_archive_the_character(tmp_path):
+    from amr_rl.behavior.character import CharacterConfig
+
+    m = ExperienceMemory(tmp_path / "m.sqlite", agent_id="a", config=LearningConfig())
+    m.ensure_character(CharacterConfig(), t=0.0)
+    m.set_trait("persistence", 0.8, cause="owner", provenance="owner", t=1.0)
+    agent = m.agent_id
+    m.reset("RESET", level="objects", t=5.0)
+    assert m.agent_id == agent and m.character()["persistence"]["value"] == 0.8  # identity and character kept
+    assert m.boots()[0]["event"] == "reset:objects"
+    m.reset("RESET", level="all", t=6.0)
+    assert m.agent_id != agent and m.character() == {}  # a new start
+    archived = m.db.execute("SELECT reason, snapshot FROM character_archive").fetchall()
+    assert len(archived) == 1 and archived[0][0] == "reset:all"
+    assert json.loads(archived[0][1])["traits"]["persistence"]["value"] == 0.8
+    with pytest.raises(ValueError):
+        m.reset("RESET", level="half")
+    m.ensure_character(CharacterConfig(), t=7.0)
+    assert m.character()["persistence"]["value"] == 0.5

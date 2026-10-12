@@ -558,10 +558,31 @@
       (isNum(mem.outcomes) ? mem.outcomes : DASH) + ' outcomes · ' +
       (isNum(mem.entities) ? mem.entities : DASH) + ' entities');
 
+    renderCharacter(s);
     renderActivity(s, act, labels);
     renderEntities(s, act);
     renderInteraction(s, labels);
     renderOutcomes(s, labels);
+  }
+
+  function renderCharacter(s) {
+    // The character store: engineered trait values with bounds and the provenance of the
+    // last write (amr_rl.state.v1 "character"). Honesty: nothing reads them yet.
+    var ch = s.character || {};
+    var traits = Array.isArray(ch.traits) ? ch.traits : [];
+    setText('char-reads', ch.reads || '');
+    setText('char-meta', 'preset ' + (ch.preset || DASH) + ' · ' +
+      (Array.isArray(ch.log) ? ch.log.filter(function (e) { return e.cause !== 'created'; }).length : DASH) +
+      ' changes logged · ' + (Array.isArray(ch.boots) ? ch.boots.length : DASH) + ' boots recorded');
+    byId('char-rows').innerHTML = traits.length ? traits.map(function (t) {
+      return '<tr><td title="' + escapeHtml(t.sets || '') + '">' + escapeHtml(t.key) + '</td><td class="mono">' +
+        fmt(t.value, 2) + '</td><td class="mono">' + fmt(t.lo, 1) + '–' + fmt(t.hi, 1) + '</td><td class="mono">' +
+        (isNum(t.drift) ? (t.drift >= 0 ? '+' : '') + fmt(t.drift, 2) : DASH) + '</td><td>' +
+        escapeHtml(t.provenance || DASH) + '</td></tr>';
+    }).join('') : '<tr><td colspan="5">no character store</td></tr>';
+    var last = Array.isArray(ch.log) && ch.log.length ? ch.log[0] : null;
+    setText('char-log', last ? ('last: ' + last.key + ' ' + fmt(last.before, 2) + ' → ' + fmt(last.after, 2) +
+      ' (' + last.cause + ', ' + last.provenance + ')') : 'no changes yet');
   }
 
   function renderActivity(s, act, labels) {

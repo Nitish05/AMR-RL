@@ -51,7 +51,10 @@ newest first.
 4. **Learning:** plain arena restart 9/9, reversal 10/10 (round-9 suite, colour detector).
    Textured arena 6/6 and 6/6 only with the open-vocabulary detector (2/4 and 2/6 with the
    colour detector), which is therefore the default since 2026-10-12 when its model is cached
-   (`RuntimeConfig.detector`); the plain-arena suite is being re-run under it. Open: a duplicate identity
+   (`RuntimeConfig.detector`); the plain-arena suite is being re-run under it. The character
+   store (traits with bounds, provenance, change log, reset levels; `behavior/character.py`)
+   exists and is inert: the next step maps the traits onto the chooser with an identifiability
+   gate (`docs/research/PERSONALITY_RESEARCH_2.md` §1). Open: a duplicate identity
    of a disliked fixture can be chosen before it is merged, and aversion learned in one
    visual context does not carry to another (3 second red panels in 99 round-9 phases);
    16 % of interactions with the tall cylinder still end in a tracking loss.

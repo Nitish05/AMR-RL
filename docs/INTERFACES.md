@@ -83,7 +83,17 @@ never simulator ground truth. `null` means unavailable/unknown, never zero.
   "navigation": {"goal": [1.0, 0.5], "path": [[0.4, -0.2], [1.0, 0.5]],
                  "status": "following", "rejected_goals": 1, "last_rejection": "goal in unknown space"},
   "trajectory": [[0.0, 0.0], [0.1, 0.0]],
-  "memory": {"agent_id": "pip-…", "db": "…", "outcomes": 12, "entities": 4}
+  "memory": {"agent_id": "pip-…", "db": "…", "outcomes": 12, "entities": 4},
+  "character": {                   // the character store (behavior/character.py); engineered values, nothing reads them yet
+    "preset": "default",
+    "traits": [{"key": "caution", "value": 0.5, "lo": 0.0, "hi": 1.0, "anchor": 0.5, "drift": 0.0,
+                "provenance": "engineered_default",  // engineered_default | owner | consolidation | llm_advised | human_rating | migration
+                "updated": 0.0, "sets": "…", "analogue": "…", "kind": "engineered parameter"}],
+    "log": [{"t": 0.0, "session": 1, "key": "caution", "before": null, "after": 0.5, "cause": "created",
+             "provenance": "engineered_default", "detail": "{…}"}],
+    "writes_by_provenance": {}, "boots": [{"t": 0.0, "session": 1, "event": "restart", "detail": {}}],
+    "reads": "no behaviour reads these values yet (store and audit only)"
+  }
 }
 ```
 
@@ -103,7 +113,7 @@ Commands: `POST /api/command` JSON `{"action": ..., ...}`; response
 | `enable_autonomy` | `generation` | Requires fresh camera frame and `tracking` localization. |
 | `disable_autonomy` | – | Revokes autonomy (like stop, keeps manual idle). |
 | `goal` | `x`, `y`, `generation` | Navigate to an estimated-map point; rejected when unsupported. |
-| `reset_memory` | `confirm: "RESET"` | Deletes learned memory for this agent (explicit). |
+| `reset_memory` | `confirm: "RESET"`, `level: "objects" \| "all"` (default `all`) | Explicit reset. `objects`: forgets objects, places and outcomes, keeps the identity and the character store; `all`: a new identity, the character archived first. Both are recorded in the boots table. |
 
 ## Proprioceptive input (round 9)
 

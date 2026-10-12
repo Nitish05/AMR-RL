@@ -18,6 +18,7 @@ from pathlib import Path
 import numpy as np
 
 from ..behavior.activities import Survey
+from ..behavior.character import CharacterConfig
 from ..behavior.chooser import ActivityChooser, ChooserConfig, Motivation, MotivationConfig
 from ..behavior.frontier import frontier_goals
 from ..control.supervisor import Supervisor, SupervisorConfig
@@ -151,6 +152,10 @@ class RuntimeConfig:
     blocked_backoff_max_s: float = 4.0
     blocked_max_per_min: int = 3
     blocked_repeat_radius_m: float = 0.3  # a second event this close in a minute marks the spot, whatever the kind
+    # The character store (behavior/character.py; owner decisions 2026-10-12): engineered
+    # trait values with bounds and provenance, persisted in the experience memory. Nothing
+    # reads them yet.
+    character: CharacterConfig = field(default_factory=CharacterConfig)
     # This robot's gyro calibration (scripts/calibrate_imu.py); used when its unit
     # serial matches the spec's. None = datasheet prior only (+-1 % sensitivity).
     imu_calibration: str | None = "configs/calibration/imu.yaml"
@@ -269,6 +274,9 @@ class RobotRuntime:
                 self.detector_status = f"open_vocab ({repo}@{rev[:8]}, {ov.device})"
         self.memory = ExperienceMemory(memory_path, config=self.cfg.learning)
         self.memory.invalidate_positions(self.slam.map_version)
+        self.memory.ensure_character(self.cfg.character, t=0.0)
+        self.memory.record_boot(0.0, "restart", map_version=self.slam.map_version, map_loaded=map_dir is not None,
+                                **{k: v for k, v in self.memory.counts().items() if isinstance(v, int)})
         self.tracker = EntityTracker(self.memory)
         self.semantic = SemanticWorker() if self.cfg.semantic else None
         self.archive = ImageEvidenceArchive(self.run_dir, audit=self.cfg.audit_images)
@@ -997,18 +1005,20 @@ class RobotRuntime:
                 "generation": self.supervisor.generation, "t": now}
 
     def _reset_memory(self, cmd, now):
+        level = cmd.get("level", "all")  # "objects": keep identity and character; "all": a new start
         try:
-            self.memory.reset(cmd.get("confirm", ""))
+            self.memory.reset(cmd.get("confirm", ""), level=level, t=now)
         except ValueError as error:
             return {"command": "reset_memory", "accepted": False, "reason": str(error),
                     "generation": self.supervisor.generation, "t": now}
+        self.memory.ensure_character(self.cfg.character, t=now)
         self.supervisor.stop("disabled")
         self._cancel_activity("memory_reset")
         self.tracker = EntityTracker(self.memory)
         self.recent_outcomes.clear()
         self.learning_updates.clear()
         self.motivation = Motivation(self.cfg.motivation)
-        return {"command": "reset_memory", "accepted": True, "reason": "memory_reset",
+        return {"command": "reset_memory", "accepted": True, "reason": f"memory_reset:{level}",
                 "generation": self.supervisor.generation, "t": now}
 
     def _cancel_activity(self, reason):
@@ -1190,6 +1200,7 @@ class RobotRuntime:
                 **({} if self.guard is None else self.guard.stats)}},
             "trajectory": self.trajectory[-600:],
             "memory": {"agent_id": self.memory.agent_id, "db": self.memory.path, **self.memory.counts()},
+            "character": self.memory.character_inspector(),
             "map": {**self.grid.counts(), "map_version": self.grid.map_version,
                     "start_clearance_attested": self.cfg.start_clearance_attested if self._attested else None,
                     "loop_closure": {"status": self.place_status, "closures": len(self.loop_closures),
