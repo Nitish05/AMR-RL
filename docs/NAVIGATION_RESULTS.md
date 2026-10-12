@@ -5,7 +5,7 @@ Navigation and learning are evaluated separately; learning results are in
 
 **Protocol** (`scripts/eval/navigation.py`; one process per room and seed): the
 robot starts with autonomy disabled; the evaluator enables it and it explores for
-300 s of simulated time (`explore_only`, onboard RGB only). Seed *k* turns the
+300 s of simulated time (`explore_only`; onboard RGB only up to round 5, plus the IMU and wheel encoders from round 9). Seed *k* turns the
 start heading by *k* × 72°. Then the evaluator acts as the operator: fixed goals
 (some impossible: inside furniture or outside the room), four goals sampled from
 the interior of the robot's own certified map, a camera blackout during a goal,
@@ -23,6 +23,34 @@ Regenerate: `python scripts/eval/report.py --nav <dir> --out <file>`.
 arrival meant within 0.25 m. The evaluator has always used **0.15 m**
 (`ARRIVAL_TOLERANCE` in `scripts/eval/navigation.py`), so every published arrival
 count was scored at 0.15 m. Only the description was wrong.
+
+## Round 9 (2026-10-11): the IMU default vs camera only, untouched starts
+
+Check L3 of validation 5 ([results/heading-r9.md](results/heading-r9.md), pre-registered in
+addendum E). 4 rooms × seeds 10–12 (start heading seed × 72° + 18°, never used before), paired
+arms at code `aa143e3` with the corrected caster physics, `--map-seconds 300`, depth guard and
+loop closure on. Evidence: `work/evidence/r9g-val-20261011/L3-{base,odo}-*`; reports
+`analysis/nav-base.md` and `analysis/nav-odo.md` (`report.py --nav`).
+
+| room | split | supported goals: camera only | supported goals: IMU + encoders | ATE cm, camera only | ATE cm, IMU |
+|---|---|---|---|---|---|
+| heldout_b | held-out layout | 8/8 | 10/10 | 1.6–2.6 | 0.5–2.0 |
+| heldout_c | held-out appearance | **6/12** | 12/12 | 2.8–11.0 | 3.3–5.1 |
+| home_a_dim | held-out lighting | 12/12 | 12/12 | 0.7–2.0 | 0.5–1.3 |
+| home_a | development | 12/12 | 11/12 | 1.6–3.8 | 2.0–2.7 |
+| **all** | | **38/44** | **45/46** | | |
+
+- **Camera-only misses are localisation drift:** heldout_c s10 stopped 0.19 and 0.24 m from
+  two goals, and in heldout_c s12 all four goals ended 1.0–2.7 m away while the robot reported
+  arrival or tracking. Round 3 attributed 10 of 17 misses to drift; here 6 of 6.
+- **The IMU robot's one miss is not drift:** in home_a s11 the depth guard marked a cell beside
+  the last goal, the goal lost its certification (`goal_lost_certification_no_snap`), and the
+  robot stopped 1.45 m away with a 3 mm pose error.
+- **Impossible goals rejected:** 36/36 in both arms. **Contact episodes:** 0 in both.
+- **Fault tests** (camera blackout during a goal, box placed on the route): IMU 22/22 run
+  passed, 2 skipped; camera only 14/15, 9 skipped (the robot never reached the test's start).
+- **Operator enables:** IMU 12 in 12 runs (the start only); camera only 37.
+- The two arms' maps differ, so the supported goals differ (46 vs 44).
 
 ## Round 4 (macOS arm64): planner/corridor A/B
 

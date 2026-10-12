@@ -57,7 +57,7 @@ tables with every denominator are in
 | Does it survive a restart without keeping motion permission? | **Yes.** In all 9 restart phases, autonomy started disabled and was enabled only after relocalising from fresh images. |
 | Does it avoid what hurt it? | **Yes, 14/14 learned runs.** It saw the red panel once per run and never went back to that fixture or to a duplicate of it. (In round 1 a duplicate identity was re-targeted; duplicates are now merged.) |
 | Does it adapt when the rules change? | **7/10 in round 6** (early and late swap × 5 starts; re-scored from true panel events, the round-6 report's 6/10 missed seed 0's late adaptation). Seed 4 never tries the swapped fixtures: with its engineered need satisfied, idling outscores every untried option. Seed 3's early swap (at 33 s) did not find the new option before the run ended. |
-| Is it better than simple baselines? | **Not shown.** Baselines ran on seed 0 only, and seed 0 is the learned policy's failure case: it never completed an interaction with the rewarding fixture. Total valence: nearest 2.0, random 0.2, learned 0.2, fixed 0.0. On seeds 1–2 the learned policy got 0.57 and 0.54 per outcome, but with no baselines to compare. A control on the round-1 map with the same code learned normally on seed 0, so the failure depends on the map. |
+| Is it better than simple baselines? | **Yes, in one arena** (round 4, pre-registered, camera-only robot; [details](docs/results/policy-comparison.md)). Over 3 rule permutations × 4 relocalised starts (12 cells), the learned policy with its engineered drive clamped beat random in 12/12, nearest-first in 11/12 and fixed-order in 11/12 on true panel valence (median +13.0 to +13.5). The two losses were cells where a baseline started next to the rewarding fixture. One map, fixed fixture positions, engineered valences. |
 | Can it reach goals in its own map? | **45/46 supported goals with the IMU default** against 38/44 camera only (round 9 re-validation, 4 rooms × 3 untouched starts; [details](docs/results/heading-r9.md)). Camera only, earlier physics: 38/46 (83 %) with loop closure, 35/44 (80 %) without, in round 5 ([details](docs/results/loop-closure.md)); 20/37 (54 %) in round 3; 5/16 in round 1. |
 | Does it refuse goals it cannot justify? | **Yes, 36/36.** Unknown space is never treated as free. |
 | Does it touch things? | **0 contacts in the latest 12 navigation runs** (round 6; closest box approach 0.165 m). Round 5 had one box contact. It came from an unseen box face the map kept free, guard marks erased by a loop-closure replay, and a recovery that rotated against the box. All three are fixed ([details](docs/results/near-field-guard.md)); with the IMU default and the depth guard switched off, the robot touched a newly placed box in 2 of 4 rooms (0.8 s and 1.1 s) and backed off both times (round 9). Learning runs: 0 unintended contacts in rounds 3–6 (45 phases in round 6). |
@@ -324,9 +324,13 @@ The full status of every capability is in
 * **Newly placed obstacles:** handled by the depth guard in simulation (0/5
   box tests in contact), but about 23 % of the cells it marks are on open floor,
   and the model has only seen simulated images.
-* **Localisation drift in held-out rooms** is now the main reason goals are missed.
-* **Relocalisation:** wrong fixes of 10–20 cm, heading errors during in-place
-  rotation, and no way to relocalise while stationary once recovery is used up.
+* **Localisation drift in held-out rooms** caused all 6 camera-only goal misses in the
+  round-9 navigation check, and none of the IMU robot's (1 miss in 46, a depth-guard
+  refusal; [details](docs/NAVIGATION_RESULTS.md)).
+* **Relocalisation range:** with the IMU, no wrong fix in 36 probe positions, but
+  positions more than 0.5 m from any keyframe mostly do not relocalise (2/12), and
+  there is no way to relocalise while stationary once recovery is used up
+  ([details](docs/results/relocalisation.md)). Camera only: wrong fixes of 10–20 cm.
 * **Tracking near tall objects:** approaching or nudging the cylinder can blind
   the camera; this caused the seed-0 learning failure.
 * **Map quality:** 29–73 % coverage in 300 s; the floor test still lets a few
@@ -339,8 +343,10 @@ The full status of every capability is in
   though the pose is right.
 * **IMU calibration:** an uncalibrated IMU with a 1 % gyro scale error reached
   22.5° of heading error; each unit must be calibrated by the robot first.
-* **Evidence strength:** 3 seeds at most, one arena, fixed fixture positions;
-  baselines and the inert and noisy worlds on one seed.
+* **Evidence strength:** learning runs use at most 5 start poses in one arena
+  layout (plain and textured), with fixed fixture positions; the baselines were
+  compared on 12 cells (round 4). Enough to see failure modes, not to report
+  distributions.
 * **Perception generality:** the detector relies on uniformly painted objects
   in desaturated rooms.
 

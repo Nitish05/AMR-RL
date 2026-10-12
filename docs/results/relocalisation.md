@@ -6,6 +6,11 @@ selectable as `"pnp"` (with `reloc_confirmations=2`, `reloc_min_view_change=0`,
 [../VSLAM.md](../VSLAM.md) §1. Code: `src/amr_rl/perception/vslam.py`. Tests:
 `tests/test_relocalisation.py`.
 
+Rounds 4–6 below are camera-only. The default robot (IMU + encoders) is measured in
+[Round 9](#round-9-range-on-the-imu-robots-maps-2026-10-11-development-not-pre-registered):
+0 wrong acceptances in 36 probe positions; recall 22/24 within 0.5 m of a keyframe, 2/12
+beyond.
+
 ## The failure
 
 **Round-3 learning suite:**
@@ -180,6 +185,9 @@ tracking during in-place turns needs fixing. Possible fixes:
 - slower turns;
 - no keyframes while rotating.
 
+The IMU (round 9) fixed the turn drift. The pass was re-tested on it (round 9 below):
+it no longer harms the map, but it does not extend the range, so it stays off.
+
 ### What does reach all 5 starts
 
 With the default configuration, the new no-coverage arena s4 map relocalises all
@@ -189,8 +197,72 @@ round-6 change. On the s2 map, 3 starts never relocalise. On s3, all 5 relocalis
 but start 3 is imprecise. The s4 map was chosen for the round-6 learning suite
 before that suite ran.
 
-## Not done
+## Round 9: range on the IMU robot's maps (2026-10-11, development, not pre-registered)
 
-**Keyframe retrieval** (saving keyframe descriptors and matching a frame against
-keyframes first) would extend recall beyond about 0.3 m from keyframes. It needs a
-new map schema and rebuilt maps.
+The sections above are camera-only. This one measures the default robot (IMU + wheel
+encoders, R9g at `1380537`; the probe script is new in that commit).
+
+**Probe.** `scripts/dev/reloc_live_probe.py` loads a saved map and starts the robot,
+live in Genesis, at free positions binned by distance to the nearest keyframe (4 per bin,
+seeded headings). The robot turns in place at 0.4 rad/s until the VSLAM reports tracking,
+and the first accepted pose is scored against truth:
+- good: ≤ 10 cm and ≤ 5°;
+- false: > 20 cm or > 8.6°;
+- imprecise: in between.
+
+Maps: each arm's own validation-5 build of seed 10 (arena, home_a held out, heldout_b held
+out); each arm probes with its own odometry. Evidence:
+`work/evidence/r9g-step9-20261011/reloc-*`, scored by the analysis in `analysis/step9.json`.
+
+| distance to nearest keyframe | camera only: good / imprecise / false / none | IMU + encoders: good / imprecise / false / none |
+|---|---|---|
+| < 0.3 m | 8 / 3 / 0 / 1 | **12 / 0 / 0 / 0** |
+| 0.3–0.5 m | 4 / 2 / 0 / 6 | **10 / 0 / 0 / 2** |
+| ≥ 0.5 m | 1 / 1 / 1 / 9 | 2 / 0 / 0 / 10 |
+
+- **On the IMU maps, nothing accepted was wrong** (24 of 24 within 10 cm and 5°; worst
+  6.9 cm, 2.1°). Recall within 0.5 m is 22/24; beyond 0.5 m it is still 2/12.
+- **The camera-only errors are the maps' own.** The camera-only arena map's keyframes are
+  up to 11.2° off (its build reached 17.3° of heading error). Its "false" acceptance
+  (17 cm, 11.1°) and the "imprecise" ones (5–8.5°) match that rotation: the robot
+  relocalised correctly into a wrong map. The IMU maps' keyframes are within 0.9–1.7°.
+- **In the validation-5 builds**, the camera-only robot made 122 lost → tracking
+  transitions, 24 of them false; the IMU robot made 17, none false.
+- n = 12 positions per bin and arm on three maps; the two arms also differ in the map,
+  so this measures the whole robot, not the relocaliser alone.
+
+**Coverage pass A/B on the IMU robot.** The pass was rejected in round 6 because its
+survey turns drifted the camera-only map (above). Ten paired 420 s builds, five worlds ×
+seeds 10–11, offset 18°:
+- with the pass: the validation-5 L1 builds (`--coverage-seconds 150`);
+- without: the same seeds at `1380537` (`--no-coverage` default; the mapping code is
+  unchanged since `aa143e3`), `work/evidence/r9g-step9-20261011/nocov-odo-*`.
+
+| over the 10 pairs | median with the pass | median without | median Δ (pass − none), range | pairs better with the pass |
+|---|---|---|---|---|
+| ATE | 1.6 cm | 2.2 cm | −0.06 cm (−1.3 to +0.7) | 5 / 10 |
+| max heading error | 1.42° | 1.32° | −0.06° (−0.7 to +0.5) | 5 / 10 |
+| free coverage | 58.7 % | 62.9 % | −1.7 pp (−21 to +3) | 4 / 10 |
+| false-free cells (deep) | 23 (1.5) | 36.5 (5) | −17 (−2) | 7 / 10 (6 / 10) |
+| free floor within 0.3 m of a keyframe | 35 % | 40 % | −3 pp (−10 to +4) | 4 / 10 |
+| expected relocalisation recall over free floor | 0.54 | 0.61 | −0.03 (−0.14 to +0.03) | 4 / 10 |
+
+The last row weights each map's share of free floor in each distance bin by the IMU
+probe's recall in that bin (1.0, 10/12, 2/12); keyframes from each map's `map.json`.
+- **The drift harm is gone:** the pass no longer moves ATE or heading.
+- **It does not extend the range either.** The 150 s of frontier exploration it replaces
+  reach slightly more floor (longer paths) than its survey turns.
+- **It stays off by default.** The pre-registered L1 protocol keeps using it (both arms).
+
+**Explained-share floor: not built.** It was proposed (round 6, above) against the alias
+signature of the camera-only false acceptances. On the IMU robot there is no false
+acceptance to calibrate it against (0 of 36 probe positions, 0 of 17 transitions in
+validation 5). Building it needs such cases first, on a fresh capture.
+
+## Keyframe retrieval (done in round 5)
+
+Saving keyframe descriptors and trying the most similar keyframes' landmarks first was
+built with loop closure (map schema v2, [loop-closure.md](loop-closure.md#relocalisation-with-keyframe-retrieval-open-item-1)).
+It gave a small gain at 0.15–0.3 m on the camera-only robot. Beyond 0.5 m, recall stays
+low on the IMU robot too (2/12 above): the floor seen from such viewpoints is not mapped
+well enough to verify against.
