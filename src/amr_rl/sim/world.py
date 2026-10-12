@@ -34,6 +34,25 @@ def load_world_config(name_or_path) -> dict:
     return config
 
 
+def choose_response(rule, rng):
+    """The response a rule gives this time. ``{response, p}``: that response with probability p,
+    else none (the random draw happens only for a non-none response, so older worlds replay
+    identically). ``{responses: [{response, p}, ...]}``: one of several, probabilities summing to
+    at most 1, the remainder none (the character-gate worlds: several outcomes, equal means)."""
+    options = rule.get("responses")
+    if not options:
+        response = rule.get("response", "none")
+        if response != "none" and rng.random() > float(rule.get("p", 1.0)):
+            response = "none"
+        return response
+    u, acc = rng.random(), 0.0
+    for opt in options:
+        acc += float(opt.get("p", 0.0))
+        if u < acc:
+            return opt.get("response", "none")
+    return "none"
+
+
 @dataclass
 class Frame:
     """One onboard camera image. The ONLY perceptual input to the runtime."""
@@ -461,12 +480,11 @@ class SimWorld:
         return bool(len(contacts.get("geom_a", [])))
 
     def _respond(self, name, item, entity, trigger):
+        """World-side response rule (hidden from the robot)."""
         state = self.fixture_states[name]
         context = "raised" if state.raised else "lowered"
         rule = self.consequences.get(name, {}).get(trigger, {"response": "none", "p": 1.0})
-        response = rule.get("response", "none")
-        if response != "none" and self.rng.random() > float(rule.get("p", 1.0)):
-            response = "none"
+        response = choose_response(rule, self.rng)
         if state.raised:
             response = "suppressed_raised" if response != "none" else "none"
         elif response in ("yellow", "red"):

@@ -1,0 +1,8 @@
+# Niv-style variance world (character gate, caution; docs/results/character-gate-prereg.md).
+# bloom and stone have the same mean valence on signal (+0.5) but stone's outcome varies more:
+# bloom yellow-or-nothing (valences +1 / 0: mean 0.5, variance 0.25), stone yellow 3/4 or red 1/4
+# (valences +1 / -1: mean 0.5, variance 0.75). grump as in standard. A cautious chooser
+# (value = mean - z x uncertainty) should prefer the steady bloom.
+bloom: {signal: {response: yellow, p: 0.5, hold: 8.0}}
+grump: {nudge: {response: red, p: 1.0, hold: 8.0}, signal: {response: red, p: 1.0, hold: 8.0}}
+stone: {signal: {responses: [{response: yellow, p: 0.75}, {response: red, p: 0.25}], hold: 8.0}}

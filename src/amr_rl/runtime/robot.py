@@ -859,6 +859,8 @@ class RobotRuntime:
         self.nav.cfg.v_max = self._character_base["navigator.v_max"] * eff["navigator.v_max_gain"]
         self.memory.cfg.initial_probes = eff["learning.initial_probes"]
         self.memory.cfg.change_failures = eff["learning.change_failures"]
+        self.memory.cfg.surprise_ratio = eff["learning.surprise_ratio"]
+        self.memory.cfg.curiosity_lp = eff["learning.curiosity_lp"]
         self.character_effective = {**eff, "values": values, "chooser.min_interval": self.cfg.chooser.min_interval,
                                     "chooser.avoid_radius": self.cfg.chooser.avoid_radius,
                                     "chooser.margin": self.cfg.chooser.margin, "navigator.v_max": self.nav.cfg.v_max}

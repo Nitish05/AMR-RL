@@ -57,6 +57,14 @@ class LearningConfig:
     stable_useful: int = 6
     max_information_value: float = 0.2
     curiosity: float = 0.5  # engineered weight on outcome uncertainty (exploration bonus)
+    # Character (behavior/character.py; set by RobotRuntime when character_active). surprise_ratio:
+    # evidence weight of a better-than-expected outcome over a worse-than-expected one, for
+    # self-chosen actions only (bounded [0.5, 2]; 1 = unchanged). curiosity_lp: the share of the
+    # uncertainty bonus that learning progress replaces (0 = unchanged; 1 = pure learning progress).
+    surprise_ratio: float = 1.0
+    curiosity_lp: float = 0.0
+    lp_fast: float = 0.5  # EMA rates of the outcome-prediction error; learning progress = slow - fast
+    lp_slow: float = 0.2
     change_discount: float = 0.25  # weight of evidence older than a detected consequence change
     entity_backoff: float = 1.5  # pseudo-count weight of this entity's other actions (generalisation)
 
@@ -298,10 +306,12 @@ class ExperienceMemory:
         total = 0.0
         change_time = float(self._meta("change_time") or "-inf")
         for window in windows:
-            for token, _, t in window:
+            for token, _, t, *extra in window:
                 w = 0.5 ** (max(0.0, now - t) / self.cfg.half_life)
                 if t < change_time:
                     w *= self.cfg.change_discount  # evidence from before a detected change
+                if extra:
+                    w *= float(extra[0])  # surprise weighting stored with the outcome (character)
                 counts[token] = counts.get(token, 0.0) + w
                 total += w
         return counts, total
@@ -312,6 +322,7 @@ class ExperienceMemory:
         with self.lock:
             rows = self.db.execute("SELECT action, context, window FROM options WHERE entity_id=?",
                                    (entity_id,)).fetchall()
+            lp = self.learning_progress(entity_id, action) if self.cfg.curiosity_lp > 0 else 0.0
         windows = {r["context"]: json.loads(r["window"]) for r in rows if r["action"] == action}
         others = [json.loads(r["window"]) for r in rows if r["action"] != action]
         prior = {o: (self.cfg.prior_none if o == "none" else (1 - self.cfg.prior_none) / (len(OUTCOMES) - 1))
@@ -332,7 +343,38 @@ class ExperienceMemory:
         effective = n_ctx + 0.5 * (n_agg - n_ctx)
         uncertainty = spread / math.sqrt(1.0 + effective)
         return {"probabilities": probs, "expected_valence": ev, "uncertainty": uncertainty,
-                "evidence": {"context": n_ctx, "all_contexts": n_agg}}
+                "evidence": {"context": n_ctx, "all_contexts": n_agg}, "learning_progress": lp}
+
+    def learning_progress(self, entity_id, action):
+        """Oudeyer-style learning progress of one option: the slow EMA of the outcome-
+        prediction error minus the fast one (how much the predictions have been improving),
+        floored at 0. Learned statistic; the EMA rates are engineered."""
+        raw = self._meta(f"lp:{entity_id}:{action}")
+        if not raw:
+            return 0.0
+        fast, slow = json.loads(raw)
+        return max(0.0, slow - fast)
+
+    def _update_learning_progress(self, entity_id, action, error):
+        key = f"lp:{entity_id}:{action}"
+        raw = self._meta(key)
+        fast, slow = json.loads(raw) if raw else (error, error)
+        fast += self.cfg.lp_fast * (error - fast)
+        slow += self.cfg.lp_slow * (error - slow)
+        self._set_meta(key, json.dumps([fast, slow]))
+        return max(0.0, slow - fast)
+
+    def _evidence_weight(self, receipt, valence, expected):
+        """Surprise weighting (character): for a self-chosen action a better-than-expected
+        outcome weighs sqrt(ratio) and a worse one 1/sqrt(ratio), so the ratio of the two is
+        ``surprise_ratio``; 1 for every other outcome and whenever the ratio is 1."""
+        ratio = float(self.cfg.surprise_ratio)
+        if ratio == 1.0 or (receipt.get("decision") or {}).get("policy") != "learned":
+            return 1.0
+        surprise = valence - expected
+        if abs(surprise) < 1e-9:
+            return 1.0
+        return math.sqrt(ratio) if surprise > 0 else 1.0 / math.sqrt(ratio)
 
     def option_state(self, entity_id, action, now):
         with self.lock, self.db:
@@ -375,7 +417,9 @@ class ExperienceMemory:
             ev_after = (ev * n + v_o) / (n + 1)
             after += po * max(best_other, ev_after)
         gain = after - max(best_other, ev)
-        bonus = self.cfg.curiosity * prediction["uncertainty"]
+        lp = self.cfg.curiosity_lp  # curiosity type (character): 0 = uncertainty only, 1 = learning progress only
+        bonus = self.cfg.curiosity * ((1.0 - lp) * prediction["uncertainty"]
+                                      + lp * prediction.get("learning_progress", 0.0))
         return max(0.0, min(self.cfg.max_information_value, gain + bonus))
 
     def note_proposal(self, entity_id, action):
@@ -428,13 +472,16 @@ class ExperienceMemory:
             if self.db.execute("SELECT 1 FROM entities WHERE entity_id=?", (e,)).fetchone() is None:
                 raise ValueError("Receipt refers to an unknown entity")
             before = self.predict(e, a, c, t)
+            weight = self._evidence_weight(receipt, valence, before["expected_valence"])
+            progress = self._update_learning_progress(e, a, abs(valence - before["expected_valence"]))
             self.db.execute(
                 "INSERT INTO events(event_id,entity_id,action,context,observed,valence,t,receipt_sha256,receipt)"
                 " VALUES(?,?,?,?,?,?,?,?,?)", (receipt["event_id"], e, a, c, o, valence, t, digest, payload))
             row = self.db.execute("SELECT window FROM options WHERE entity_id=? AND action=? AND context=?",
                                   (e, a, c)).fetchone()
             window = json.loads(row["window"]) if row else []
-            window = (window + [[o, valence, t]])[-self.cfg.window:]
+            entry = [o, valence, t] if weight == 1.0 else [o, valence, t, weight]
+            window = (window + [entry])[-self.cfg.window:]
             self.db.execute(
                 "INSERT INTO options(entity_id,action,context,window,outcomes) VALUES(?,?,?,?,1)"
                 " ON CONFLICT(entity_id,action,context) DO UPDATE SET window=excluded.window, outcomes=outcomes+1",
@@ -478,6 +525,7 @@ class ExperienceMemory:
                 "probes": {"before": budget["probes"], "after": probes},
                 "useful": useful, "valence": valence, "change_hypothesis": change,
                 "surprise": -math.log(max(before["probabilities"][o], 1e-6)),
+                "evidence_weight": weight, "learning_progress": progress,
             }
             self.db.execute("INSERT INTO updates(event_id,entity_id,action,detail) VALUES(?,?,?,?)",
                             (receipt["event_id"], e, a, canonical(detail)))

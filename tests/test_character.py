@@ -13,14 +13,31 @@ from amr_rl.learning.memory import ExperienceMemory, LearningConfig
 from amr_rl.sim.learner_bench import MAP_VERSION, BenchRuntime
 
 
-def test_half_is_the_behaviour_before_any_trait_existed():
-    eff = effective({t.key: 0.5 for t in TRAITS})
+def test_the_defaults_are_the_behaviour_before_any_trait_existed():
+    eff = effective({t.key: t.default for t in TRAITS})
     assert eff == effective({})
     assert all(v == 1.0 for k, v in eff.items() if k.endswith("_gain"))
     assert eff["chooser.value_z"] == 0.0
     assert eff["learning.initial_probes"] == LearningConfig().initial_probes
     assert eff["learning.change_failures"] == LearningConfig().change_failures
+    assert eff["learning.surprise_ratio"] == LearningConfig().surprise_ratio == 1.0
+    assert eff["learning.curiosity_lp"] == LearningConfig().curiosity_lp == 0.0
     assert set(SCALED.values()) <= {k.split(".")[1] for k in eff}
+    # every trait's anchor is 0.5 except the mixing weight, whose unchanged value is 0
+    assert {t.key: t.default for t in TRAITS if t.default != 0.5} == {"curiosity_type": 0.0}
+
+
+def test_learning_style_traits_set_the_memory_parameters():
+    assert effective({"surprise_weighting": 1.0})["learning.surprise_ratio"] == 2.0
+    assert effective({"surprise_weighting": 0.0})["learning.surprise_ratio"] == 0.5
+    assert effective({"curiosity_type": 1.0})["learning.curiosity_lp"] == 1.0
+    assert effective({"curiosity_type": 0.5})["learning.curiosity_lp"] == 0.5
+    rt = _runtime(True, values={"surprise_weighting": 1.0, "curiosity_type": 1.0})
+    rt._apply_character()
+    assert rt.memory.cfg.surprise_ratio == 2.0 and rt.memory.cfg.curiosity_lp == 1.0
+    rt.memory.set_trait("curiosity_type", 0.0, provenance="owner", cause="test", t=1.0)
+    rt._apply_character()
+    assert rt.memory.cfg.curiosity_lp == 0.0
 
 
 def test_gains_are_bounded_and_the_speed_gain_is_capped_for_safety():

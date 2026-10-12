@@ -41,11 +41,13 @@ TRAITS = (
     TraitSpec("novelty_bias", "gain on every information-value term of the activity chooser", "openness"),
     TraitSpec("persistence", "gain on the chooser's switching margin and on the probe budgets (attempts before "
               "giving an option up, failures before a change is believed)", "conscientiousness"),
-    TraitSpec("surprise_weighting", "weighting of better-than-expected against worse-than-expected outcomes in "
-              "the attitude update, self-chosen actions only", "learning style"),
-    TraitSpec("curiosity_type", "mix of learning progress (1) against novelty count (0) in the information "
-              "value", "learning style"),
+    TraitSpec("surprise_weighting", "evidence weight of better-than-expected over worse-than-expected outcomes in "
+              "the attitude update (ratio 2^(2(x-0.5)), in [0.5, 2]), self-chosen actions only", "learning style"),
+    TraitSpec("curiosity_type", "share of the chooser's uncertainty bonus that learning progress replaces (0 = the "
+              "count-like bonus the robot had before any trait existed; 1 = learning progress only)",
+              "learning style", default=0.0),
 )
+# The anchor of every trait is 0.5 except curiosity_type, a mixing weight whose unchanged value is 0.
 
 
 @dataclass
@@ -104,9 +106,8 @@ def config_for(preset: str) -> CharacterConfig:
 
 
 def effective(values: dict) -> dict:
-    """The parameter settings a set of trait values produces (temperament traits only;
-    the learning-style traits are not applied yet). Keys name the parameter and the
-    object that holds it."""
+    """The parameter settings a set of trait values produces. Keys name the parameter and
+    the object that holds it; a missing trait counts as its default."""
     tempo = gain(values.get("approach_tempo", 0.5), 0.5, 1.25)   # speed is capped: safety, not style
     caution = float(values.get("caution", 0.5))
     novelty = gain(values.get("novelty_bias", 0.5))
@@ -125,6 +126,10 @@ def effective(values: dict) -> dict:
         "chooser.margin_gain": persist,
         "learning.initial_probes": max(1, int(round(3 * persist))),
         "learning.change_failures": max(1, int(round(3 * persist))),
+        # learning style: evidence weighting by the sign of the surprise (self-chosen actions),
+        # and what the curiosity bonus rewards (uncertainty against learning progress)
+        "learning.surprise_ratio": gain(values.get("surprise_weighting", 0.5)),
+        "learning.curiosity_lp": float(min(1.0, max(0.0, values.get("curiosity_type", 0.0)))),
     }
 
 

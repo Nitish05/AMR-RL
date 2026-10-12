@@ -73,6 +73,11 @@ EXPERIMENTS = {
     "noisy": [
         {"label": "train", "consequences": "noisy", "seconds": 480},
     ],
+    # Character gate worlds (docs/results/character-gate-prereg.md, learning-style addendum)
+    "style_reversal": [{"label": "train", "consequences": "standard", "seconds": 660,
+                        "switch": {"at": 300, "to": "swapped"}}],
+    "style_noisy": [{"label": "train", "consequences": "noisy_tv", "seconds": 480}],
+    "style_variance": [{"label": "train", "consequences": "variance", "seconds": 480}],
     "baseline_random": [{"label": "train", "consequences": "standard", "seconds": 480, "policy": "random"}],
     "baseline_nearest": [{"label": "train", "consequences": "standard", "seconds": 480, "policy": "nearest"}],
     "baseline_fixed": [{"label": "train", "consequences": "standard", "seconds": 480, "policy": "fixed"}],

@@ -92,6 +92,20 @@ with probes left:
 value = need × E[valence] × novelty + curiosity × uncertainty × (0.3 + 0.7 need) − costs
 ```
 
+With a character switched on (`RuntimeConfig.character_active`, off by default;
+`behavior/character.py`), six engineered trait values scale terms of this rule and of the
+memory, all with a default that leaves the formula above exactly as it is: caution reads
+`E[valence] − z × uncertainty` instead of the mean; novelty bias multiplies the whole
+information term; approach tempo scales the cruise speed and the decision interval;
+persistence the switching margin and the probe budgets; **surprise weighting** stores each
+self-chosen outcome with an evidence weight √r (better than expected) or 1/√r (worse), r ∈
+[0.5, 2], so the window counts above read the same history optimistically or pessimistically;
+**curiosity type** replaces a share w of `uncertainty` in the bonus by the option's learning
+progress (slow EMA minus fast EMA of the outcome-prediction error, floored at 0), so a
+random-response object loses its bonus once its unpredictability stops shrinking. The weights
+and progress are logged with every update (`evidence_weight`, `learning_progress`). Admission of
+each trait is gated on identifiability (docs/results/character-gate-prereg.md).
+
 Other activities: **investigate** (never-interacted entity, closer look),
 **explore** (frontier, scaled by recent map growth), **avoid** (a disliked entity
 within 0.75 m pre-empts everything), **revisit** (engage an entity that is not in

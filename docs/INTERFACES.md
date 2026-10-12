@@ -76,6 +76,8 @@ never simulator ground truth. `null` means unavailable/unknown, never zero.
     {"event_id": "…", "entity_id": "ent-3f2a", "action": "signal", "context": "flag_down",
      "predicted": {"yellow_flag": 0.8, "none": 0.2}, "observed": "yellow_flag",
      "valence": 1.0, "update": {"before": 0.58, "after": 0.62}, "timestamp": 11.0}
+                                 // the memory's full update detail (learning_updates) also carries "evidence_weight"
+                                 // (surprise weighting; 1.0 unless a character is active) and "learning_progress"
   ],
   "motivation": {"stimulation_need": 0.4, "engineered": true},
   "expression": {"face": "happy", "gaze": [0.2, 0.0], "uncertainty": 0.1,

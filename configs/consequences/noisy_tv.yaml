@@ -1,0 +1,7 @@
+# Noisy-TV world (character gate, curiosity type; docs/results/character-gate-prereg.md).
+# bloom has a learnable rule; stone answers at random with no learnable pattern (yellow or red,
+# half each: mean 0, maximal variance); grump is the known aversive object. Visits to stone
+# should decay for a learning-progress curiosity and persist for a count-like one.
+bloom: {signal: {response: yellow, p: 1.0, hold: 8.0}}
+grump: {nudge: {response: red, p: 1.0, hold: 8.0}, signal: {response: red, p: 1.0, hold: 8.0}}
+stone: {signal: {responses: [{response: yellow, p: 0.5}, {response: red, p: 0.5}], hold: 8.0}}

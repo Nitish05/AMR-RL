@@ -342,8 +342,9 @@ The full status of every capability is in
 * **Character:** the four temperament traits are engineered gains on existing
   parameters (`behavior/character.py`), switched off by default until the pre-registered
   admission gate shows they are identifiable from behaviour
-  ([criteria](docs/results/character-gate-prereg.md)); the learning-style traits are
-  stored but not mapped; no trait is a learned or inner quantity.
+  ([criteria](docs/results/character-gate-prereg.md)); the two learning-style traits
+  (surprise weighting, curiosity type) are mapped onto the memory under the same switch and
+  gate; no trait is a learned or inner quantity.
 * **Nudge reach:** fixed and re-evaluated in the loop: 24/24 completed nudges on
   fixtures with rules touched them (round 9), 32/33 in round 6.
 * **Blocked or slipping wheels:** with the IMU, the robot notices within about

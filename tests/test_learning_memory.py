@@ -8,6 +8,7 @@ finite probe budget; replays never train twice; restart keeps knowledge.
 import json
 import random
 
+import numpy as np
 import pytest
 
 from amr_rl.behavior.chooser import ChooserConfig, option_values
@@ -332,3 +333,77 @@ def test_memory_reset_levels_keep_or_archive_the_character(tmp_path):
         m.reset("RESET", level="half")
     m.ensure_character(CharacterConfig(), t=7.0)
     assert m.character()["persistence"]["value"] == 0.5
+
+
+# ---------------------------------------------------------------- learning-style traits
+def _self_chosen(memory, entity, observed, *, event, now):
+    counter["n"] += 1
+    return memory.record_outcome({
+        "event_id": event, "entity_id": entity, "action": "signal", "context": "attach:none",
+        "observed": observed, "timestamp": now, "authorised": True, "images_retained": True,
+        "predicted": {}, "decision": {"policy": "learned", "value": 0.1},
+    })
+
+
+def test_surprise_weighting_is_off_by_default_and_the_windows_stay_byte_identical(tmp_path):
+    plain = open_memory(tmp_path / "plain.sqlite")
+    styled = open_memory(tmp_path / "styled.sqlite", surprise_ratio=1.0, curiosity_lp=0.0)
+    for n, obs in enumerate(("attach:yellow", "attach:red", "none")):
+        for m in (plain, styled):
+            _self_chosen(m, "a", obs, event=f"ev-{n}", now=1.0 + n)
+    rows = [m.db.execute("SELECT window FROM options WHERE entity_id='a'").fetchone()[0] for m in (plain, styled)]
+    assert rows[0] == rows[1] and "[" in rows[0]
+    assert all(len(e) == 3 for e in json.loads(rows[0]))  # no weight stored when the ratio is 1
+    assert plain.predict("a", "signal", "attach:none", 10.0) == styled.predict("a", "signal", "attach:none", 10.0)
+
+
+def test_surprise_weighting_weighs_good_and_bad_surprises_asymmetrically_for_self_chosen_actions(tmp_path):
+    optimist = open_memory(tmp_path / "o.sqlite", surprise_ratio=2.0)
+    pessimist = open_memory(tmp_path / "p.sqlite", surprise_ratio=0.5)
+    operator = open_memory(tmp_path / "op.sqlite", surprise_ratio=2.0)
+    for n, obs in enumerate(("attach:yellow", "attach:red", "attach:yellow", "attach:red")):
+        u_o = _self_chosen(optimist, "a", obs, event=f"ev-{n}", now=1.0 + n)
+        u_p = _self_chosen(pessimist, "a", obs, event=f"ev-{n}", now=1.0 + n)
+        u_op = observe(operator, "a", obs, event=f"ev-{n}", now=1.0 + n)  # not self-chosen: no decision
+        good = u_o["valence"] > u_o["expected_valence"]["before"]
+        assert u_o["evidence_weight"] == pytest.approx(2 ** 0.5 if good else 2 ** -0.5)
+        assert u_p["evidence_weight"] == pytest.approx(2 ** -0.5 if good else 2 ** 0.5)
+        assert u_op["evidence_weight"] == 1.0
+    now = 10.0
+    ev = {k: m.predict("a", "signal", "attach:none", now)["expected_valence"]
+          for k, m in (("o", optimist), ("p", pessimist), ("op", operator))}
+    assert ev["o"] > ev["op"] > ev["p"]  # the same history, read optimistically or pessimistically
+    window = json.loads(optimist.db.execute("SELECT window FROM options WHERE entity_id='a'").fetchone()[0])
+    assert all(len(e) == 4 for e in window) and window[0][3] == pytest.approx(2 ** 0.5)
+
+
+def test_learning_progress_rises_for_a_learnable_object_and_stays_flat_for_a_random_one(tmp_path):
+    memory = open_memory(tmp_path / "lp.sqlite", curiosity_lp=1.0)
+    rng = np.random.default_rng(3)
+    for n in range(12):
+        _self_chosen(memory, "a", "attach:yellow", event=f"a-{n}", now=1.0 + n)  # always the same
+        _self_chosen(memory, "b", "attach:yellow" if rng.random() < 0.5 else "attach:red",
+                     event=f"b-{n}", now=1.0 + n)
+    lp_a, lp_b = memory.learning_progress("a", "signal"), memory.learning_progress("b", "signal")
+    assert lp_a > 0.02 > lp_b
+    pa, pb = (memory.predict(e, "signal", "attach:none", 13.0) for e in ("a", "b"))
+    assert pa["learning_progress"] == pytest.approx(lp_a) and pb["learning_progress"] == pytest.approx(lp_b)
+    # pure learning-progress curiosity rewards the learnable object, pure uncertainty the random one
+    assert memory.information_value(pa, 0.0) >= memory.information_value(pb, 0.0) or pa["uncertainty"] > pb["uncertainty"]
+    memory.cfg.curiosity_lp = 0.0
+    base_a, base_b = memory.information_value(pa, -1.0), memory.information_value(pb, -1.0)
+    memory.cfg.curiosity_lp = 1.0
+    assert memory.information_value(pb, -1.0) < base_b  # the random object loses its bonus
+    plain = open_memory(tmp_path / "plain.sqlite")
+    pred = plain.predict("a", "signal", "attach:none", 1.0)
+    assert pred["learning_progress"] == 0.0 and plain.learning_progress("a", "signal") == 0.0
+    assert base_a >= 0.0
+
+
+def test_curiosity_lp_zero_is_byte_identical_information_value(tmp_path):
+    memory = open_memory(tmp_path / "m.sqlite")
+    _self_chosen(memory, "a", "attach:yellow", event="e0", now=1.0)
+    pred = memory.predict("a", "signal", "attach:none", 2.0)
+    plain = memory.information_value(pred, 0.0)
+    pred_with = {**pred, "learning_progress": 0.9}
+    assert memory.information_value(pred_with, 0.0) == plain
