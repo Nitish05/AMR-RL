@@ -252,3 +252,5 @@ Each check runs once, from a pinned worktree, paired (same commit, worlds and se
 
 **Adoption.** R9h stays the default only if F1 and F2 both pass. If either fails, `odo_blocked_mode` and `imu_zupt_temp_first_c` are set back to the 2026-10-11 values and the result is documented. If F2 passes and F1 fails, or the reverse, only the passing change stays.
 
+
+**Deviation recorded before scoring (2026-10-12, 16:40 PDT).** The four B-base navigation jobs failed at argument parsing (exit 2 in 0.0 min; `navigation.py` at 3059289 had no `--vslam` option, so the base arm's `odo_blocked_mode="lost"` could not be passed; the failed logs are kept). They are re-run from a worktree of 4f0224f, which is 3059289 plus that option (evaluation tooling only; no runtime code differs). The other 72 jobs run from 3059289 as planned. Nothing else in this addendum changes.
