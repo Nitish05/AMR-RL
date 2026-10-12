@@ -37,7 +37,9 @@ never simulator ground truth. `null` means unavailable/unknown, never zero.
       "command_model_fallback_frames": 0,
       "zupt_holds": 1, "zupt_hold_failures": 0,   // recalibration stops (and ones that ran out of time)
       "zupt_hold_active": false,                  // true while the robot stands still to recalibrate
+      "blocked_active": false, "blocked_events": 0, "blocked_kind": null,  // keep-pose blocked handling: backing off now; events so far; stalled | spinning | unknown
       "temp_c": 31.2, "tempco_dps_per_c": -0.006, // chip temperature and the learned offset tempco
+      "tempco_known": true,                       // its uncertainty is below half the datasheet prior (first 0.5 degC stop done)
       "offset_updates": 52, "zupt_frames": 50,    // offset measurements so far
       "sensors": {"imu": "ok", "encoders": "ok"}, // waiting | ok | lost (no samples for 0.3 s; flagged only)
       "sample_age_s": {"imu": 0.004, "encoders": 0.004}
@@ -45,7 +47,7 @@ never simulator ground truth. `null` means unavailable/unknown, never zero.
   },
   "camera": {"frame_index": 120, "timestamp": 12.3, "age": 0.0, "fresh": true},
   "activity": {
-    "name": "engage",               // explore | investigate | engage | revisit | avoid | idle | manual | stopped | recovering
+    "name": "engage",               // explore | investigate | engage | revisit | avoid | idle | manual | stopped | recovering | blocked (backing off with the pose kept)
     "target_entity": "ent-3f2a",    // or null
     "phase": "approaching",         // free text phase inside the activity
     "reason": "Expected +0.62 (learned) vs idle 0.00",

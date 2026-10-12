@@ -369,6 +369,14 @@ class VSLAMConfig:
     # camera-only robot does: commanded >= freeze_min_cmd and vision < odo_freeze_ratio
     # of it -> "blocked" (a motion-consistency loss, so the robot backs off).
     odo_blocked_check: bool = True
+    # Blocked handling (owner decision 2026-10-12). "keep_pose": vision and the wheels
+    # agree the robot did not move although it was driven, so the pose is right and only
+    # the drive is blocked (the rover slip check: Maimone, Cheng, Matthies 2007); tracking
+    # or dead reckoning continues and TrackResult.info["blocked"] tells the runtime to
+    # back off and choose again. "lost": the 2026-10-11 behaviour, a motion-consistency
+    # loss with bounded recovery and a wait for the operator (about 26 s per event in
+    # validation 5, with the pose correct every time).
+    odo_blocked_mode: str = "keep_pose"
     odo_angular_check: float = 0.35     # rad + odo_angular_rel x |rotation|: vision vs gyro over the window
     odo_angular_rel: float = 0.25
     # Gyro scale from vision: a full in-place turn that returns to the same view
@@ -559,6 +567,11 @@ class PlanarVSLAM:
         self._now = 0.0
         self._dr = None  # dead-reckoning gate after a loss of tracking
         self.inconsistency = None
+        if self.cfg.odo_blocked_mode not in ("keep_pose", "lost"):
+            raise ValueError(f"VSLAMConfig.odo_blocked_mode must be 'keep_pose' or 'lost', not {self.cfg.odo_blocked_mode!r}")
+        self.blocked = False  # this frame: driven, but vision and the wheels show no motion (pose kept)
+        self.blocked_kind = None  # "stalled" (no encoder travel), "spinning" (slip-flagged), "unknown" (no vision)
+        self.blocked_events = 0
         self.frozen_events = []
         self.reloc_log = []  # every relocalisation outcome (operational values only; bounded)
         self._last_err = None
@@ -846,6 +859,7 @@ class PlanarVSLAM:
         odo = odometry if (odometry is not None and self.cfg.odo_fusion and dt > 0) else None
         self._odo = odo
         self._raw_cmd = commanded
+        self.blocked = False
         if odo is not None:
             self._proprio_win.append((timestamp, 0.0 if commanded is None else abs(float(commanded[0])) * dt,
                                       0.0 if odo.slip else float(odo.distance)))
@@ -986,22 +1000,32 @@ class PlanarVSLAM:
                 return TrackResult(LOST, None, None, None, 0, 0, False, timestamp, "tracking_failed")
             self.status = PREDICTED
             return TrackResult(PREDICTED, self.pose.copy(), self.position_sigma, self.heading_sigma,
-                               0, 0, False, timestamp, "visual_tracking_interrupted", info={"degraded": True})
+                               0, 0, False, timestamp, "visual_tracking_interrupted",
+                               info={"degraded": True, **({"blocked": True} if self.blocked else {})})
         self.status = TRACKING
         self.predicted_time = 0.0
         self._pred_rot = 0.0
         pose, inl, H, lm_idx, kp_idx, err = result
         self._frame_candidates = None
         if self._probation > 0 and not self._motion_consistent(pose, commanded, dt, timestamp):
-            return self._reject_in_probation(timestamp, "relocalization_rejected_in_probation")
-        if self._probation == 0 and not self._motion_consistent(pose, commanded, dt, timestamp):
-            self._on_frozen(timestamp)
-            self.status = LOST
-            self.position_sigma = self.heading_sigma = None
-            self.velocity[:] = 0
-            self._motion_log.clear()
-            self._turn, self._turn_count = None, 0
-            return TrackResult(LOST, None, None, None, 0, 0, False, timestamp, "visual_motion_inconsistent_with_commands")
+            if self.inconsistency == "blocked" and self.cfg.odo_blocked_mode == "keep_pose":
+                # the wheels did not move and vision agrees: no evidence against the
+                # relocalisation, so probation continues
+                self._note_blocked(timestamp)
+            else:
+                return self._reject_in_probation(timestamp, "relocalization_rejected_in_probation")
+        elif self._probation == 0 and not self._motion_consistent(pose, commanded, dt, timestamp):
+            if self.inconsistency == "blocked" and self.cfg.odo_blocked_mode == "keep_pose":
+                self._note_blocked(timestamp)
+            else:
+                self._on_frozen(timestamp)
+                self.status = LOST
+                self.position_sigma = self.heading_sigma = None
+                self.velocity[:] = 0
+                self._motion_log.clear()
+                self._turn, self._turn_count = None, 0
+                return TrackResult(LOST, None, None, None, 0, 0, False, timestamp,
+                                   "visual_motion_inconsistent_with_commands")
         self.failures = 0
         gated = False
         if odo is not None:
@@ -1067,9 +1091,27 @@ class PlanarVSLAM:
             kf = self._maybe_keyframe(gray, pts, desc, matched_lm, int(inl.sum()), timestamp, rgb=rgb)
         if kf and self.place is not None and self.cfg.loop_closure:
             self._loop_check(rgb, timestamp)
+        if self.blocked:
+            info["blocked"] = True
         return TrackResult(TRACKING, self.pose.copy(), self.position_sigma, self.heading_sigma,
                            int(inl.sum()), len(lm_idx), kf, timestamp,
                            inlier_uv=pts[kp_idx[inl]], info=info)
+
+    def _note_blocked(self, t, kind=None):
+        """Keep-pose blocked handling: record the event for this frame and restart the
+        consistency window, so the back-off that follows is judged afresh. The kind
+        tells the runtime whether the wheels stalled (something pressed on, worth a map
+        mark) or spun (a floor, not an object); it is read over the same window that
+        gave the verdict."""
+        if kind is None:
+            recent = [e for e in self._motion_log if len(e) > 4 and t - e[0] <= self.cfg.freeze_window + 1e-9]
+            kind = "spinning" if any(e[4] for e in recent) else "stalled"
+        self.blocked = True
+        self.blocked_kind = kind
+        self.blocked_events += 1
+        self.inconsistency = None
+        self._motion_log.clear()
+        self._proprio_win.clear()
 
     def _on_frozen(self, t):
         """Vision disagreed with the commanded motion: distrust everything since the
@@ -1352,21 +1394,31 @@ class PlanarVSLAM:
         or at once when the wheels show the robot is blocked (contact back-off)."""
         cfg = self.cfg
         if cfg.odo_blocked_check and self.blocked_by_odometry(t):
-            self.inconsistency = "blocked"
-            self._on_frozen(t)
-            self.status = LOST
-            self.position_sigma = self.heading_sigma = None
-            self.velocity[:] = 0
-            self._motion_log.clear()
-            self._turn, self._turn_count = None, 0
-            self._cov = None
-            self._reset_vision_refs()
-            return TrackResult(LOST, None, None, None, 0, 0, False, t, "visual_motion_inconsistent_with_commands")
+            if cfg.odo_blocked_mode == "keep_pose":
+                # without vision the wheels alone cannot tell stalled from spinning;
+                # dead reckoning continues (slip-flagged travel is not composed, below)
+                self._note_blocked(t, kind="unknown")
+            else:
+                self.inconsistency = "blocked"
+                self._on_frozen(t)
+                self.status = LOST
+                self.position_sigma = self.heading_sigma = None
+                self.velocity[:] = 0
+                self._motion_log.clear()
+                self._turn, self._turn_count = None, 0
+                self._cov = None
+                self._reset_vision_refs()
+                return TrackResult(LOST, None, None, None, 0, 0, False, t, "visual_motion_inconsistent_with_commands")
         cov = self._cov if self._cov is not None else np.diag([
             (self.position_sigma or cfg.sigma_floor) ** 2, (self.position_sigma or cfg.sigma_floor) ** 2,
             (self.heading_sigma or 0.002) ** 2])
         self._cov = _propagate(self.pose, cov, odo)
-        self.pose = compose(self.pose, (odo.dx, odo.dy, odo.dth))
+        if cfg.odo_blocked_mode == "keep_pose" and odo.slip:
+            # slip-flagged encoder travel is not trusted without vision: spinning wheels
+            # would walk the kept pose (the covariance still grows with the step's)
+            self.pose = compose(self.pose, (0.0, 0.0, odo.dth))
+        else:
+            self.pose = compose(self.pose, (odo.dx, odo.dy, odo.dth))
         self._sigma_from_cov()
         self._reset_vision_refs()
         self.fusion_log["predicted_odo"] += 1
@@ -1384,7 +1436,8 @@ class PlanarVSLAM:
             return TrackResult(LOST, None, None, None, 0, 0, False, t, "tracking_failed")
         self.status = PREDICTED
         return TrackResult(PREDICTED, self.pose.copy(), self.position_sigma, self.heading_sigma,
-                           0, 0, False, t, "visual_tracking_interrupted", info={"degraded": True})
+                           0, 0, False, t, "visual_tracking_interrupted",
+                           info={"degraded": True, **({"blocked": True} if self.blocked else {})})
 
     def _scale_check(self, t, inliers):
         """Gyro scale from vision on full turns that come back to the same view."""
@@ -2772,6 +2825,7 @@ class PlanarVSLAM:
     def snapshot(self):
         return {
             "status": self.status,
+            "blocked": bool(self.blocked), "blocked_kind": self.blocked_kind, "blocked_events": int(self.blocked_events),
             "pose": None if self.pose is None or self.status not in (TRACKING, PREDICTED) else [float(v) for v in self.pose],
             "position_sigma": self.position_sigma if self.status in (TRACKING, PREDICTED) else None,
             "heading_sigma": self.heading_sigma if self.status in (TRACKING, PREDICTED) else None,

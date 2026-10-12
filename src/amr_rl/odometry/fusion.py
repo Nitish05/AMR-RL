@@ -66,6 +66,10 @@ class OdometryConfig:
     bias_rw: float = 0.001 * DPS
     tempco_rw: float = 1e-5 * DPS    # rad/s/degC/sqrt(s): the tempco is nearly constant
     tempco_prior_factor: float = 2.0
+    # The tempco counts as measured once an offset measurement has been taken at least
+    # this far (degC) from the boot temperature: one such stop ends the first-stop rule
+    # (RuntimeConfig.imu_zupt_temp_first_c); the normal uncertainty gates take over.
+    tempco_measured_dt_c: float = 0.4
     track_scale_init: float = 1.0    # gyro yaw / encoder yaw (scrub of a skid-steered turn)
     track_scale_gain: float = 0.05
     track_scale_bounds: tuple = (0.6, 1.4)
@@ -133,6 +137,8 @@ class WheelInertialOdometry:
         # 2.5x typ drifted 0.03 dps unnoticed in development with a 1x prior).
         self._P = np.diag([(float(g["offset_sigma_dps"]) * DPS) ** 2,
                            (self.cfg.tempco_prior_factor * float(g.get("tempco_sigma_dps_per_c", 0.0)) * DPS) ** 2])
+        self._tempco_prior_sigma = float(math.sqrt(self._P[1, 1]))
+        self._tempco_measured = False  # an offset measurement at least tempco_measured_dt_c from boot
         self.temp = None   # latest chip temperature (degC)
         self.temp0 = None  # reference temperature of b0
         self.temp_at_update = None  # chip temperature at the last stand-still offset measurement
@@ -206,6 +212,16 @@ class WheelInertialOdometry:
     def tempco(self):
         return float(self._x[1]), float(math.sqrt(max(self._P[1, 1], 0.0)))
 
+    @property
+    def tempco_known(self):
+        """The offset's temperature coefficient has been measured: its uncertainty is
+        below half the datasheet prior. Only an offset measurement at a chip temperature
+        different from boot shrinks it (the boot measurement alone never does), so this
+        is what the first recalibration stop at a small temperature change buys."""
+        if self._tempco_prior_sigma <= 0 or self._tempco_measured:
+            return True
+        return math.sqrt(max(self._P[1, 1], 0.0)) < 0.5 * self._tempco_prior_sigma
+
     def _offset_update(self, meas, r_var, temp=None):
         """Kalman update with a measurement of the offset (rad/s) at ``temp``."""
         h = self._h(temp)
@@ -215,6 +231,8 @@ class WheelInertialOdometry:
         self._P = self._P - np.outer(K, h @ self._P)
         self._P = 0.5 * (self._P + self._P.T)
         self.offset_updates += 1
+        if abs(float(h[1])) >= self.cfg.tempco_measured_dt_c:
+            self._tempco_measured = True
 
     def add_bias_feedback(self, rate_error: float, sigma: float):
         """Gyro rate error (rad/s, corrected units) measured by vision over a window,

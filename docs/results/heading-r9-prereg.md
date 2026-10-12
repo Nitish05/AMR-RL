@@ -219,3 +219,36 @@ All 124 runs completed. Details are in [heading-r9.md](heading-r9.md#validation-
 As the rule requires, the claims are scoped to what passed. Nothing was tuned on these starts.
 
 **Deviation:** none in the runs. P5 was judged at the arm level, as in validations 1–4. The per-pair exceptions are listed in the results.
+
+## Addendum F: keep-pose blocked handling and the first temperature stop (written 2026-10-12, before any run)
+
+**Why.** Validation 5 (addendum E) found two defects in the adopted default and [r9-followup.md](r9-followup.md) §8 diagnosed them:
+- a blocked drive (stalled or spinning wheels) was handled as a loss of localisation, with a bounded back-off and a wait for the operator of about 26 s per event, although the pose was right every time it was checked;
+- with a slow chip warm-up the first recalibration stop came only at the 2-minute rule, and 72 % of the median run's worst heading error had built up by then.
+
+The owner decided (2026-10-12): keep the pose and back off; trigger the first stop at 0.5 °C until the temperature coefficient has been measured. Both are built ([r9-followup.md](r9-followup.md) §10) and unit-tested. This addendum pre-registers their live validation.
+
+**Candidate R9h** is the code default at the commit that adds this addendum: R9g plus
+- `VSLAMConfig.odo_blocked_mode = "keep_pose"` with `RuntimeConfig.blocked_backoff_m = 0.10`, `blocked_backoff_speed = 0.06`, `blocked_backoff_max_s = 4.0`, `blocked_max_per_min = 3`;
+- `RuntimeConfig.imu_zupt_temp_first_c = 0.5`.
+
+**Baseline R9g-equivalent:** the same commit with `--vslam odo_blocked_mode="lost" --runtime imu_zupt_temp_first_c=0`, so that only the two changes differ. Both arms use the IMU and encoders (the changes do not touch the camera-only robot). Same physics (the corrected caster contact).
+
+**Development before this addendum:** none on any validation start. A smoke run of the mechanism on spent seeds 0–1 (`work/evidence/r9h-dev-20261012/`) is recorded as development only; nothing in it is a claim.
+
+**Untouched starts.** Seeds 20–24 with `--heading-offset 27`: start headings 27°, 99°, 171°, 243° and 315°, which differ from every earlier start (0°, 72°, … ; 36°, 108°, …; 54°, 126°, …; 18°, 90°, …). Their random streams were never used.
+
+### Checks
+
+Each check runs once, from a pinned worktree, paired (same commit, worlds and seeds). All checks run whatever the earlier ones show. Nothing is tuned on these starts.
+
+| Check | Runs | Pass if |
+|---|---|---|
+| **F1 first stop** (required) | L1 protocol (420 s builds with the 150 s coverage pass): arena, arena_textured, home_a, heldout_b, heldout_c × seeds 20–24 = 25 pairs | per-run maximum heading error: median paired difference (R9h − baseline) ≤ 0°, and no pair worse by more than 1.0°; ATE median difference ≤ +0.5 cm; lost frames ≤ +2 pp; recalibration stops per run ≤ baseline + 1 |
+| **F2 blocked** (required) | the slip set: floor friction 0.06 on arena and home_a × seeds 20–22, and the two slip patches on arena × seeds 20–22 (9 pairs, L1 protocol); the blind-box navigation runs: home_a, heldout_b, heldout_c, home_a_dim × seed 20 with `--runtime near_field_guard=false` (4 pairs) | in R9h: no loss of tracking with reason `visual_motion_inconsistent_with_commands`; the median time from a blocked event to the next autonomous drive command ≤ 8 s (baseline: about 26 s); false blocked events (the true speed averaged over the preceding 1.2 s above 0.05 m/s) ≤ 10 % of events; contact episodes and their total duration not higher than the baseline's, per pair; ATE and maximum heading error medians not worse than the baseline's by more than 0.5 cm / 0.5°; no run stopped by `blocked_repeatedly` unless the baseline lost tracking at the same place |
+| **Reported** | the same runs | number of blocked events and their kinds; back-off completion rate; cells marked; heading error at the first stop and the share of runs whose first stop is `temperature_first`; stop durations |
+
+**Scoring.** `trajectory_scoring.jsonl` (per-frame truth, evaluation only) gives the true speed for the false-blocked rule and the heading error at each stop; `result.json` gives `blocked_events`, `recalibration_stops`, the loop and loss logs, ATE and contacts. Paired differences use the same BCa bootstrap as addendum E.
+
+**Adoption.** R9h stays the default only if F1 and F2 both pass. If either fails, `odo_blocked_mode` and `imu_zupt_temp_first_c` are set back to the 2026-10-11 values and the result is documented. If F2 passes and F1 fails, or the reverse, only the passing change stays.
+

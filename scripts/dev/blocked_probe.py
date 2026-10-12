@@ -1,7 +1,8 @@
 """Blocked-robot probe (evaluation only): drive straight into a heavy box the robot does
 not avoid (near-field guard off) and record whether, and how fast, the robot notices
-that it is not moving: the VSLAM's motion-consistency loss
-(``visual_motion_inconsistent_with_commands``) that starts the contact back-off.
+that it is not moving: the VSLAM's blocked verdict (since 2026-10-12 reported with the pose
+kept, ``info["blocked"]``; before, the motion-consistency loss
+``visual_motion_inconsistent_with_commands``) that starts the contact back-off.
 
 One case per run: boot, track for a few seconds, place the box ``--gaps`` metres in front of
 the front edge (true pose, evaluation only), then command forward at ``--speed`` for
@@ -78,7 +79,8 @@ def run_case(args, out, gap, seed):
                "slip_reasons": tr.get("odo_slip_reasons"), "contact": touching,
                "inconsistency": rt.slam.inconsistency}
         rows.append(row)
-        if detected is None and tr["status"] == "lost" and tr.get("reason") == "visual_motion_inconsistent_with_commands":
+        if detected is None and ((tr["status"] == "lost" and tr.get("reason") == "visual_motion_inconsistent_with_commands")
+                                 or (tr.get("info") or {}).get("blocked") or tr.get("blocked")):
             detected = s.now
     pushed = None if box is None else float(np.hypot(*(_xy(s.world.evaluation_obstacle) - box)))
     res = {"case": name, "world": args.world, "odometry": args.odometry, "gap_m": gap, "seed": seed,

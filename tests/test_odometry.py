@@ -4,6 +4,7 @@ with the VSLAM (no simulator; docs/results/heading-r9.md)."""
 import math
 
 import numpy as np
+import pytest
 from turn_scene import run_turn
 
 from amr_rl.odometry.fusion import WheelInertialOdometry
@@ -668,9 +669,9 @@ def test_interfaces_doc_lists_every_odometry_status_key():
 
     rt = RobotRuntime.__new__(RobotRuntime)
     rt.cfg, rt.spec, rt.odo, rt.last_odometry = RuntimeConfig(), SPEC, WheelInertialOdometry(SPEC), None
-    rt.slam = SimpleNamespace(fusion_log={})
+    rt.slam = SimpleNamespace(fusion_log={}, blocked_kind=None)
     rt.imu_calibration_status, rt.odo_fallbacks, rt.zupt_holds, rt.zupt_hold_failures = "loaded", 0, 0, 0
-    rt._zupt_hold_start, rt.now = None, 0.0
+    rt._zupt_hold_start, rt.now, rt._blocked_plan, rt.blocked_events = None, 0.0, None, []
     rt._sample_t, rt.sensor_state = {"imu": None, "encoders": None}, {"imu": "waiting", "encoders": "waiting"}
     doc = (Path(__file__).resolve().parents[1] / "docs" / "INTERFACES.md").read_text()
     missing = [k for k in rt.odometry_status() if f'"{k}"' not in doc]
@@ -762,3 +763,227 @@ def _scoring_module_dev(name):
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
     return mod
+
+
+def test_blocked_keeps_the_pose_and_restarts_the_window():
+    """Owner decision 2026-10-12: a blocked drive is not a loss of localisation. The
+    VSLAM records the event (stalled against something, or spinning on the floor), keeps
+    tracking, and restarts its consistency window for the back-off that follows."""
+    still = np.zeros(3)
+    for travel, slip, kind in ((0.0, False, "stalled"), (0.02, True, "spinning")):
+        slam = _motion_slam([(k * 0.1, still.copy(), travel, 0.0, slip, 0.02) for k in range(13)])
+        slam._proprio_win, slam.blocked, slam.blocked_events = [], False, 0
+        assert not slam._odometry_consistent(1.2) and slam.inconsistency == "blocked"
+        slam._note_blocked(1.2)
+        assert slam.blocked and slam.blocked_kind == kind and slam.blocked_events == 1
+        assert slam._motion_log == [] and slam.inconsistency is None
+    # without vision the wheels alone cannot tell the two apart
+    slam = _motion_slam([])
+    slam._proprio_win, slam.blocked, slam.blocked_events = [(k * 0.1, 0.02, 0.0) for k in range(13)], False, 0
+    assert slam.blocked_by_odometry(1.2)
+    slam._note_blocked(1.2, kind="unknown")
+    assert slam.blocked and slam.blocked_kind == "unknown" and slam._proprio_win == []
+    assert VSLAMConfig().odo_blocked_mode == "keep_pose"
+    # a slip flag older than the 1.2 s verdict window does not relabel a stall as spinning
+    log = [(k * 0.1, still.copy(), 0.0, 0.0, k < 5, 0.02) for k in range(30)]  # slip only at t < 0.5 s
+    slam = _motion_slam(log)
+    slam._proprio_win, slam.blocked, slam.blocked_events = [], False, 0
+    slam._note_blocked(2.9)
+    assert slam.blocked_kind == "stalled"
+
+
+def _blocked_runtime(pose=(1.0, 2.0, 0.0), kind="stalled"):
+    from types import SimpleNamespace
+
+    from amr_rl.runtime.robot import RobotRuntime, RuntimeConfig
+
+    rt = RobotRuntime.__new__(RobotRuntime)
+    rt.cfg = RuntimeConfig()
+    rt.blocked_events, rt._blocked_plan, rt.triggers, rt.activity, rt.loc_status = [], None, [], None, "tracking"
+    rt.pose = None if pose is None else np.array(pose, float)
+    rt.now, rt.last_command = 0.0, (0.2, 0.0)
+    rt.slam = SimpleNamespace(blocked_kind=kind)
+    rt.planner = SimpleNamespace(cfg=SimpleNamespace(footprint_radius=0.16),
+                                 obstacle_clearance_xy=lambda grid, xy: np.array([1.0] * len(xy)))
+    rt.grid = SimpleNamespace(raised=[], raise_to=lambda xy, level: rt.grid.raised.append((np.asarray(xy), level)) or 5)
+    rt.supervisor = SimpleNamespace(autonomy_enabled=True, recovery=None, stopped=[],
+                                    stop=lambda reason: rt.supervisor.stopped.append(reason))
+    rt.nav = SimpleNamespace(cancel=lambda reason: None)
+    return rt
+
+
+def test_blocked_runtime_backs_off_with_the_pose_kept_then_resumes():
+    rt = _blocked_runtime()
+    rt._on_blocked(10.0)
+    ev = rt.blocked_events[-1]
+    assert rt._blocked_plan is not None and ev["kind"] == "stalled" and ev["cells_marked"] == 5
+    xy, level = rt.grid.raised[0]
+    assert level == 1.5 and np.allclose(xy[:, 0], 1.20) and abs(xy[:, 1].mean() - 2.0) < 1e-9  # just ahead of the front
+    assert rt._blocked_step(10.1) == (-0.06, 0.0)  # straight back, slowly
+    rt.pose = np.array([0.95, 2.0, 0.0])  # 5 cm back: not yet
+    assert rt._blocked_step(11.0) == (-0.06, 0.0)
+    rt.pose = np.array([0.89, 2.0, 0.0])  # 11 cm back: done
+    assert rt._blocked_step(12.0) == (0.0, 0.0)
+    assert rt._blocked_plan is None and rt.triggers == ["blocked"] and ev["backoff_complete"] is True
+    assert rt.supervisor.stopped == []
+    # spinning wheels (a floor, not an object): back off, mark nothing the first time
+    rt = _blocked_runtime(kind="spinning")
+    rt._on_blocked(20.0)
+    assert rt.grid.raised == [] and "cells_marked" not in rt.blocked_events[-1]
+    # the back-off itself blocked: time limit, incomplete
+    assert rt._blocked_step(24.1) == (0.0, 0.0) and rt.blocked_events[-1]["backoff_complete"] is False
+    # stopped again within 0.3 m in the same minute: the spot is marked, whatever the kind
+    rt.pose = np.array([1.1, 2.05, 0.0])
+    rt._on_blocked(30.0)
+    assert rt.blocked_events[-1]["cells_marked"] == 5 and len(rt.grid.raised) == 1
+    rt._blocked_plan = None
+    rt.pose = np.array([2.5, 2.0, 0.0])  # far away: a new place, not marked
+    rt._on_blocked(40.0)
+    assert "cells_marked" not in rt.blocked_events[-1]
+
+
+def test_repeated_blocked_events_stop_autonomy_for_the_operator():
+    rt = _blocked_runtime(kind="spinning")
+    for t in (10.0, 20.0, 30.0):
+        rt._on_blocked(t)
+        rt._blocked_plan = None
+    assert rt.supervisor.stopped == []
+    rt._on_blocked(40.0)  # the 4th within a minute
+    assert rt.supervisor.stopped == ["blocked_repeatedly"] and rt._blocked_plan is None
+    assert rt.blocked_events[-1]["stopped"] is True
+    rt = _blocked_runtime(kind="spinning")
+    for t in (10.0, 20.0, 30.0, 100.0):  # the 4th is a minute later: allowed
+        rt._on_blocked(t)
+        rt._blocked_plan = None
+    assert rt.supervisor.stopped == []
+
+
+def test_first_temperature_stop_at_half_a_degree_until_the_tempco_is_known():
+    """Owner decision 2026-10-12: before the tempco has been measured, a 0.5 degC change
+    stops the robot even though the offset's own uncertainty is still small; after it,
+    the 1 degC rule and the uncertainty gate apply as before."""
+    from types import SimpleNamespace
+
+    from amr_rl.runtime.robot import RobotRuntime, RuntimeConfig
+
+    def runtime(temp, known, sigma_dps=0.008):
+        rt = RobotRuntime.__new__(RobotRuntime)
+        rt.cfg = RuntimeConfig()
+        rt.odo = SimpleNamespace(t=0.0, zupt_frames=12, last_bias_update_t=0.0, bias_var=math.radians(sigma_dps) ** 2,
+                                 temp=temp, temp_at_update=25.0, tempco_known=known)
+        rt._boot_t0, rt._zupt_hold_start, rt._zupt_hold_until, rt._zupt_frames_at_hold = -10.0, None, -math.inf, None
+        rt.zupt_hold_log, rt.zupt_holds, rt.zupt_hold_failures = [], 0, 0
+        return rt
+
+    rt = runtime(25.6, known=False)
+    assert rt._imu_booting(40.0) and rt.zupt_hold_log[-1]["trigger"] == "temperature_first"
+    assert rt.zupt_hold_log[-1]["tempco_known"] is False
+    assert not runtime(25.6, known=True)._imu_booting(40.0)  # 0.6 degC, tempco known, offset certain: no stop
+    assert not runtime(25.3, known=False)._imu_booting(40.0)  # below 0.5 degC
+    assert not runtime(25.6, known=False)._imu_booting(15.0)  # within imu_zupt_temp_min_s of the last update
+    rt = runtime(26.2, known=True, sigma_dps=0.03)
+    assert rt._imu_booting(40.0) and rt.zupt_hold_log[-1]["trigger"] == "temperature"
+    rt = runtime(25.7, known=False, sigma_dps=0.03)  # uncertain too, but only the first rule reaches 0.7 degC
+    assert rt._imu_booting(40.0) and rt.zupt_hold_log[-1]["trigger"] == "temperature_first"
+    rt = runtime(26.2, known=False, sigma_dps=0.03)  # the 1 degC rule would have fired by itself
+    assert rt._imu_booting(40.0) and rt.zupt_hold_log[-1]["trigger"] == "temperature"
+    rt = runtime(25.0, known=True, sigma_dps=0.03)
+    assert rt._imu_booting(130.0) and rt.zupt_hold_log[-1]["trigger"] == "interval"
+    rt = runtime(25.6, known=False)
+    rt.cfg.imu_zupt_temp_first_c = 0.0  # the switch off: the 2026-10-11 behaviour
+    assert not rt._imu_booting(40.0)
+
+
+def test_tempco_is_known_only_after_an_offset_measurement_at_another_temperature():
+    odo = WheelInertialOdometry(SPEC)
+    if odo._tempco_prior_sigma <= 0:
+        assert odo.tempco_known
+        return
+    assert not odo.tempco_known
+    odo.temp0 = odo.temp = 25.0
+    odo._offset_update(odo.bias, (0.002 * DPS) ** 2, temp=25.0)  # same temperature: learns nothing about the tempco
+    assert not odo.tempco_known
+    odo._offset_update(odo.bias, (0.002 * DPS) ** 2, temp=25.5)  # one stop 0.5 degC from boot: measured once
+    assert odo.tempco_known and odo._tempco_measured
+    odo = WheelInertialOdometry(SPEC)
+    odo.temp0 = odo.temp = 25.0
+    odo._offset_update(odo.bias, (0.002 * DPS) ** 2, temp=25.0)  # the boot measurement pins the offset
+    odo._offset_update(odo.bias, (0.002 * DPS) ** 2, temp=25.2)  # too close to boot to count as measured
+    assert not odo.tempco_known
+    for _ in range(3):
+        odo._offset_update(odo.bias, (0.002 * DPS) ** 2, temp=25.3)  # but the covariance test can still pass
+    assert odo.tempco_known
+
+
+def _predict_slam(mode="keep_pose"):
+    from amr_rl.perception.vslam import PlanarVSLAM
+
+    slam = PlanarVSLAM.__new__(PlanarVSLAM)
+    slam.cfg = VSLAMConfig(odo_blocked_mode=mode)
+    slam._motion_log, slam._proprio_win = [], [(k * 0.1, 0.02, 0.0) for k in range(13)]  # driven, wheels not moving
+    slam.inconsistency, slam.blocked, slam.blocked_kind, slam.blocked_events = None, False, None, 0
+    slam.pose, slam._cov = np.array([1.0, 2.0, 0.3]), np.diag([1e-4, 1e-4, 1e-5])
+    slam.position_sigma, slam.heading_sigma, slam.velocity = 0.01, 0.003, np.zeros(3)
+    slam.predicted_time, slam.failures, slam._turn, slam._turn_count = 0.3, 1, None, 0
+    slam.fusion_log = {"predicted_odo": 0}
+    slam._vision_pose = slam._bias_win = slam._scale_anchor = slam._radius_acc = None
+    slam._on_frozen = lambda t: None  # the landmark bookkeeping of a real loss is not under test
+    return slam
+
+
+def test_blocked_without_vision_keeps_dead_reckoning_and_reports_it():
+    from amr_rl.odometry.fusion import OdometryStep
+    from amr_rl.perception.vslam import LOST, PREDICTED
+
+    spinning = OdometryStep(dt=0.1, dx=0.02, dy=0.0, dth=0.001, cov=np.diag([1e-5, 1e-5, 1e-6]), v=0.2, w=0.01,
+                            distance=0.02, slip=True)
+    slam = _predict_slam()
+    r = slam._predict_odometry(spinning, 1.2)
+    assert r.status == PREDICTED and r.info.get("blocked") is True and slam.blocked_kind == "unknown"
+    assert np.allclose(slam.pose[:2], [1.0, 2.0])  # slip-flagged travel does not walk the kept pose
+    assert abs(slam.pose[2] - 0.301) < 1e-9 and slam._proprio_win == []
+    # the 2026-10-11 behaviour is still available for the paired baseline
+    slam = _predict_slam("lost")
+    slam._reset_vision_refs = lambda **k: None
+    r = slam._predict_odometry(spinning, 1.2)
+    assert r.status == LOST and r.reason == "visual_motion_inconsistent_with_commands"
+    with pytest.raises(ValueError):
+        from amr_rl.perception.camera_model import CameraModel
+        from amr_rl.perception.vslam import PlanarVSLAM
+        PlanarVSLAM(CameraModel.from_spec(SPEC), VSLAMConfig(odo_blocked_mode="sometimes"))
+
+
+def test_blocked_backoff_follows_the_driven_side_and_needs_clearance():
+    # a blocked REVERSE drive: drive forward, mark the cells behind
+    rt = _blocked_runtime()
+    rt.last_command = (-0.1, 0.0)
+    rt._on_blocked(10.0)
+    assert rt.blocked_events[-1]["drive"] == "reverse" and rt._blocked_plan["dir"] == -1
+    assert rt._blocked_step(10.1) == (0.06, 0.0)
+    xy, _ = rt.grid.raised[0]
+    assert np.allclose(xy[:, 0], 0.80)  # behind the pose at x = 1.0
+    # blocked while turning in place: nothing to back away from; choose again
+    rt = _blocked_runtime()
+    rt.last_command = (0.0, 0.4)
+    rt._on_blocked(10.0)
+    assert rt._blocked_plan is None and rt.blocked_events[-1]["backoff_skipped"] == "turning"
+    assert rt.triggers == ["blocked"] and rt.grid.raised == []
+    # no clearance behind: no blind drive
+    rt = _blocked_runtime()
+    rt.planner.obstacle_clearance_xy = lambda grid, xy: np.array([0.05])
+    rt._on_blocked(10.0)
+    assert rt._blocked_plan is None and rt.blocked_events[-1]["backoff_skipped"].startswith("no clearance")
+
+
+def test_cancelling_the_activity_closes_an_open_backoff():
+    rt = _blocked_runtime()
+    rt._on_blocked(10.0)
+    rt.now = 11.0
+    rt._cancel_activity("heartbeat_lost")  # a revocation while backing off
+    ev = rt.blocked_events[-1]
+    assert rt._blocked_plan is None and ev["interrupted"] == "heartbeat_lost" and ev["backoff_complete"] is False
+    assert rt.triggers == []  # no stale trigger for the next session
+    rt = _blocked_runtime()
+    rt._on_blocked(10.0)
+    rt._cancel_activity("blocked")  # the cancel issued by the blocked handler itself keeps the plan
+    assert rt._blocked_plan is not None

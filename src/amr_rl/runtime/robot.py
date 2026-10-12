@@ -129,6 +129,25 @@ class RuntimeConfig:
     imu_zupt_temp_min_s: float = 20.0
     imu_zupt_max_hold_s: float = 2.5
     imu_zupt_min_frames: int = 10  # frames of stand-still measurement per recalibration stop
+    # Owner decision 2026-10-12: until the offset's temperature coefficient has been
+    # measured (one recalibration at a chip temperature different from boot), the
+    # temperature trigger fires at this smaller change, whatever the offset's own
+    # uncertainty. Validation 5: with a slow warm-up the first stop came at the 2-minute
+    # rule and 72 % of the median run's worst heading error had built up by then
+    # (r9-followup.md 8). 0 = off.
+    imu_zupt_temp_first_c: float = 0.5
+    # Owner decision 2026-10-12: a blocked drive (VSLAMConfig.odo_blocked_mode "keep_pose")
+    # is handled with the pose kept: the activity is cancelled, the robot backs straight
+    # off this far at this speed (at most blocked_backoff_max_s), then chooses again.
+    # Stalled wheels mark the cells just ahead occupied (a contact the camera did not
+    # see); spinning wheels do not (a floor, not an object). More than
+    # blocked_max_per_min events in a minute stop autonomy ("blocked_repeatedly") so the
+    # operator decides.
+    blocked_backoff_m: float = 0.10
+    blocked_backoff_speed: float = 0.06
+    blocked_backoff_max_s: float = 4.0
+    blocked_max_per_min: int = 3
+    blocked_repeat_radius_m: float = 0.3  # a second event this close in a minute marks the spot, whatever the kind
     # This robot's gyro calibration (scripts/calibrate_imu.py); used when its unit
     # serial matches the spec's. None = datasheet prior only (+-1 % sensitivity).
     imu_calibration: str | None = "configs/calibration/imu.yaml"
@@ -312,6 +331,8 @@ class RobotRuntime:
         self.zupt_hold_log = []  # recalibration stops: start, end, trigger, frames measured, success
         self._zupt_frames_at_hold = None
         self.zupt_holds = self.zupt_hold_failures = 0
+        self.blocked_events = []  # keep-pose blocked events: t, kind, pose, activity, back-off outcome
+        self._blocked_plan = None
         self._proprio = ProprioBatch([], [])
         self.last_odometry = None
         self.last_state = {}
@@ -429,6 +450,8 @@ class RobotRuntime:
         else:
             self.pose, self.sigma = None, None
         self.loc_status = status
+        if (result.info or {}).get("blocked") and self.supervisor.autonomy_enabled and self.supervisor.recovery is None:
+            self._on_blocked(frame.timestamp)
         if status == TRACKING:
             self.last_good_pose = None if result.pose is None else result.pose.copy()
         if self.supervisor.recovery is None:
@@ -703,7 +726,11 @@ class RobotRuntime:
                 self.tracker._load()[result.job.entity_id]["label"] = result.label
         self.motivation.update(now)
         v = w = 0.0
+        if self._blocked_plan is not None and (revoked or not self.supervisor.autonomy_enabled):
+            # an operator stop does not pass through _cancel_activity: close the back-off here
+            self._end_backoff(now, interrupted=revoked or self.supervisor.revoked_reason or "stopped")
         if self.supervisor.recovery is not None:
+            self._end_backoff(now, interrupted="localization_lost")
             if self.recovery_plan is None:
                 self.recovery_plan = self._plan_recovery()
             if self.activity is not None:
@@ -714,7 +741,7 @@ class RobotRuntime:
                 if not ack.accepted:
                     v = w = 0.0
         elif self.supervisor.autonomy_enabled and self.pose is not None and not self._imu_booting(now):
-            v, w = self._autonomy(now)
+            v, w = self._blocked_step(now) if self._blocked_plan is not None else self._autonomy(now)
             ack = self.supervisor.drive(v, w, now=now, generation=self.supervisor.generation)
             if not ack.accepted:
                 self._cancel_activity(ack.reason)
@@ -760,20 +787,123 @@ class RobotRuntime:
         since = now - max(self.odo.last_bias_update_t, self._zupt_hold_until)
         stale = since > self.cfg.imu_zupt_interval_s
         uncertain = math.degrees(math.sqrt(self.odo.bias_var)) > self.cfg.imu_zupt_min_sigma_dps
-        warmed = (self.cfg.imu_zupt_temp_c > 0 and since > self.cfg.imu_zupt_temp_min_s
+        # Until the tempco is measured, a smaller temperature change triggers the stop,
+        # whatever the offset's own uncertainty: the stop is what measures the tempco.
+        first = self.cfg.imu_zupt_temp_first_c > 0 and not self.odo.tempco_known
+        temp_c = self.cfg.imu_zupt_temp_c
+        if first:
+            temp_c = self.cfg.imu_zupt_temp_first_c if temp_c <= 0 else min(temp_c, self.cfg.imu_zupt_temp_first_c)
+        warmed = (temp_c > 0 and since > self.cfg.imu_zupt_temp_min_s
                   and self.odo.temp is not None and self.odo.temp_at_update is not None
-                  and abs(self.odo.temp - self.odo.temp_at_update) >= self.cfg.imu_zupt_temp_c)
-        if (stale or warmed) and uncertain:
+                  and abs(self.odo.temp - self.odo.temp_at_update) >= temp_c)
+        if (stale and uncertain) or (warmed and (uncertain or first)):
             self._zupt_hold_start = now
             self._zupt_frames_at_hold = self.odo.zupt_frames
             self.zupt_holds += 1
-            self.zupt_hold_log.append({"start": float(now), "trigger": "interval" if stale else "temperature",
+            self.zupt_hold_log.append({"start": float(now),
+                                       # labelled by the rule that fired it: the 1 degC rule needs an
+                                       # uncertain offset AND the full change; otherwise the first-stop rule
+                                       "trigger": "interval" if stale and uncertain else (
+                                           "temperature" if uncertain and self.cfg.imu_zupt_temp_c > 0
+                                           and abs(self.odo.temp - self.odo.temp_at_update) >= self.cfg.imu_zupt_temp_c
+                                           else "temperature_first"),
+                                       "tempco_known": bool(self.odo.tempco_known),
                                        "sigma_dps": math.degrees(math.sqrt(self.odo.bias_var)),
                                        "temp_change_c": None if self.odo.temp is None or self.odo.temp_at_update is None
                                        else float(self.odo.temp - self.odo.temp_at_update)})
             del self.zupt_hold_log[:-500]
             return True
         return False
+
+    def _on_blocked(self, now):
+        """The wheels were driven but vision and the encoders agree the robot did not
+        move: the pose is right and something blocks the drive (owner decision
+        2026-10-12: keep the pose). Record the event, cancel the activity, back straight
+        off (``_blocked_step``), then choose again. Repeated events within a minute stop
+        autonomy for the operator instead."""
+        kind = self.slam.blocked_kind
+        act = self.activity
+        self.blocked_events.append({
+            "t": float(now), "kind": kind, "status": self.loc_status,
+            "pose": None if self.pose is None else [float(x) for x in self.pose],
+            "activity": None if act is None else act.name, "action": getattr(act, "action", None)})
+        del self.blocked_events[:-500]
+        # The drive that was blocked: forward (+1) or reverse (-1); a turn in place has no
+        # side to back away from. The VSLAM's check uses |v|, so both signs reach here.
+        v_cmd = float(self.last_command[0]) if self.last_command else 0.0
+        direction = 1 if v_cmd > 0.02 else -1 if v_cmd < -0.02 else 0
+        self.blocked_events[-1]["drive"] = {1: "forward", -1: "reverse", 0: "turning"}[direction]
+        recent = [e for e in self.blocked_events if now - e["t"] <= 60.0]
+        if len(recent) > self.cfg.blocked_max_per_min:
+            self._cancel_activity("blocked_repeatedly")  # also closes an open back-off
+            self.supervisor.stop("blocked_repeatedly")
+            self.blocked_events[-1]["stopped"] = True
+            return
+        # Mark the spot on the driven side when the wheels stalled (a contact), or when the
+        # drive was stopped a second time within blocked_repeat_radius_m in a minute,
+        # whatever the kind (a floor the robot cannot drive on; backing off and driving
+        # in again repeats until the limit otherwise).
+        near = [e for e in recent[:-1] if e.get("pose") is not None and self.pose is not None
+                and np.hypot(e["pose"][0] - self.pose[0], e["pose"][1] - self.pose[1]) <= self.cfg.blocked_repeat_radius_m]
+        if self.pose is not None and direction != 0 and (kind == "stalled" or near):
+            self.blocked_events[-1]["cells_marked"] = self._mark_blocked_contact(self.pose, direction)
+        if self._blocked_plan is not None:  # blocked again while backing off: keep the plan
+            return
+        self._cancel_activity("blocked")
+        if direction == 0 or self.pose is None:
+            self.blocked_events[-1]["backoff_skipped"] = "turning" if direction == 0 else "no pose"
+            self.triggers.append("blocked")
+            return
+        # Back off only into space the map knows to be clear (as the navigator's own
+        # back-off does); otherwise just choose again.
+        behind = np.asarray(self.pose[:2], float) - direction * self.cfg.blocked_backoff_m * np.array(
+            [math.cos(float(self.pose[2])), math.sin(float(self.pose[2]))])
+        clearance = float(self.planner.obstacle_clearance_xy(self.grid, behind[None])[0])
+        if clearance < self.planner.cfg.footprint_radius:
+            self.blocked_events[-1]["backoff_skipped"] = f"no clearance ({clearance:.2f} m)"
+            self.triggers.append("blocked")
+            return
+        self._blocked_plan = {"start": float(now), "dir": direction,
+                              "start_pose": np.asarray(self.pose[:2], float).copy()}
+
+    def _end_backoff(self, now, interrupted=None):
+        """Close an open back-off (finished, or cut short by a revocation, an operator
+        command, a loss of tracking or a repeat limit) and record its outcome."""
+        plan, self._blocked_plan = self._blocked_plan, None
+        if plan is None:
+            return
+        moved = 0.0 if plan["start_pose"] is None or self.pose is None else float(
+            np.hypot(*(np.asarray(self.pose[:2], float) - plan["start_pose"])))
+        if self.blocked_events:
+            self.blocked_events[-1].update({
+                "backed_off_m": round(moved, 3), "backoff_s": round(now - plan["start"], 2),
+                "backoff_complete": bool(interrupted is None and moved >= self.cfg.blocked_backoff_m),
+                **({"interrupted": interrupted} if interrupted else {})})
+        if interrupted is None:
+            self.triggers.append("blocked")
+
+    def _mark_blocked_contact(self, pose, direction=1):
+        """Stalled wheels: something the camera did not see is pressing on the driven
+        side of the footprint. Raise the cells just beyond it, journalled like the depth
+        guard's assertions, so planning routes around the spot. Returns cells changed."""
+        x, y, th = float(pose[0]), float(pose[1]), float(pose[2])
+        ahead = direction * (self.planner.cfg.footprint_radius + 0.04)
+        side = np.linspace(-0.08, 0.08, 5)
+        xy = np.array([[x + ahead * math.cos(th) - s * math.sin(th), y + ahead * math.sin(th) + s * math.cos(th)]
+                       for s in side])
+        return int(self.grid.raise_to(xy, 1.5))  # the guard's assert level: a confirmed obstacle
+
+    def _blocked_step(self, now):
+        """Back straight off along the path just driven (away from the blocked side)
+        until blocked_backoff_m has been covered, measured by the kept pose, or
+        blocked_backoff_max_s has passed; then hand back to the chooser."""
+        plan = self._blocked_plan
+        moved = 0.0 if plan["start_pose"] is None or self.pose is None else float(
+            np.hypot(*(np.asarray(self.pose[:2], float) - plan["start_pose"])))
+        if moved >= self.cfg.blocked_backoff_m or now - plan["start"] >= self.cfg.blocked_backoff_max_s:
+            self._end_backoff(now)
+            return 0.0, 0.0
+        return -plan["dir"] * self.cfg.blocked_backoff_speed, 0.0
 
     def _plan_recovery(self):
         """Choose a bounded recovery that only moves through space known to be clear
@@ -879,6 +1009,8 @@ class RobotRuntime:
                 "generation": self.supervisor.generation, "t": now}
 
     def _cancel_activity(self, reason):
+        if reason != "blocked":  # anything else that cancels the activity also ends an open back-off
+            self._end_backoff(self.now, interrupted=reason)
         if self.activity is not None and not self.activity.done:
             self.activity.cancel(reason)
             self._log_activity_end(self.activity)
@@ -895,7 +1027,7 @@ class RobotRuntime:
         if act.name == "idle":
             return  # bounded rests end every few seconds; the decision log records them
         if act.name in ("engage", "revisit") and (act.result or {}).get("reason") in (
-                "localization_lost", "stale_observation"):
+                "localization_lost", "stale_observation", "blocked", "blocked_repeatedly"):
             key = (act.target_entity, getattr(act, "action", None))
             self._interrupted[key] = self._interrupted.get(key, 0) + 1
         entry = {"t": self.now, "started": act.since, "activity": act.name, "entity_id": act.target_entity,
@@ -1011,7 +1143,9 @@ class RobotRuntime:
                 "slip_counts": dict(o.log), "fusion": dict(self.slam.fusion_log),
                 "command_model_fallback_frames": self.odo_fallbacks, "zupt_holds": self.zupt_holds,
                 "zupt_hold_failures": self.zupt_hold_failures, "zupt_hold_active": self._zupt_hold_start is not None,
-                "temp_c": o.temp, "tempco_dps_per_c": math.degrees(o.tempco[0]),
+                "blocked_active": self._blocked_plan is not None, "blocked_events": len(self.blocked_events),
+                "blocked_kind": self.slam.blocked_kind,
+                "temp_c": o.temp, "tempco_dps_per_c": math.degrees(o.tempco[0]), "tempco_known": bool(o.tempco_known),
                 "offset_updates": o.offset_updates, "zupt_frames": o.zupt_frames,
                 "sensors": dict(self.sensor_state),
                 "sample_age_s": {k: None if v is None else round(self.now - v, 3) for k, v in self._sample_t.items()}}
@@ -1026,6 +1160,9 @@ class RobotRuntime:
         if self.supervisor.recovery is not None:
             act = {"name": "recovering", "target_entity": None, "phase": "rotating to relocalize",
                    "reason": "bounded recovery after localization loss", "since": None}
+        elif self._blocked_plan is not None and self.supervisor.autonomy_enabled:
+            act = {"name": "blocked", "target_entity": None, "phase": "backing off",
+                   "reason": f"drive blocked ({self.slam.blocked_kind}); pose kept", "since": self._blocked_plan["start"]}
         state = {
             "schema": "amr_rl.state.v1",
             "sim_time": self.now,

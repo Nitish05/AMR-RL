@@ -17,7 +17,7 @@ Rule order (first match wins for ``face``):
 1. ``localization.status`` in ``lost``/``relocalizing`` -> ``confused``.
 2. ``authority.stopped`` and activity is not ``manual`` -> ``stopped``.
 3. ``activity.name`` table (idle, explore, investigate, engage, revisit, avoid,
-   recovering, manual, stopped); missing or unrecognised -> ``neutral``.
+   blocked, recovering, manual, stopped); missing or unrecognised -> ``neutral``.
 
 A missing ``localization`` block (or ``position_sigma: null``) does not change
 the face; it sets uncertainty to 1 and centres the gaze.
@@ -76,6 +76,7 @@ _ACTIVITY_FACE = {
     "explore": "curious",
     "investigate": "focused",
     "avoid": "wary",
+    "blocked": "wary",  # backing off from something that stopped the drive (pose kept)
     "recovering": "confused",
     "manual": "neutral",
     "stopped": "stopped",
@@ -93,6 +94,7 @@ _CAPTION_PLAIN = {
     "engage": "Engaging",
     "revisit": "Revisiting",
     "avoid": "Avoiding",
+    "blocked": "Blocked - backing off",
     "recovering": "Recovering",
     "manual": "Manual drive",
     "stopped": "Stopped",

@@ -38,7 +38,7 @@ deterministically as a `uint8` RGB array of shape `(132, 192, 3)`.
 | 3 | `activity.name == "engage"` and `interaction.action == "signal"` and `interaction.status` ∈ {`acting`, `signalling`} | `signalling` | 0.90 |
 | 4 | `activity.name == "engage"`, by displayed attitude: `liked`→`happy`, `disliked`→`wary`, `indifferent`→`neutral`, `unknown`/`none`→`curious` | as listed | per face |
 | 5 | `activity.name == "revisit"`: `happy` if displayed attitude is `liked`, else `curious` | as listed | per face |
-| 6 | `activity.name`: `idle`→`sleepy`, `explore`→`curious`, `investigate`→`focused`, `avoid`→`wary`, `recovering`→`confused`, `manual`→`neutral`, `stopped`→`stopped` | as listed | per face |
+| 6 | `activity.name`: `idle`→`sleepy`, `explore`→`curious`, `investigate`→`focused`, `avoid`→`wary`, `blocked`→`wary` (backing off from something that stopped the drive; the pose is kept), `recovering`→`confused`, `manual`→`neutral`, `stopped`→`stopped` | as listed | per face |
 | 7 | anything else, missing, or `null` | `neutral` | 0.90 |
 
 Openness per face (engineered): neutral 0.90, curious 1.00, focused 0.72, happy

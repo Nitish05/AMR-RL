@@ -119,6 +119,7 @@ def main():
                                                for a, b, z, n in s.runtime.slam.covis_edges]},
               "map_score": evaluator.score_map(s.world, s.runtime.grid, s.origin), "contacts": s.contacts,
               "odometry": s.runtime.odometry_status(), "recalibration_stops": s.runtime.zupt_hold_log,
+              "blocked_events": s.runtime.blocked_events,
               "sim_seconds": s.now,
               "origin_world": [float(v) for v in s.origin]}  # evaluation-only: world pose of the map frame
     dump(out / "result.json", result)

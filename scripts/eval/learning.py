@@ -254,7 +254,7 @@ def run_phase(phase, *, map_dir, memory_path, run_dir, seed, world="arena", star
         "identity_merges": rt.tracker.merge_log,
         "semantic": rt.semantic.stats if rt.semantic else None,
         "supervisor_log": rt.supervisor.log[-60:],
-        "odometry": rt.odometry_status(), "recalibration_stops": rt.zupt_hold_log,
+        "odometry": rt.odometry_status(), "recalibration_stops": rt.zupt_hold_log, "blocked_events": rt.blocked_events,
         "probe_renewals": rt.chooser.renewals,
     })
     session.save_summary()

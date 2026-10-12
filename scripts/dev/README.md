@@ -8,7 +8,7 @@ scripts/dev/<name>.py ...`; see each file's docstring for its arguments.
 
 | Script | Purpose |
 |---|---|
-| `blocked_probe.py` | Blocked-robot probe (evaluation only): drive straight into a heavy box the robot does not avoid (near-field guard off) and record whether, and how fast, the robot notices that it is not moving: the VSLAM's motion-consistency loss (``visual_motion_inconsistent_with_commands``) that starts the contact back-off. |
+| `blocked_probe.py` | Blocked-robot probe (evaluation only): drive straight into a heavy box the robot does not avoid (near-field guard off) and record whether, and how fast, the robot notices that it is not moving: the VSLAM's blocked verdict (pose kept since 2026-10-12; before, the loss ``visual_motion_inconsistent_with_commands``) that starts the contact back-off. |
 | `box_detour_probe.py` | Replay of the round-5 box contact (evaluation only): a saved map, a start pose, a box put down near the route, an operator goal past it. Reports the true minimum footprint-to-box gap, contacts and the goal result for several lateral box offsets. |
 | `box_probe.py` | Detector localisation error for fixtures seen from known poses (evaluation probe: uses the true robot pose so only the detector's geometry is measured). |
 | `capture_common.py` | Scoring geometry shared by the evaluation capture scripts (simulator truth; never imported by the runtime). |

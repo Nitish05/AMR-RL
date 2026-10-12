@@ -289,3 +289,64 @@ the end of the run). Off (0) against 60 s; reversal_early and reversal_late; cod
   end), with 8 useful outcomes instead of 3. The other runs were identical with and without it.
 - **Kept off.** It helped in its one firing and changed nothing elsewhere, but n = 1 is not
   evidence of a general gain. Enabling it is a small owner decision.
+
+## 10. Owner decisions implemented: keep the pose when blocked; an earlier first stop (2026-10-12)
+
+Both decisions from §8 were taken and built; their live validation is pre-registered as
+[addendum F](heading-r9-prereg.md#addendum-f-keep-pose-blocked-handling-and-the-first-temperature-stop-written-2026-10-12-before-any-run).
+
+**Blocked wheels keep the pose** (`VSLAMConfig.odo_blocked_mode = "keep_pose"`, the default;
+`"lost"` is the 2026-10-11 behaviour).
+- The VSLAM's blocked check is unchanged: commanded forward travel over the 1.2 s window that
+  vision did not see, after the frozen-estimate check (wheel travel without slip that vision did
+  not see) has passed. Vision and the wheels agree the robot did not move, so the pose is right
+  (the rover slip check; Maimone, Cheng and Matthies 2007; Kilic, Gu and Gross 2022 keep the
+  localisation and report the slip).
+- Instead of a loss: `TrackResult.info["blocked"]`, a kind (`stalled`: no encoder travel;
+  `spinning`: slip-flagged; `unknown`: no vision, wheels only), and a restart of the consistency
+  windows so the back-off is judged afresh. Tracking, or dead reckoning while vision is out,
+  continues.
+- The runtime (`_on_blocked`, `_blocked_step`, `_end_backoff`): cancel the activity with reason
+  `blocked`, then back straight off 10 cm at 0.06 m/s under normal autonomy, away from the side
+  that was being driven (a blocked reverse drive goes forward; a blocked turn backs off nowhere),
+  only into space the map knows to be clear, for at most 4 s, measured by the kept pose; then
+  hand back to the chooser with a `blocked` trigger. Stalled wheels raise the cells just beyond
+  the driven side of the footprint to the depth guard's obstacle level, journalled, so planning
+  routes around the spot; a second event within 0.3 m in a minute marks the spot whatever the
+  kind (a floor the robot cannot drive on: the first smoke run backed off and drove into the
+  same slip patch four times). More than three events in a minute stop autonomy
+  (`blocked_repeatedly`) for the operator. Any revocation, operator command or loss of tracking
+  closes an open back-off and records it as interrupted.
+- During probation after a relocalisation a blocked verdict no longer rejects the
+  relocalisation (the wheels did not move and vision agrees). Without vision, slip-flagged
+  encoder travel is not composed into the dead-reckoned pose, so spinning wheels do not walk it.
+- Nudging cannot trigger the check: the nudge creep (0.06 m/s) commands less than the
+  0.12 m the verdict needs in its 1.2 s window.
+- Face and console: activity `blocked`, caption "Blocked - backing off"; `odometry_status()`
+  reports `blocked_active`, `blocked_events`, `blocked_kind`; results carry `blocked_events`
+  with each event's kind, pose, activity and back-off outcome.
+- Tests: `test_blocked_keeps_the_pose_and_restarts_the_window`,
+  `test_blocked_runtime_backs_off_with_the_pose_kept_then_resumes`,
+  `test_repeated_blocked_events_stop_autonomy_for_the_operator`,
+  `test_blocked_backoff_has_its_own_face_and_caption`.
+
+**The first recalibration stop at 0.5 °C** (`RuntimeConfig.imu_zupt_temp_first_c = 0.5`; 0 is
+the 2026-10-11 behaviour).
+- `WheelInertialOdometry.tempco_known`: an offset measurement has been taken at least 0.4 °C
+  from the boot temperature (`OdometryConfig.tempco_measured_dt_c`), or the tempco's
+  uncertainty is below half its datasheet prior. One stop at 0.5 °C therefore ends the rule; the
+  first smoke run, with a covariance-only criterion, stopped twice (34 s and 70 s).
+- Until then the temperature trigger fires at 0.5 °C, whatever the offset's own uncertainty
+  (the stop is what measures the tempco; the 2-minute rule and the 1 °C rule still require an
+  uncertain offset). A stop is labelled `temperature_first` unless the 1 °C rule would have fired
+  by itself; `tempco_known` is logged with every stop.
+- Tests: `test_first_temperature_stop_at_half_a_degree_until_the_tempco_is_known`,
+  `test_tempco_is_known_only_after_an_offset_measurement_at_another_temperature`.
+
+An adversarial review of the diff (three reviewers; 15 findings, 2 verified before the session
+limit, the rest judged by hand) led to the direction, clearance, interruption, probation,
+dead-reckoning and labelling rules above, plus the per-frame `blocked` flag in the scoring rows
+and the blocked probe's detection of the kept-pose verdict.
+
+Nothing was tuned on any validation start.
+

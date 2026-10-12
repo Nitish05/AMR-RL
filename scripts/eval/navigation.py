@@ -331,6 +331,7 @@ def evaluate_world(name, out_root, map_seconds, seed, loop_closure=True, turn_pr
         "timing": "lockstep simulation (physics paused during perception)",
         "guard_status": session.runtime.guard_status,
         "odometry": session.runtime.odometry_status(), "recalibration_stops": session.runtime.zupt_hold_log,
+        "blocked_events": session.runtime.blocked_events,
         "loop_closure": {"status": session.runtime.place_status, "closures": len(session.runtime.loop_closures),
                          "scored": score_loops(session.runtime.slam.loop_log, session.truth)},
         "guard": None if session.runtime.guard is None else {

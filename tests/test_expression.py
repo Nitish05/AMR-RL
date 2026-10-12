@@ -411,3 +411,11 @@ def test_signal_pattern_is_large_and_only_when_flagged():
     assert (yellow | magenta).mean() > 0.2
     y_off = (off[..., 0] > 200) & (off[..., 1] > 180) & (off[..., 2] < 80)
     assert y_off.mean() < 0.01
+
+
+def test_blocked_backoff_has_its_own_face_and_caption():
+    s = make_state()
+    s["activity"] = {"name": "blocked", "target_entity": None, "phase": "backing off",
+                     "reason": "drive blocked (stalled); pose kept", "since": 10.0}
+    e = expression_from(s)
+    assert e.face == "wary" and e.caption == "Blocked - backing off"

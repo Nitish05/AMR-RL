@@ -175,7 +175,7 @@ def _track_fields(track):
         return {}
     out = {"reason": track.reason, "inliers": int(track.inliers), "matched": int(track.matched),
            "keyframe": bool(track.keyframe), "heading_sigma": track.heading_sigma}
-    info = {k: v for k, v in (track.info or {}).items() if k in ("turn", "turn_rot", "degraded")}
+    info = {k: v for k, v in (track.info or {}).items() if k in ("turn", "turn_rot", "degraded", "blocked")}
     if (track.info or {}).get("turn_closure"):
         info["turn_closure"] = True
     if info:

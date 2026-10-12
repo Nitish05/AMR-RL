@@ -14,9 +14,11 @@ newest first.
   (validation 5, R9g `aa143e3`): every required check passed except L1's P4 on one pair
   (`docs/results/heading-r9.md`). On by default:
   - loop closure, with the gyro/encoder consistency guard;
-  - the blocked-robot check;
+  - the blocked-robot check, which since 2026-10-12 keeps the pose, backs off and chooses
+    again (`odo_blocked_mode="keep_pose"`; validation pending, addendum F);
   - gyro offset recalibration at natural stops, plus a forced stop after 2 min without a
-    measurement or a 1 °C temperature change.
+    measurement or a 1 °C temperature change, and since 2026-10-12 a first stop at 0.5 °C
+    until the temperature coefficient is measured (validation pending, addendum F).
 - **Camera-only robot:** `--odometry command` (`RuntimeConfig.odometry = "command"`).
 - **Each IMU unit needs `scripts/calibrate_imu.py` once** (`configs/calibration/imu.yaml`).
   Unit 4 uncalibrated reached 22.5° of heading error.
@@ -36,14 +38,13 @@ newest first.
 
 ## Open items, in order
 
-1. **Blocked or spinning wheels (owner decision).** The blocked check fires correctly but
-   declares the pose lost, backs off and waits for the operator (about 26 s), although
-   the pose is right. Proposed: keep the pose, report "blocked", back off without
-   relocalising (Mars rovers' slip check; Kilic et al., Field Robotics 2022). Develop
-   on spent seeds, then pre-register.
-2. **First recalibration stop (owner decision).** 72 % of the median run's worst heading
-   error builds up before the first stop when the chip warms slowly. Options: a 0.5 °C
-   first trigger, or a heading-uncertainty budget (`docs/results/r9-followup.md` §8).
+1. **Blocked or spinning wheels: decided and implemented (2026-10-12).** The pose is kept,
+   the robot backs off 10 cm and chooses again (`VSLAMConfig.odo_blocked_mode="keep_pose"`,
+   `RuntimeConfig.blocked_*`); the 2026-10-11 behaviour is `odo_blocked_mode="lost"`. Live
+   validation under addendum F is the open step.
+2. **First recalibration stop: decided and implemented (2026-10-12).** A 0.5 °C change
+   triggers the first stop until the tempco has been measured
+   (`RuntimeConfig.imu_zupt_temp_first_c`). Validated with item 1 under addendum F.
 3. **Relocalisation range:** beyond 0.5 m from any keyframe, 2/12 on the IMU robot; no way
    to relocalise while stationary once recovery is used up; no autonomous retry after
    `recovery_exhausted`.
