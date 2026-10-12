@@ -25,6 +25,7 @@ from ..control.supervisor import Supervisor, SupervisorConfig
 from ..evidence.images import ImageEvidenceArchive
 from ..expression.policy import expression_from
 from ..expression.screen import render as render_face
+from ..expression.sound import SoundBus, SoundConfig
 from ..learning.identity import EntityTracker
 from ..learning.memory import ExperienceMemory, LearningConfig
 from ..mapping.occupancy import FREE as FREE_CLASS
@@ -165,6 +166,9 @@ class RuntimeConfig:
     # Session-end consolidation (memory.consolidate_character): bounded, logged writes to the
     # store at close(); they change behaviour only when character_active is on.
     character_evolve: bool = True
+    # The speaker as a one-way event bus on the snapshot (expression/sound.py); virtual
+    # emissions in simulation. Control, learning and memory are byte-identical with it on or off.
+    sound: SoundConfig = field(default_factory=SoundConfig)
     # This robot's gyro calibration (scripts/calibrate_imu.py); used when its unit
     # serial matches the spec's. None = datasheet prior only (+-1 % sensitivity).
     imu_calibration: str | None = "configs/calibration/imu.yaml"
@@ -306,6 +310,7 @@ class RobotRuntime:
         self.last_track = None
         self.pending_commands = []
         self.last_command = (0.0, 0.0)
+        self.sound = SoundBus(self.cfg.sound)
         self.loc_status = "initializing"
         self.last_good_pose = None
         self.recovery_plan = None
@@ -1251,6 +1256,7 @@ class RobotRuntime:
                     "start_clearance_attested": self.cfg.start_clearance_attested if self._attested else None,
                     "loop_closure": {"status": self.place_status, "closures": len(self.loop_closures),
                                      "last": self.loop_closures[-1] if self.loop_closures else None}},
+            "sound": self.sound.snapshot(),
             "detector": self.detector_status,
             "semantic": None if self.semantic is None else {"backend": self.semantic.backend.name,
                                                             **self.semantic.stats},
@@ -1262,6 +1268,7 @@ class RobotRuntime:
         state = self.snapshot()
         self.expression = expression_from(state)
         state["expression"] = self.expression.to_dict()
+        self.sound.observe(state, self.last_command, self.now)  # read-only subscriber; logs virtual emissions
         key = (self.expression.face, round(self.expression.gaze[0], 1), round(self.expression.gaze[1], 1),
                round(self.expression.openness, 2), round(self.expression.uncertainty, 2), self.expression.attitude,
                self.expression.signal_pattern, self.expression.caption, self.expression.cue)

@@ -74,6 +74,35 @@ place. Pip's version, all engineered:
 Identical snapshots still give identical faces and pixels; the style reads no clock (the
 cue uses the snapshot's own `sim_time`).
 
+## Sound: the speaker as a one-way event bus
+
+`amr_rl.expression.sound.SoundBus` subscribes to the same snapshot (plus the commanded motion
+of the tick) and emits **logged virtual sound events**; in simulation nothing is played, and
+`render_wav` turns a log into audio for evaluation with one procedural synthesiser. Research
+basis: docs/research/PERSONALITY_RESEARCH_2.md §5.
+
+| Cue | Visible event it pairs with (`paired_with`) | Intensity (fixed) |
+|---|---|---|
+| `explore_start` | `activity.name` becomes `explore` | 0.5 |
+| `approach` | `activity.name` becomes `engage` or `revisit` | 0.45 |
+| `uncertain` (subtle companion, not in the recognition set) | an approach whose chosen option has posterior uncertainty ≥ 0.3 (`decision.chosen.uncertainty`) | 0.2 |
+| `action` | `interaction.status` becomes `acting` (the signal or nudge is executed) | 0.5 |
+| `outcome_positive` / `outcome_aversive` | a new `recent_outcomes[0].event_id` with valence > 0 / < 0 (synchronised to the flag: these skip the minimum gap, not the budget) | 0.6 / 0.45 |
+| `avoid` | `activity.name` becomes `avoid` | 0.5 |
+| `idle_long` | `activity.name == idle` for 20 s (once per rest) | 0.3 |
+| `attention` | `localization.status` becomes lost/relocalizing, or the activity becomes `blocked`/`recovering` | 0.55 |
+| `transit_on` / `transit_off` | commanded \|v\| crosses 0.02 m/s, in the same tick as the command; pulse rate `2 + 6·min(1, \|v\|/0.25)` Hz is logged while moving | 0.15 |
+
+Rules: intensities are never scaled by surprise, by a trait or by anything else; at most one
+cue per 0.8 s and 12 per minute (dropped cues are counted in `sound.dropped`); the transit
+layer is outside the budget. The **acoustic signature** is the only thing a character changes:
+tempo (= `expression.style.tempo`), pitch variability (= the novelty-bias trait) and density
+(= the approach-tempo trait), the latter two neutral (0.5) unless `character.active`; no mean
+pitch, no loudness. The bus reads the snapshot and writes only its own log; control, learning
+and the memory are byte-identical with it on or off (`RuntimeConfig.sound.enabled`), and no
+language model has a path to it. State: `sound` block (`emissions`, `last`, `dropped`,
+`transit`, `cues`).
+
 ## Output
 
 `ExpressionState.to_dict()` gives the JSON form for `state["expression"]`:

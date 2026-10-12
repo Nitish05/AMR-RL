@@ -536,6 +536,13 @@
       ['tempo', ex.style ? fmt(ex.style.tempo, 2) + ' (activation ' + fmt(ex.style.activation, 2) +
         ', blink every ' + fmt(ex.style.blink_interval_s, 1) + ' s)' : DASH],
       ['boot cue', ex.cue || DASH],
+      ['sound', (function () {
+        var so = s.sound || {};
+        var last = so.last || null;
+        return (last ? last.cue + ' at ' + fmt(last.t, 1) + ' s' : 'no cue yet') + ' · ' +
+          (isNum(so.emissions) ? so.emissions : DASH) + ' emissions' +
+          (so.transit && so.transit.on ? ' · transit ' + fmt(so.transit.rate_hz, 1) + ' Hz' : '');
+      })()],
     ]);
     // the blink period on the screen image follows the style field (CSS animation duration)
     var screenImg = byId('img-screen');

@@ -80,6 +80,11 @@ never simulator ground truth. `null` means unavailable/unknown, never zero.
                                  // (surprise weighting; 1.0 unless a character is active) and "learning_progress"
   ],
   "motivation": {"stimulation_need": 0.4, "engineered": true},
+  "sound": {"enabled": true, "emissions": 14, "dropped": {"approach": 1},   // the speaker as an event bus (docs/EXPRESSION.md "Sound")
+            "last": {"t": 71.0, "cue": "explore_start", "paired_with": ["activity.name"], "intensity": 0.5,
+                     "signature": {"tempo": 1.0, "pitch_variability": 0.5, "density": 0.5}},
+            "transit": {"on": true, "rate_hz": 4.9, "since": 70.2}, "cues": ["explore_start", "..."],
+            "reads": "operator snapshot and the commanded motion; writes only its own log"},
   "expression": {"face": "happy", "gaze": [0.2, 0.0], "uncertainty": 0.1,
                   "style": {"activation": 0.5, "tempo": 1.0, "blink_interval_s": 4.0}, "cue": "",  // docs/EXPRESSION.md "Style"
                  "attitude": "liked", "caption": "Greeting cyan cylinder"},
