@@ -74,6 +74,44 @@ With the default colour detector, learning is limited (restart 2 / 4, reversal 2
 the optional open-vocabulary detector it matches the plain arena: restart 6 / 6, reversal 6 / 6
 ([results/textured-worlds.md](results/textured-worlds.md#5d-measured-errors-in-the-learner-testbed)).
 
+## Round 9 follow-up (2026-10-12): the suite under the open-vocabulary detector default
+
+The same suite, map, starts and experiments, with `RuntimeConfig.detector = "open_vocab"` (the
+default since 2026-10-12 when the model is cached). Pre-registered bounds and the result:
+[results/r9-followup.md §11](results/r9-followup.md#11-the-open-vocabulary-detector-becomes-the-default-2026-10-12).
+Code `ff119cb`; evidence `work/evidence/r9h-suite-ov-20261012/`. All six bounds hold; the
+detector stays the default.
+
+| | round 9 follow-up, open-vocabulary detector (45 phases) | round 9, colour detector (45 phases) |
+|---|---|---|
+| starts relocalised (worst error at start) | 5 / 5 (3.4 cm, 2.9°) | 5 / 5 (3.4 cm, 2.9°) |
+| relocalisations during the runs: all / false | 134 / **0** | 131 / **0** |
+| drift events (≥ 8° in 10 s) | **0 in 1524 in-place turns** (worst heading error 7.4°, median per run 2.9°) | 0 in 1295 (3.5°, 2.5°) |
+| restart: first decision = learned option | **10 / 10** | 9 / 9 |
+| reversal adapted | **10 / 10**, 50–145 s after the swap | 10 / 10, 74–244 s |
+| phases with at most one red panel | 44 / 45 | 44 / 45 |
+| contact episodes: unintended (intended nudges) | 0 (99) | 0 (97) |
+| attempts / completed outcomes / useful outcomes | 888 / 465 / 232 | 611 / 494 / 243 |
+| approaches to entities that are no fixture, not completed (time) | **230 (1592 s, 8.6 % of 18 526 s)** | 7 (72 s, 0.4 %) |
+| navigation failures / lost frames | 49 / 14.4 % | 6 / 11.1 % |
+| nudges that reached the target (fixtures with rules) | 15 / 17 | 24 / 24 |
+| interactions cut short by a tracking loss: bloom / stone | 38 / 281, 33 / 240 | 43 / 262, 20 / 238 |
+| operator re-enables | 89 | 84 |
+| forced recalibration stops | 3 (see the deviation) | 0 |
+
+- **The learning results are unchanged** (restart and reversal 10 / 10, aversion 44 / 45,
+  no unintended contact, no false relocalisation).
+- **The cost is time.** The textured crate obstacle, invisible to the colour detector, is now an
+  entity; the robot approached it 155 times and confirmed it in none (142 `target not confirmed
+  in fresh images`), returning about three times a phase. With 1 cm slivers and the roller's old
+  position, 8.6 % of the simulated time went to approaches of non-fixtures that did not complete.
+  Fewer outcomes were completed, more navigation failures and tracking losses occurred, and 2 of
+  17 nudges on rule fixtures missed. Follow-up in §11 of the follow-up notes; nothing was tuned.
+- **Deviation:** the suite ran at `ff119cb`, where the keep-pose blocked handling and the 0.5 °C
+  first stop were still the defaults (reverted at `e9ecffa` by validation 6 while it ran). They
+  acted in six phases (three stalled blocked events, three 1.8 s stops); the bounds are absolute
+  and none of those phases decides one. A clean re-run at the current defaults was not queued.
+
 ## Round 6 (2026-10-03): the suite re-run on current code
 
 **Setup:**

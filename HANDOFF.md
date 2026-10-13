@@ -63,14 +63,22 @@ newest first.
 4. **Learning:** plain arena restart 9/9, reversal 10/10 (round-9 suite, colour detector).
    Textured arena 6/6 and 6/6 only with the open-vocabulary detector (2/4 and 2/6 with the
    colour detector), which is therefore the default since 2026-10-12 when its model is cached
-   (`RuntimeConfig.detector`); the plain-arena suite is being re-run under it. The character
+   (`RuntimeConfig.detector`). The plain-arena suite under it passed all six pre-registered
+   bounds (restart 10/10, reversal 10/10, aversion 44/45, 0 unintended contacts, 0 false
+   relocalisations; `docs/LEARNING_RESULTS.md`, round 9 follow-up), at a cost: the textured
+   crate obstacle is now an entity the robot approaches about three times a phase without
+   ever confirming it (155 approaches, 142 unconfirmed), and 8.6 % of the simulated time went
+   to such approaches (0.4 % before). Candidate fix, to pre-register: stop re-targeting an
+   entity after several unconfirmed approaches, or confirm large objects from a wider
+   standoff. The suite ran at `ff119cb` with the two validation-6 mechanisms still on
+   (six phases touched; documented in `docs/results/r9-followup.md` §11). The character
    store (traits with bounds, provenance, change log, reset levels; `behavior/character.py`)
    exists, and all six traits are mapped (`character.effective`): the four temperament traits
    onto the chooser, navigator and probe budgets, the two learning-style traits onto the
    memory's evidence weighting and curiosity bonus, behind `RuntimeConfig.character_active`,
    OFF until the pre-registered admission gates pass (`docs/results/character-gate-prereg.md`,
-   `scripts/eval/character_gate.py`; the 27-run temperament batch and three 9-run
-   learning-style batches are queued after the detector suite). The face's style (tempo,
+   `scripts/eval/character_gate.py`; the 27-run temperament batch is running, the three
+   9-run learning-style batches are queued behind it). The face's style (tempo,
    blink) comes from one latent state (the logged need) rescaled by the tempo trait, and a
    15 s boot cue names the session, remembered objects and any character change
    (`docs/EXPRESSION.md`, "Style"). At `close()` the character consolidates by engineered

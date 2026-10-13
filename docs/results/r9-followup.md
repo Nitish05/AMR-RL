@@ -382,3 +382,47 @@ least 8 of the runs that learned one; reversal adapted ≥ 8/10; at most one red
 ≥ 43 of 45 phases; 0 unintended contact episodes; 0 false relocalisations. If it is worse, the
 default goes back to the colour detector and the result is documented.
 
+
+**Result (2026-10-12, 35 runs, 45 phases, 0 crashes; evidence `work/evidence/r9h-suite-ov-20261012/`,
+report `analysis/report.md`, extra metrics `analysis/suite.json`; the comparison table is in
+[LEARNING_RESULTS.md](../LEARNING_RESULTS.md#round-9-follow-up-2026-10-12-the-suite-under-the-open-vocabulary-detector-default)).**
+All six bounds hold, so the open-vocabulary detector stays the default:
+
+| bound | result |
+|---|---|
+| starts relocalised 5/5 | 45/45 phases, worst 3.4 cm / 2.9° (the same starts and map as round 9) |
+| restart: first decision = learned option in ≥ 8 | **10/10** (round 9: 9/9; history_b s3 learned a liked option this time) |
+| reversal adapted ≥ 8/10 | **10/10**, 50–145 s after the swap, all on stone/signal (round 9: 74–244 s) |
+| at most one red panel per phase in ≥ 43/45 | **44/45** (noisy s4 signalled grump twice; round 9: 44/45, noisy s2) |
+| unintended contact episodes 0 | **0** (99 intended nudge episodes) |
+| false relocalisations 0 | **0** of 134 transitions (round 9: 0 of 131) |
+
+The detector ran in every phase (`detector`: `open_vocab (omlab/omdet-turbo-swin-tiny-hf@7fe93cec, mps)`).
+
+**Cost, outside the bounds.** The textured crate obstacle `crate_c` (0.40 × 0.40 × 0.35 m at
+(0.0, 1.35)), which the colour detector never reported, is now an entity ("unclear object",
+0.41 × 0.45 m, a median 129 sightings per run). The robot drove to it 155 times; 142 approaches
+ended `target not confirmed in fresh images` after the 3 s confirmation window (three detections
+with confidence ≥ 0.6, not cut by the image border, with a floor position; why the crate fails this
+at the standoff was not analysed), 8 in a tracking loss, 5 in a navigation failure. The unreachable
+back-off (30 s × up to 4) lets it return about three times per 480 s phase. A further 44 approaches
+went to 1 cm slivers the detector reported for about five frames each, and 46 to where the roller
+had been before it rolled more than 0.5 m away (the scorer's fixture radius; round 9 had 22 of
+these). In all, 230 approaches to entities that are no fixture did not complete and took 1592 s,
+8.6 % of the 18 526 simulated seconds (round 9: 7, 72 s, 0.4 %). With 45 % more attempts (888
+against 611) the suite completed fewer outcomes (465 against 494; useful 232 against 243;
+red 13 against 22), had 49 navigation failures against 6, 14.4 % lost frames against 11.1 %,
+and 15/17 nudges on rule fixtures reached their target against 24/24. Nothing was tuned.
+Follow-up for a later, pre-registered change: stop re-targeting an entity whose approaches were
+aborted unconfirmed several times unless new evidence of another kind arrives, or confirm large
+objects from a wider standoff.
+
+**Deviation, found at scoring.** The suite's worktree was pinned at `ff119cb`, whose defaults
+still included the two mechanisms of §10 (`odo_blocked_mode = "keep_pose"`,
+`imu_zupt_temp_first_c = 0.5`); validation 6 reverted them at `e9ecffa` while this suite was
+running. They acted in six phases: three `stalled` blocked events (history_b s3, reversal_early
+s1 and s3; the pose was kept and the robot backed off) and three `temperature_first` stops of
+1.8 s at 56 s (the three seed-3 runs that reached 0.5 °C). The bounds above are absolute, not
+paired, and none of the six phases decides any of them; the round-9 suite is a reference from
+another commit (`8946f9e`), not a paired arm. A clean re-run at the current defaults was not
+queued (the simulator is busy with the character gates); the owner may ask for one.

@@ -3,7 +3,7 @@
 **Status:**
 - Textured worlds: added (`configs/worlds/arena_textured.yaml`; held out:
   `home_a_textured.yaml`).
-- Open-vocabulary detector: implemented and benchmarked; **the default since 2026-10-12 when its model is cached** (owner decision after the round-9 textured-arena learning runs below; the colour detector is the fallback)
+- Open-vocabulary detector: implemented and benchmarked; **the default since 2026-10-12 when its model is cached** (owner decision after the round-9 textured-arena learning runs below; the colour detector is the fallback). The plain-arena suite under it passed its pre-registered bounds the same day ([r9-followup.md §11](r9-followup.md#11-the-open-vocabulary-detector-becomes-the-default-2026-10-12)); it approaches the textured crate obstacle without confirming it, 8.6 % of the time.
   (`RuntimeConfig.detector = "fixture"`).
 - Measured error presets: added to the learner testbed.
 
