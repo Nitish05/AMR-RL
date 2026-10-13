@@ -61,9 +61,12 @@ number is quoted; "preprint" marks unreviewed work carrying design weight.
 - ~~Open-vocabulary detector as default~~: decided 2026-10-12, it is the default when its model is cached.
 - ~~Character~~: implemented 2026-10-12 as decided (trait definitions, no mean reversion,
   session-end-only change, shadow-only adviser with a template backend, ratings never feed back
-  directly). Open: switching the mapping on, which waits for the identifiability gates
-  (docs/results/character-gate-prereg.md); wiring an external model behind the gate; running the
-  rating study (docs/results/character-ratings-prereg.md).
+  directly). The temperament gate failed on all four traits on 2026-10-13 (tempo and
+  persistence move no measured signature, novelty bias is not recoverable, caution's signature
+  was not logged though its effect is large); the mapping stays off. Open: remapping or
+  dropping traits under a new pre-registration (docs/results/character-gate-prereg.md); the
+  learning-style gates; wiring an external model behind the gate; running the rating study
+  (docs/results/character-ratings-prereg.md).
 - ~~Speaker~~: implemented as a logged event bus with no speech (expression/sound.py); the
   acoustic signature remains a convention to validate with listeners.
 - **Repository:** licence; removing three merged worktrees (the research documents are committed).

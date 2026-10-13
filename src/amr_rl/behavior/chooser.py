@@ -203,6 +203,9 @@ class ActivityChooser:
                     "activity": "engage" if eid in visible_ids else "revisit",
                     "entity_id": eid, "created": ent.get("created"), "action": action, "value": value,
                     "expected_value": ev,
+                    # the prediction's uncertainty travels with the record: the character gate's caution
+                    # signature reads it from the decision log (the 2026-10-12 batch logged null)
+                    "uncertainty": pred.get("uncertainty"),
                     "information_value": info, "cost": cost, "xy": xy, "context": context,
                     "basis": (f"{int(pred['evidence']['all_contexts'] + 0.5)} weighted outcomes; "
                               f"P({p_top[0]})={p_top[1]:.2f}; need {need:.2f}; probes {state['probes']}"),
@@ -336,9 +339,9 @@ class ActivityChooser:
         return n > 0
 
     def snapshot(self):
-        keep = ("activity", "entity_id", "action", "value", "expected_value", "information_value", "cost", "basis")
-        return {"chosen": self.chosen, "candidates": [{**{k: c.get(k) for k in keep},
-                                                       "uncertainty": (c.get("prediction") or {}).get("uncertainty")}
+        keep = ("activity", "entity_id", "action", "value", "expected_value", "information_value", "cost", "basis",
+                "uncertainty")
+        return {"chosen": self.chosen, "candidates": [{k: c.get(k) for k in keep}
                                                       for c in sorted(self.candidates, key=lambda c: -c["value"])[:10]],
                 "reconsiderations": self.reconsiderations, "policy": self.policy}
 

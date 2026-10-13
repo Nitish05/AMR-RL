@@ -81,3 +81,63 @@ The signature set is the one `character_gate.py` computes at this commit; the pe
 late fractions and the two post-switch signatures were added for these batches before any
 run. Nothing is changed after the runs; a failed trait stays off and is remapped under a
 new pre-registration or dropped.
+
+## Result: the temperament gate (scored 2026-10-13)
+
+Batch `work/evidence/char-gate-20261012/`, 27 runs from the pinned worktree of `4b5152d`
+(paused overnight at the owner's request with 10 done and resumed the next morning; the six
+runs interrupted mid-phase were set aside in `interrupted-20261012/` and re-run). 26 valid, 1
+failed (below). Scored by `character_gate.py score` after one tooling fix: the scorer at
+`4b5152d` looked for `T-*/result.json` while `learning.py` writes
+`T-*/<experiment>/result.json`, so the pinned scorer reported "0 runs" (kept as
+`score-pinned-0runs.log`); the fixed scorer reads the same signatures with the same rules.
+
+**The gate fails on all four traits. `character_active` stays off, as pre-registered. No
+criterion was changed after the runs.**
+
+| trait | primary signature | ICC(1) | recovery r | harm | pass |
+|---|---|---|---|---|---|
+| approach_tempo | speed_mps | 0.04 | 0.40 | level 0.2: lost fraction 0.124 > default 0.088 + 0.02 | no |
+| caution | chosen_uncertainty | n/a (never logged) | 0.67 | level 0.2: lost fraction 0.136 > default 0.088 + 0.02 | no |
+| novelty_bias | info_frac | 0.54 | 0.38 | none | no |
+| persistence | repeat_frac | −0.31 | −0.14 | none | no |
+
+Medians by level (0.2 / 0.5 / 0.8; the full tables are in `gate.md`):
+
+| trait | speed_mps | info_frac | engage_frac | repeat_frac | lost_frac |
+|---|---|---|---|---|---|
+| approach_tempo | 0.029 / 0.018 / 0.019 | 0.20 / 0.27 / 0.24 | 0.43 / 0.37 / 0.35 | 0.67 / 0.73 / 0.75 | 0.124 / 0.088 / 0.100 |
+| caution | 0.037 / 0.018 / 0.023 | 0.12 / 0.27 / 0.50 | 0.55 / 0.37 / **0.00** | 0.71 / 0.73 / 0.00 | 0.136 / 0.088 / 0.043 |
+| novelty_bias | 0.004 / 0.018 / 0.031 | 0.05 / 0.27 / 0.32 | 0.13 / 0.37 / 0.48 | 0.37 / 0.73 / 0.73 | 0.036 / 0.088 / 0.105 |
+| persistence | 0.017 / 0.018 / 0.017 | 0.21 / 0.27 / 0.21 | 0.37 / 0.37 / 0.37 | 0.73 / 0.73 / 0.70 | 0.088 / 0.088 / 0.043 |
+
+What each failure is:
+
+- **approach_tempo.** The cruise-speed gain (0.66 and 1.25) did not move `speed_mps`, which is
+  path length over active seconds, an average over standing at standoffs, confirming and
+  idling; the robot drives at `v_max` for a small share of the time. The 0.2 level interacted
+  more and lost tracking more (the harm). A remap to the commanded speed while driving is a new
+  pre-registration.
+- **caution.** The pre-registered primary was never measured: the chooser's candidate record
+  did not carry the prediction's uncertainty, so every logged value was null (fixed with this
+  result for future batches; the fix cannot be applied to these runs). The trait's effect is the
+  largest in the batch and in the predicted direction on `engage_frac`: 0.44–0.56 at 0.2, 0.30–
+  0.39 at the default, **0.000 in all three runs at 0.8**, where z = 1.64 makes every untried
+  option's value negative and the robot only explores and investigates (info_frac 0.49–0.60).
+  Recovery r 0.67 (bound 0.7). By the rule the trait fails; a remap onto `engage_frac` is a new
+  pre-registration, and the 0.8 level is a behaviour an owner would read as refusal, not care.
+- **novelty_bias.** Identifiable (ICC 0.54) but not recoverable (r 0.38). At 0.2 seed 1 idled the
+  whole phase (60 decisions, all idle, no interaction: with the information terms at 0.66 and
+  nothing liked yet, idle at value 0 outscored every option), and seed 0 failed, so n = 2.
+- **persistence.** The margin and probe-budget gains changed the runs (different interaction
+  sequences in every seed) but moved no measured signature.
+
+**Failed run.** `T-novelty_bias-0.2-s0`: `struct.error: unpack requires a buffer of 4 bytes` in
+pygltflib while Genesis loaded a GLB from the shared asset cache; a concurrent run was writing
+the same file (the export was not atomic; fixed with this result: temporary file and rename).
+One failure of 27 is within the batch's limit of 3.
+
+**Consequence.** The mapping stays switchable and off. For the owner: remap approach tempo
+(driving speed) and caution (engage fraction) under a new pre-registration, give novelty bias
+more seeds, drop persistence or remap it; note that both "bold" ends (0.2 of approach tempo and
+of caution) lose tracking more, so the `bold` preset is not harmless as mapped.

@@ -76,9 +76,18 @@ newest first.
    exists, and all six traits are mapped (`character.effective`): the four temperament traits
    onto the chooser, navigator and probe budgets, the two learning-style traits onto the
    memory's evidence weighting and curiosity bonus, behind `RuntimeConfig.character_active`,
-   OFF until the pre-registered admission gates pass (`docs/results/character-gate-prereg.md`,
-   `scripts/eval/character_gate.py`; the 27-run temperament batch is running, the three
-   9-run learning-style batches are queued behind it). The face's style (tempo,
+   which stays OFF: **the temperament gate failed on all four traits (27 runs, 2026-10-13;
+   `docs/results/character-gate-prereg.md`, "Result")**. Approach tempo's cruise-speed gain
+   does not move the average speed (ICC 0.04); persistence moves nothing measured; novelty
+   bias is identifiable (ICC 0.54) but not recoverable (r 0.38); caution's pre-registered
+   signature was never logged (fixed), while its effect is the largest: the careful end
+   never engages. The bold ends of tempo and caution lose tracking more. Next, for the
+   owner: remap tempo (driving speed) and caution (engage fraction) under a new
+   pre-registration, more seeds for novelty bias, drop or remap persistence. The three
+   9-run learning-style batches are running (`scripts/eval/character_gate.py score`). Two
+   tooling defects found by this batch are fixed: the scorer's run discovery, and a race in
+   the shared asset cache (one run of 27 failed loading a half-written GLB; exports are now
+   atomic). The face's style (tempo,
    blink) comes from one latent state (the logged need) rescaled by the tempo trait, and a
    15 s boot cue names the session, remembered objects and any character change
    (`docs/EXPRESSION.md`, "Style"). At `close()` the character consolidates by engineered

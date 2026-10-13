@@ -340,9 +340,11 @@ The full status of every capability is in
 * **Duplicate identities:** a second identity for a disliked fixture can be chosen
   before it is merged with the first (once in 45 round-9 learning phases).
 * **Character:** the four temperament traits are engineered gains on existing
-  parameters (`behavior/character.py`), switched off by default until the pre-registered
-  admission gate shows they are identifiable from behaviour
-  ([criteria](docs/results/character-gate-prereg.md)); the two learning-style traits
+  parameters (`behavior/character.py`), switched off: the pre-registered admission gate
+  (27 runs, 2026-10-13) failed for all four, because the chosen signatures did not move with
+  the gains (tempo, persistence), were not recoverable (novelty bias) or were never logged
+  (caution, whose effect is large: the careful end never engages)
+  ([criteria and result](docs/results/character-gate-prereg.md)); the two learning-style traits
   (surprise weighting, curiosity type) are mapped onto the memory under the same switch and
   gate; between sessions four of the six move by bounded engineered rules on logged
   statistics (≤ 0.05 per session); no trait is a learned or inner quantity. The "LLM

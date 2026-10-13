@@ -126,15 +126,26 @@ def signatures(rec):
     }
 
 
+def run_results(root: Path):
+    """``(run directory, result.json)`` for every ``T-*`` run. learning.py writes its result one
+    level down, ``<out>/<experiment>/result.json`` (the 2026-10-12 temperament batch scored as
+    "0 runs" before this was read); a result directly in the run directory is accepted too."""
+    found = {}
+    for result in sorted(root.glob("T-*/result.json")) + sorted(root.glob("T-*/*/result.json")):
+        run = result.parent if result.parent.parent == root else result.parent.parent
+        found.setdefault(run, result)
+    return sorted(found.items())
+
+
 def load_runs(root: Path):
     runs = []
-    for result in sorted(root.glob("T-*/result.json")):
-        m = NAME.match(result.parent.name)
+    for run, result in run_results(root):
+        m = NAME.match(run.name)
         if not m:
             continue
         data = json.loads(result.read_text())
         phase = next((p for p in data["phases"] if p.get("phase", {}).get("label") == "train"), None)
-        row = {"name": result.parent.name, "seed": int(m.group("seed") or m.group("dseed")),
+        row = {"name": run.name, "seed": int(m.group("seed") or m.group("dseed")),
                "values": dict(DEFAULTS)}
         if m.group("trait"):
             row["values"][m.group("trait")] = float(m.group("level"))

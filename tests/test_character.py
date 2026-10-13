@@ -162,3 +162,19 @@ def test_a_configured_base_is_what_the_gains_scale():
     assert rt.cfg.chooser.min_interval == pytest.approx(4.0) and rt.nav.cfg.v_max == pytest.approx(0.25)
     assert rt.memory.cfg.initial_probes == 6 and rt.memory.cfg.change_failures == 6
     assert rt.cfg.chooser.margin == pytest.approx(0.16)
+
+
+def test_engage_candidates_carry_their_uncertainty_into_the_decision_log():
+    """The character gate's caution signature is the uncertainty of the chosen option, read from
+    the logged candidates; the 2026-10-12 batch logged null because the record lacked it."""
+    memory = _memory_with_an_uncertain_option()
+    rt = BenchRuntime(memory, policy="learned", seed=0, room=5.0)
+    rt.tracker.refresh()
+    rt.pose = np.array([0.0, 0.0, 0.0])
+    cands = rt.chooser.candidates_for(rt, 10.0)
+    options = [c for c in cands if c["activity"] in ("engage", "revisit")]
+    assert options, "the bench has one entity with an uncertain option"
+    assert all(c["uncertainty"] is not None and c["uncertainty"] > 0.1 for c in options)
+    rt.chooser.candidates, rt.chooser.chosen = cands, options[0]
+    logged = rt.chooser.snapshot()["candidates"]
+    assert any(c["uncertainty"] == options[0]["uncertainty"] for c in logged)

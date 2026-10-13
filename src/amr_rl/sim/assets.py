@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import os
 from pathlib import Path
 from xml.dom import minidom
 from xml.etree import ElementTree as ET
@@ -114,7 +115,12 @@ def export_glb(mesh_or_parts, path: Path, *, y_up: bool = False) -> Path:
     for i, part in enumerate(parts):
         scene.add_geometry(part, node_name=f"part_{i}", geom_name=f"part_{i}")
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_bytes(scene.export(file_type="glb"))
+    # Written whole or not at all: the asset cache is shared by concurrent simulations, and a
+    # reader that finds the file half-written fails in the loader (one run of the 2026-10-12
+    # character gate: "unpack requires a buffer of 4 bytes" in pygltflib).
+    tmp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    tmp.write_bytes(scene.export(file_type="glb"))
+    os.replace(tmp, path)
     return path
 
 
