@@ -198,12 +198,15 @@ class SimWorld:
             {} if mu_floor is None else {"material": gs.materials.Rigid(friction=mu_floor)}))
         # EVALUATION: slippery patches (spilt liquid, a smooth mat) as 1 mm plates of their
         # own friction, invisible to the camera.
-        for item in cfg.get("slip_patches", []):
+        for k, item in enumerate(cfg.get("slip_patches", [])):
             sx, sy = item["size"]
-            self.scene.add_entity(gs.morphs.Box(size=(float(sx), float(sy), 0.001),
-                                                pos=(float(item["xy"][0]), float(item["xy"][1]), 0.0005),
-                                                fixed=True, visualization=False),
-                                  material=gs.materials.Rigid(friction=float(item["friction"])))
+            plate = self.scene.add_entity(gs.morphs.Box(size=(float(sx), float(sy), 0.001),
+                                                        pos=(float(item["xy"][0]), float(item["xy"][1]), 0.0005),
+                                                        fixed=True, visualization=False),
+                                          material=gs.materials.Rigid(friction=float(item["friction"])))
+            # named so the evaluator's contact check can treat the plate as floor (validation F
+            # found the plates counted as "contacts" for whole runs)
+            self.entity_names[plate.idx] = f"slip_patch_{k}"
         self.plane = plane
         self.scene.add_entity(gs.morphs.Mesh(file=str(floor_path), fixed=True, collision=False,
                                              pos=(0, 0, 0.0005)))

@@ -61,7 +61,10 @@ def robot_contacts(world):
         entity = solver.geoms[other].entity
         if entity.idx == world.plane.idx:
             continue
-        names.add(world.entity_names.get(entity.idx, f"entity{entity.idx}"))
+        name = world.entity_names.get(entity.idx, f"entity{entity.idx}")
+        if name.startswith("slip_patch"):
+            continue  # a slip-patch plate is floor, not an obstacle
+        names.add(name)
     return sorted(names)
 
 
