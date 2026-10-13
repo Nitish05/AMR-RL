@@ -74,7 +74,7 @@ def _write_ratings(path, effect, n=20, seed=0):
 
 
 def test_score_applies_exclusions_and_passes_a_clear_manipulation(tmp_path):
-    _write_ratings(tmp_path / "r.csv", effect=1.5, n=75)  # the pre-registered 64 per cell plus the exclusion margin
+    _write_ratings(tmp_path / "r.csv", effect=1.5, n=90)  # 64 per cell after the synthetic exclusions (about 22 %)
     out = run("score", str(tmp_path / "r.csv"), "--out", str(tmp_path / "s"))
     rep = json.loads((tmp_path / "s" / "ratings.json").read_text())
     assert rep["kept"] < rep["raters"] and all(any("too fast" in w or "att_1" in w for w in why)
