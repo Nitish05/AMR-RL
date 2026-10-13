@@ -53,14 +53,20 @@ number is quoted; "preprint" marks unreviewed work carrying design weight.
 
 ## Open owner decisions gathered from all reviews
 
-- **Blocked or spinning wheels:** keep the pose and back off, or keep declaring it lost.
-- **First recalibration stop:** a 0.5 °C trigger, or a heading-uncertainty budget.
-- **Default version:** keep the re-validated round-9 build despite the failed map-error criterion.
+- ~~Blocked or spinning wheels~~: decided 2026-10-12, the pose is kept and the robot backs off
+  (validation F running; adoption by its pre-registered rules).
+- ~~First recalibration stop~~: decided 2026-10-12, 0.5 °C until the tempco is known (validation F).
+- **Default version:** keep the re-validated round-9 build despite the failed map-error criterion
+  (kept so far; validation F decides the two new defaults).
 - ~~Open-vocabulary detector as default~~: decided 2026-10-12, it is the default when its model is cached.
-- **Character:** accept the trait definitions, no mean reversion, session-end-only change, the
-  LLM gate and cadence, whether ratings may feed back, and the identifiability gate.
-- **Speaker:** no speech; the acoustic signature as a convention to validate.
-- **Repository:** licence; removing three merged worktrees; committing the research documents.
+- ~~Character~~: implemented 2026-10-12 as decided (trait definitions, no mean reversion,
+  session-end-only change, shadow-only adviser with a template backend, ratings never feed back
+  directly). Open: switching the mapping on, which waits for the identifiability gates
+  (docs/results/character-gate-prereg.md); wiring an external model behind the gate; running the
+  rating study (docs/results/character-ratings-prereg.md).
+- ~~Speaker~~: implemented as a logged event bus with no speech (expression/sound.py); the
+  acoustic signature remains a convention to validate with listeners.
+- **Repository:** licence; removing three merged worktrees (the research documents are committed).
 - **VLA:** none in the control loop (recommended); whether to spend an afternoon measuring SmolVLA's
   latency on the Mac; whether training labels for any future learned module may come from the
   evaluator's ground truth or only from teleoperation.
