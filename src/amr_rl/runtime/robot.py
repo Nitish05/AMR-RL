@@ -17,6 +17,7 @@ from pathlib import Path
 
 import numpy as np
 
+from ..advice import Adviser, AdviserConfig
 from ..behavior.activities import Survey
 from ..behavior.character import CharacterConfig, config_for, effective
 from ..behavior.chooser import ActivityChooser, ChooserConfig, Motivation, MotivationConfig
@@ -169,6 +170,9 @@ class RuntimeConfig:
     # The speaker as a one-way event bus on the snapshot (expression/sound.py); virtual
     # emissions in simulation. Control, learning and memory are byte-identical with it on or off.
     sound: SoundConfig = field(default_factory=SoundConfig)
+    # The shadow-mode adviser (advice/): consulted at close() only after a logged impasse, at
+    # most once per session, template backend; its proposals are stored, never applied.
+    adviser: AdviserConfig = field(default_factory=AdviserConfig)
     # This robot's gyro calibration (scripts/calibrate_imu.py); used when its unit
     # serial matches the spec's. None = datasheet prior only (+-1 % sensitivity).
     imu_calibration: str | None = "configs/calibration/imu.yaml"
@@ -293,6 +297,8 @@ class RobotRuntime:
         self.memory.record_boot(0.0, "restart", map_version=self.slam.map_version, map_loaded=map_dir is not None,
                                 **{k: v for k, v in self.memory.counts().items() if isinstance(v, int)})
         self.character_effective, self._character_base = None, None
+        self.adviser = Adviser(self.cfg.adviser)
+        self.adviser.verify_pending(self.memory)  # deterministic verifier of earlier shadow proposals
         self.tracker = EntityTracker(self.memory)
         self.semantic = SemanticWorker() if self.cfg.semantic else None
         self.archive = ImageEvidenceArchive(self.run_dir, audit=self.cfg.audit_images)
@@ -1295,6 +1301,8 @@ class RobotRuntime:
         if self.semantic is not None:
             self.semantic.close()
         self.character_changes = self.memory.consolidate_character(self.now) if self.cfg.character_evolve else []
+        self.advice = self.adviser.consult(self.memory, self.decision_log, renewals=len(self.chooser.renewals),
+                                           now=self.now)
         self.memory.close()
 
 

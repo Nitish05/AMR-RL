@@ -345,7 +345,9 @@ The full status of every capability is in
   ([criteria](docs/results/character-gate-prereg.md)); the two learning-style traits
   (surprise weighting, curiosity type) are mapped onto the memory under the same switch and
   gate; between sessions four of the six move by bounded engineered rules on logged
-  statistics (≤ 0.05 per session); no trait is a learned or inner quantity.
+  statistics (≤ 0.05 per session); no trait is a learned or inner quantity. The "LLM
+  adviser" is a shadow-mode gate with a deterministic template backend: proposals are
+  stored and scored, never applied, and no external model is connected.
 * **Nudge reach:** fixed and re-evaluated in the loop: 24/24 completed nudges on
   fixtures with rules touched them (round 9), 32/33 in round 6.
 * **Blocked or slipping wheels:** with the IMU, the robot notices within about

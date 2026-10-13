@@ -65,7 +65,9 @@ newest first.
    rules on the session's logged statistics (≤ 0.05 per trait per session, no mean
    reversion; `character.EVOLVES`); approach tempo and persistence have no rule yet. The
    speaker exists as a logged event bus (`expression/sound.py`, eight cues + transit layer,
-   `render_wav` for evaluation); no listener study yet. Open: a duplicate identity
+   `render_wav` for evaluation); no listener study yet. The adviser exists in shadow mode only
+   (`advice/`: impasse gate, robot-side payload, template backend, checks, deterministic
+   verifier; nothing applied; no external model wired). Open: a duplicate identity
    of a disliked fixture can be chosen before it is merged, and aversion learned in one
    visual context does not carry to another (3 second red panels in 99 round-9 phases);
    16 % of interactions with the tall cylinder still end in a tracking loss.

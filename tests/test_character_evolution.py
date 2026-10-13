@@ -6,6 +6,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from amr_rl.advice import Adviser
 from amr_rl.behavior.character import EVOLVES, TRAITS, CharacterConfig
 from amr_rl.learning.memory import ExperienceMemory
 
@@ -145,8 +146,10 @@ def test_runtime_close_consolidates_unless_switched_off(tmp_path):
         rt.memory.ensure_character(rt.cfg.character, t=0.0)
         rt.memory.upsert_entity("a", appearance={"hue": 0, "fill": 1}, now=0)
         rt.memory.record_outcome(receipt("a", GOOD, 1.0))
-        rt.now, rt.semantic = 100.0, None
+        rt.now, rt.semantic, rt.decision_log = 100.0, None, []
         rt.supervisor = SimpleNamespace(stop=lambda reason: None)
+        rt.chooser = SimpleNamespace(renewals=[])
+        rt.adviser = Adviser(rt.cfg.adviser)
         rt.close()
         assert bool(rt.character_changes) is evolve
 

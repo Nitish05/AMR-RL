@@ -127,6 +127,10 @@ class ExperienceMemory:
             CREATE TABLE IF NOT EXISTS boots(
                 seq INTEGER PRIMARY KEY AUTOINCREMENT, t REAL NOT NULL, session INTEGER NOT NULL,
                 event TEXT NOT NULL, detail TEXT NOT NULL);
+            CREATE TABLE IF NOT EXISTS advice(
+                seq INTEGER PRIMARY KEY AUTOINCREMENT, t REAL NOT NULL, session INTEGER NOT NULL,
+                trigger TEXT NOT NULL, signature TEXT NOT NULL, payload TEXT NOT NULL, proposal TEXT,
+                checks TEXT NOT NULL, status TEXT NOT NULL, backend TEXT NOT NULL, baseline TEXT, verdict TEXT);
         """)
         with self.db:
             existing = self._meta("schema_version")
@@ -758,6 +762,42 @@ class ExperienceMemory:
             writes.append({"key": key, "before": current[key], "after": applied, "target": target, "statistic": stat})
         return writes
 
+    # ------------------------------------------------------------ advice (shadow records)
+    def note(self, key, value):
+        """Advisory bookkeeping (budgets, previous-session counters); never behaviour."""
+        with self.lock, self.db:
+            self._set_meta(f"note:{key}", str(value))
+
+    def noted(self, key):
+        return self._meta(f"note:{key}")
+
+    def record_advice(self, t, trigger, signature, payload, proposal, checks, status, backend, baseline):
+        with self.lock, self.db:
+            cur = self.db.execute(
+                "INSERT INTO advice(t,session,trigger,signature,payload,proposal,checks,status,backend,baseline)"
+                " VALUES(?,?,?,?,?,?,?,?,?,?)",
+                (float(t), self.sessions, trigger, signature, json.dumps(payload, sort_keys=True, default=str),
+                 None if proposal is None else json.dumps(proposal, sort_keys=True, default=str),
+                 json.dumps(checks, sort_keys=True, default=str), status, backend,
+                 None if baseline is None else json.dumps(baseline, sort_keys=True, default=str)))
+            return cur.lastrowid
+
+    def advice_rows(self, limit=50):
+        with self.lock:
+            rows = self.db.execute("SELECT * FROM advice ORDER BY seq DESC LIMIT ?", (int(limit),)).fetchall()
+        return [dict(r) for r in rows]
+
+    def advice_by_signature(self, signature):
+        with self.lock:
+            row = self.db.execute("SELECT * FROM advice WHERE signature=? AND status != 'cached' ORDER BY seq DESC "
+                                  "LIMIT 1", (signature,)).fetchone()
+        return None if row is None else dict(row)
+
+    def set_advice_status(self, seq, status, verdict=None):
+        with self.lock, self.db:
+            self.db.execute("UPDATE advice SET status=?, verdict=? WHERE seq=?",
+                            (status, None if verdict is None else json.dumps(verdict, default=str), int(seq)))
+
     def character_log(self, limit=50):
         with self.lock:
             rows = self.db.execute("SELECT * FROM character_log ORDER BY seq DESC LIMIT ?", (int(limit),)).fetchall()
@@ -800,6 +840,15 @@ class ExperienceMemory:
                 "SELECT provenance, COUNT(*) FROM character_log WHERE cause != 'created' GROUP BY provenance")}
         from ..behavior.character import EVOLVES
 
+        advice = self.advice_rows(limit=200)
+        by_status = {}
+        for r in advice:
+            by_status[r["status"]] = by_status.get(r["status"], 0) + 1
+        last = advice[0] if advice else None
         return {"preset": self._meta("character_preset"), "traits": traits, "log": log,
                 "writes_by_provenance": counts, "boots": self.boots(limit=5), "evolution": EVOLVES,
+                "advice": {"mode": "shadow", "records": len(advice), "by_status": by_status, "applied": counts.get("llm_advised", 0),
+                           "last": None if last is None else {k: last[k] for k in ("t", "session", "trigger", "status", "backend")},
+                           "note": "proposals are stored and scored against the next session's logged statistics; "
+                                   "none has been applied"},
                 "reads": "no behaviour reads these values yet (store and audit only)"}

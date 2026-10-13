@@ -106,6 +106,9 @@ never simulator ground truth. `null` means unavailable/unknown, never zero.
              "provenance": "engineered_default", "detail": "{…}"}],
     "writes_by_provenance": {}, "boots": [{"t": 0.0, "session": 1, "event": "restart", "detail": {}}],
     "evolution": {"caution": "toward 0.5 + 0.5 x reserve, ..."},  // the session-end rule per trait (character.EVOLVES); cause "session_end" in the log
+    "advice": {"mode": "shadow", "records": 2, "by_status": {"shadow": 1, "shadow_confirmed": 1}, "applied": 0,
+               "last": {"t": 480.0, "session": 3, "trigger": "attitude_flips", "status": "shadow", "backend": "template"},
+               "note": "proposals are stored and scored against the next session's logged statistics; none has been applied"},
     "reads": "no behaviour reads these values yet (character_active is off)"  // or what reads them when active
   }
 }

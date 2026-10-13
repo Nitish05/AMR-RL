@@ -13,7 +13,7 @@ import pytest
 
 SRC = Path(__file__).resolve().parents[1] / "src" / "amr_rl"
 RUNTIME_PACKAGES = ["perception", "mapping", "navigation", "learning", "behavior", "runtime", "expression",
-                    "odometry"]
+                    "odometry", "advice"]
 RUNTIME_FILES = ["control/supervisor.py", "control/contract.py"]
 FORBIDDEN = ("amr_rl.sim", "genesis", "..sim", ".sim")
 
