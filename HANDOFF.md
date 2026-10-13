@@ -67,7 +67,10 @@ newest first.
    speaker exists as a logged event bus (`expression/sound.py`, eight cues + transit layer,
    `render_wav` for evaluation); no listener study yet. The adviser exists in shadow mode only
    (`advice/`: impasse gate, robot-side payload, template backend, checks, deterministic
-   verifier; nothing applied; no external model wired). Open: a duplicate identity
+   verifier; nothing applied; no external model wired). Human ratings: protocol, clip plan
+   and pre-registered scoring exist (`scripts/eval/ratings.py`,
+   `docs/results/character-ratings-prereg.md`); no study has been run (owner: recruitment,
+   ethics, clip rendering). Open: a duplicate identity
    of a disliked fixture can be chosen before it is merged, and aversion learned in one
    visual context does not carry to another (3 second red panels in 99 round-9 phases);
    16 % of interactions with the tall cylinder still end in a tracking loss.
