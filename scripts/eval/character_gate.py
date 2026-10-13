@@ -213,7 +213,8 @@ def score(args):
     report["recovery_runs"] = n_rec
 
     def med(rows, key):
-        vals = [r["signatures"][key] for r in rows if "signatures" in r and np.isfinite(r["signatures"][key])]
+        vals = [r["signatures"].get(key, float("nan")) for r in rows if "signatures" in r]
+        vals = [v for v in vals if np.isfinite(v)]
         return float(np.median(vals)) if vals else None
 
     for trait in judged:
@@ -223,8 +224,14 @@ def score(args):
             levels[level] = [r for r in valid if r["values"][trait] == level
                              and all(v == DEFAULTS[k] for k, v in r["values"].items() if k != trait)]
         sig = primary[trait]
-        icc = icc1([[r["signatures"][sig] for r in rows] for rows in levels.values()])
-        by_level = {str(lv): {"n": len(rows), **{k: med(rows, k) for k in keys + list(HARM)}}
+        groups = [[r["signatures"].get(sig, float("nan")) for r in rows] for rows in levels.values()]
+        icc = icc1(groups)
+        # levels with at least two finite values of the primary: the ICC is over these only, and
+        # the report says so when a level has none (the 2026-10-13 variance batch: the careful
+        # level never interacted, so its primary was undefined and the column had vanished)
+        icc_levels = sum(sum(bool(np.isfinite(x)) for x in g) >= 2 for g in groups)
+        cols = keys + ([sig] if sig not in keys else []) + list(HARM)
+        by_level = {str(lv): {"n": len(rows), **{k: med(rows, k) for k in cols}}
                     for lv, rows in levels.items()}
         base_c, base_l = med(defaults, "unintended_contacts"), med(defaults, "lost_frac")
         harm = []
@@ -238,8 +245,9 @@ def score(args):
                 harm.append(f"level {lv}: lost fraction {lost:.3f} > default {base_l:.3f} + {LOST_SLACK}")
         r = rec.get(trait)
         passed = icc is not None and icc >= ICC_MIN and r is not None and r >= RECOVERY_MIN and not harm
-        report["traits"][trait] = {"primary": sig, "icc1": icc, "recovery_r": r, "harm": harm,
-                                   "by_level": by_level, "pass": bool(passed)}
+        report["traits"][trait] = {"primary": sig, "icc1": icc, "icc_levels": icc_levels, "levels": len(groups),
+                                   "recovery_r": r, "harm": harm, "columns": cols, "by_level": by_level,
+                                   "pass": bool(passed)}
     report["pass"] = bool(report["traits"]) and all(t["pass"] for t in report["traits"].values())
     (root / "gate.json").write_text(json.dumps(report, indent=1, default=float))
     lines = [f"# Character gate: {root.name}", "", f"{len(runs)} runs, {len(report['failed'])} failed "
@@ -247,13 +255,16 @@ def score(args):
              "| trait | primary signature | ICC(1) | recovery r | harm | pass |", "|---|---|---|---|---|---|"]
     for t, row in report["traits"].items():
         f = lambda v: "n/a" if v is None else f"{v:.2f}"  # noqa: E731
-        lines.append(f"| {t} | {row['primary']} | {f(row['icc1'])} | {f(row['recovery_r'])} | "
+        icc_txt = f(row["icc1"])
+        if row["icc_levels"] < row["levels"]:
+            icc_txt += f" ({row['icc_levels']} of {row['levels']} levels have the primary)"
+        lines.append(f"| {t} | {row['primary']} | {icc_txt} | {f(row['recovery_r'])} | "
                      f"{'; '.join(row['harm']) or 'none'} | {'yes' if row['pass'] else 'no'} |")
     lines += ["", f"Gate: **{'PASS' if report['pass'] else 'FAIL'}** (ICC >= {ICC_MIN}, r >= {RECOVERY_MIN}, "
               f"contacts <= default + {CONTACT_SLACK}, lost <= default + {LOST_SLACK:.0%}).", "",
               "## Medians by level", ""]
     for t, row in report["traits"].items():
-        cols = keys + list(HARM)
+        cols = row["columns"]
         lines += [f"### {t}", "", "| level | n | " + " | ".join(cols) + " |", "|---|---|" + "---|" * len(cols)]
         for lv, m in row["by_level"].items():
             lines.append(f"| {lv} | {m['n']} | " + " | ".join(

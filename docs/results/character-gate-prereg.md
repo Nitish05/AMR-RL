@@ -141,3 +141,83 @@ One failure of 27 is within the batch's limit of 3.
 (driving speed) and caution (engage fraction) under a new pre-registration, give novelty bias
 more seeds, drop persistence or remap it; note that both "bold" ends (0.2 of approach tempo and
 of caution) lose tracking more, so the `bold` preset is not harmless as mapped.
+
+## Result: the learning-style gates (scored 2026-10-13)
+
+Batches `work/evidence/char-gate-style-20261012/{reversal,noisy,variance}`, 27 runs from the
+pinned worktree of `c245594` (queued behind the temperament gate; ran 13:20–15:20 PDT). 25
+valid, 2 failed (below). Each batch scored on its own directory by `character_gate.py score`
+(variance with `--primary caution=frac_bloom_vs_stone`, as pre-registered). The pinned scorer
+again printed "0 runs" (kept as `score-pinned-0runs.*`); the working-tree scorer carries the
+run-discovery fix and one reporting fix made for these batches: the primary signature's column
+is shown even when a level never defines it, and the ICC row says how many levels had the
+primary (before, the column vanished and the ICC was silently over fewer levels). No criterion
+was changed.
+
+**Both learning-style traits fail their gates. The variance prediction for caution could not be
+evaluated. `character_active` stays off; all six traits have now failed admission.**
+
+| batch | trait | primary signature | ICC(1) | recovery r | harm | pass |
+|---|---|---|---|---|---|---|
+| reversal (7 valid) | surprise_weighting | post_switch_aversive | 0.16 | −0.71 | none | no |
+| noisy (9) | curiosity_type | frac_stone_late | −0.11 | 0.58 | none | no |
+| variance (9, report only) | caution | frac_bloom_vs_stone | −0.44 (2 of 3 levels have the primary) | 0.95 | level 0.1: lost fraction 0.318 > default 0.152 + 0.02 | (prediction not testable) |
+
+Medians by level (default / low / high; full tables in each `gate.md`):
+
+| batch | primary | info_frac | engage_frac | interactions per run | lost_frac |
+|---|---|---|---|---|---|
+| reversal, 0.5 / 0.1 / 0.9 | 0 / 0 / 0.5 | 0.16 / 0.25 / 0.26 | 0.36 / 0.38 / 0.52 | 35 / 37 / 44 | 0.073 / 0.052 / 0.076 |
+| noisy, 0.0 / 0.5 / 1.0 | 0 / 0 / 0 | 0.17 / 0.15 / **0.54** | 0.37 / 0.24 / **0.13** | 26 / 16 / 12 | 0.092 / 0.043 / 0.029 |
+| variance, 0.5 / 0.1 / 0.9 | 0.33 / 0.31 / n/a | 0.29 / 0.02 / 0.50 | 0.49 / 0.65 / **0.00** | 28 / 31 / **0** | 0.152 / **0.318** / 0.043 |
+
+What each result is:
+
+- **surprise_weighting (reversal).** The pre-registered primary cannot move in this world. The
+  switch to `swapped` makes bloom inert (valence 0) and stone rewarding; the only aversive
+  object after the switch is grump, which every run had already met once before it. Aversive
+  outcomes after the switch were 0 in 6 of the 7 valid runs and 1 in
+  `T-surprise_weighting-0.9-s1` (a second grump visit). The expectation written in the addendum
+  ("bloom's lost reward is believed later and the robot keeps trying it") describes post-switch
+  attempts on bloom, not aversive outcomes: the signature was mis-specified in the
+  pre-registration, and the trait fails by the rule. Post hoc and not pre-registered: post-switch
+  bloom attempts were 3 / 3 / 3 at the default, 3 / 3 at 0.1 and 4 / 4 at 0.9, the predicted
+  direction by one attempt. Every valid run found stone's new reward, 4–176 s after the switch
+  (default 39 / 174 / 83 s, 0.1: 23 / 102 s, 0.9: 176 / 4 s), with no pattern across levels.
+- **curiosity_type (noisy).** The pre-registered primary sits at the floor at every level: the
+  second-half share of interactions aimed at the random object was 0 in 7 of 9 runs (0.10 at
+  the default seed 0, 0.30 at 1.0 seed 0). The default robot, whose bonus is count-like, did not
+  visit stone either: 5 of the batch's 164 interactions were aimed at it (bloom 88, no-fixture
+  entities 50, grump 13, roller 8), so the prediction "lower at 1.0" had nothing to lower from.
+  Why stone is so rarely chosen in `noisy_tv.yaml` is not determined by these runs. The
+  mechanism does change behaviour, on a signature that was not the primary: the
+  learning-progress bonus shifted frames from engaging (0.37 → 0.13) to exploring and
+  investigating (0.17 → 0.54) and halved the interactions (26 → 12 per run). That is what
+  recovery r 0.58 picks up. A remap onto `info_frac` or `engage_frac` would be a new
+  pre-registration, and would make a third trait (with novelty bias and caution) whose effect is
+  on the same two signatures, which the recovery regression could not then separate.
+- **caution (variance, prediction only).** Untestable at 0.9: as in the temperament gate's 0.8,
+  the robot interacted with nothing in any of the three runs (z = 1.64 makes every option's
+  value negative; information frames 0.49–0.60), so its bloom-versus-stone share is undefined.
+  At 0.1 the share was 0.31 / 0.31 / 0.41 against 0.50 / 0.08 / 0.33 at the default: no
+  preference change (the steady object is not preferred more or less by the bold robot). The
+  direction is neither confirmed nor reversed. The harm check fails at 0.1: the bold robot loses
+  tracking in 32–33 % of frames against 9–17 % at the default, as its 0.2 level did in the
+  temperament gate; it engages 62–65 % of the time and explores 2 %. Recovery r 0.95 comes from
+  `engage_frac` and `info_frac` separating the levels completely, not from the primary.
+
+**Failed runs.** `T-surprise_weighting-0.1-s0` and `T-surprise_weighting-0.9-s0`: both
+`struct.error: unpack requires a buffer of 4 bytes` in pygltflib loading a half-written GLB
+from the shared asset cache, the race fixed at `aa6990e`; the pinned worktree `c245594`
+predates the fix, and six runs started at once on a cold cache. Two failures of 27 are within
+the limit of 3; the reversal batch has n = 2 at both of its trait levels, so its ICC and
+recovery rest on 7 runs (the pre-registration said 9).
+
+**Consequence.** The mapping stays switchable and off. For the owner: re-specify surprise
+weighting's signature (post-switch attempts on the object that went inert, or the time until
+the memory's prediction for it falls) and re-run the reversal batch under a new
+pre-registration; for curiosity type, either a world in which the default robot does visit the
+random object, or a whole-phase visit count as the signature, or drop the trait; the caution
+mapping's careful end refuses every interaction in a second world. Across both gates, the six
+traits as mapped move three signatures (engaging, information frames, tracking loss) and leave
+the others still; any remap should pick signatures that one trait moves alone.

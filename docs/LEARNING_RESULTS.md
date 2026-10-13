@@ -112,6 +112,28 @@ detector stays the default.
   acted in six phases (three stalled blocked events, three 1.8 s stops); the bounds are absolute
   and none of those phases decides one. A clean re-run at the current defaults was not queued.
 
+## Character gate batches (2026-10-13): 54 learning runs with the traits switched on
+
+The character admission gates (docs/results/character-gate-prereg.md, both "Result" sections)
+ran 54 single-phase learning runs with `character_active=true`: 27 in the arena (`history_a`,
+480 s, traits at 0.2 / 0.5 / 0.8) and 27 in three new consequence worlds (`style_reversal`:
+standard rules swapped at 300 s, 660 s; `noisy_tv.yaml`: the stone answers yellow or red at
+random; `variance.yaml`: bloom and stone share a mean of +0.5 and stone varies three times
+more). All six traits failed admission; the learning observations from those runs are:
+
+- **Reversal.** All 7 valid reversal runs found the stone's new reward 4–176 s after the swap
+  (default 39 / 174 / 83 s) and tried the now-inert bloom 3–4 more times; no run collected an
+  aversive outcome after the swap except one second visit to the grump.
+- **A random object is rarely chosen.** In the noisy world the robot aimed 5 of 164
+  interactions at the stone, 88 at the bloom and 50 at entities that were no fixture, at every
+  trait level; why the random object draws so few visits is not determined by these runs.
+- **Caution's careful end refuses everything.** At caution 0.8 and 0.9 (`value = ev − z·σ`,
+  z = 1.64) the robot interacted with nothing in 6 of 6 runs across two worlds and spent half
+  its frames exploring; the bold end (0.1, 0.2) lost tracking about twice as often as the
+  default (32 % against 9–17 % in the variance world).
+- **Three runs of 54 failed** on a race in the shared asset cache (a half-written GLB read by a
+  concurrent run; the export is atomic since `aa6990e`).
+
 ## Round 6 (2026-10-03): the suite re-run on current code
 
 **Setup:**

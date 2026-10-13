@@ -63,10 +63,12 @@ number is quoted; "preprint" marks unreviewed work carrying design weight.
   session-end-only change, shadow-only adviser with a template backend, ratings never feed back
   directly). The temperament gate failed on all four traits on 2026-10-13 (tempo and
   persistence move no measured signature, novelty bias is not recoverable, caution's signature
-  was not logged though its effect is large); the mapping stays off. Open: remapping or
-  dropping traits under a new pre-registration (docs/results/character-gate-prereg.md); the
-  learning-style gates; wiring an external model behind the gate; running the rating study
-  (docs/results/character-ratings-prereg.md).
+  was not logged though its effect is large), and the learning-style gates failed on both
+  traits the same day (surprise weighting's signature could not move in its world, curiosity
+  type's sat at zero at every level; the caution variance prediction was untestable because
+  the careful end never interacts); the mapping stays off. Open: remapping or dropping traits
+  under a new pre-registration (docs/results/character-gate-prereg.md); wiring an external
+  model behind the gate; running the rating study (docs/results/character-ratings-prereg.md).
 - ~~Speaker~~: implemented as a logged event bus with no speech (expression/sound.py); the
   acoustic signature remains a convention to validate with listeners.
 - **Repository:** licence; removing three merged worktrees (the research documents are committed).

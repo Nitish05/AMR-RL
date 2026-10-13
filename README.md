@@ -346,7 +346,9 @@ The full status of every capability is in
   (caution, whose effect is large: the careful end never engages)
   ([criteria and result](docs/results/character-gate-prereg.md)); the two learning-style traits
   (surprise weighting, curiosity type) are mapped onto the memory under the same switch and
-  gate; between sessions four of the six move by bounded engineered rules on logged
+  failed their own gates the same day (27 runs in three worlds: one pre-registered signature
+  could not move in its world, the other sat at zero at every level); between sessions four
+  of the six move by bounded engineered rules on logged
   statistics (≤ 0.05 per session); no trait is a learned or inner quantity. The "LLM
   adviser" is a shadow-mode gate with a deterministic template backend: proposals are
   stored and scored, never applied, and no external model is connected. No human has rated

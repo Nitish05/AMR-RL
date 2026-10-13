@@ -52,3 +52,41 @@ def test_a_run_without_a_valid_train_phase_is_reported_as_failed(tmp_path):
     _write(tmp_path / "T-default-s0", nested=True, label="warmup")
     runs = gate.load_runs(tmp_path)
     assert len(runs) == 1 and runs[0]["failed"] == "no valid train phase" and "signatures" not in runs[0]
+
+
+def _interactions(fixtures, t0=100.0):
+    return [{"t": t0 + 20.0 * i, "started": t0 + 20.0 * i - 5.0, "action": "signal", "entity_id": f"e{i}",
+             "fixture": f, "status": "outcome"} for i, f in enumerate(fixtures)]
+
+
+def test_the_primary_signature_is_reported_even_where_a_level_never_defines_it(tmp_path):
+    """The 2026-10-13 variance batch: at caution 0.9 the robot never interacted, so its primary
+    (bloom versus stone share) was undefined in every run of that level. The scorer had dropped
+    the column from the medians table and computed the ICC over the two remaining levels without
+    saying so."""
+    import argparse
+
+    gate = _gate()
+    for seed in range(3):
+        run = tmp_path / f"T-default-s{seed}" / "style_variance"
+        run.mkdir(parents=True)
+        (run / "result.json").write_text(json.dumps({"phases": [_phase("train", interactions=_interactions(
+            ["bloom", "stone", "stone", "bloom"][: 3 + seed % 2]))]}))
+        run = tmp_path / f"T-caution-0.1-s{seed}" / "style_variance"
+        run.mkdir(parents=True)
+        (run / "result.json").write_text(json.dumps({"phases": [_phase("train", interactions=_interactions(
+            ["stone", "stone", "bloom"]))]}))
+        run = tmp_path / f"T-caution-0.9-s{seed}" / "style_variance"
+        run.mkdir(parents=True)
+        (run / "result.json").write_text(json.dumps({"phases": [_phase("train", interactions=[])]}))
+    gate.score(argparse.Namespace(dir=str(tmp_path), primary=["caution=frac_bloom_vs_stone"]))
+    report = json.loads((tmp_path / "gate.json").read_text())
+    caution = report["traits"]["caution"]
+    assert caution["primary"] == "frac_bloom_vs_stone" and "frac_bloom_vs_stone" in caution["columns"]
+    assert caution["by_level"]["0.9"]["frac_bloom_vs_stone"] is None
+    assert abs(caution["by_level"]["0.1"]["frac_bloom_vs_stone"] - 1 / 3) < 1e-9
+    assert caution["icc_levels"] == 2 and caution["levels"] == 3 and caution["pass"] is False
+    md = (tmp_path / "gate.md").read_text()
+    assert "(2 of 3 levels have the primary)" in md
+    header = next(line for line in md.splitlines() if line.startswith("| level | n |"))
+    assert "frac_bloom_vs_stone" in header

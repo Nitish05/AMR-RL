@@ -83,11 +83,22 @@ newest first.
    signature was never logged (fixed), while its effect is the largest: the careful end
    never engages. The bold ends of tempo and caution lose tracking more. Next, for the
    owner: remap tempo (driving speed) and caution (engage fraction) under a new
-   pre-registration, more seeds for novelty bias, drop or remap persistence. The three
-   9-run learning-style batches are running (`scripts/eval/character_gate.py score`). Two
-   tooling defects found by this batch are fixed: the scorer's run discovery, and a race in
-   the shared asset cache (one run of 27 failed loading a half-written GLB; exports are now
-   atomic). The face's style (tempo,
+   pre-registration, more seeds for novelty bias, drop or remap persistence. **The three
+   9-run learning-style batches are scored too (2026-10-13, same document, "Result: the
+   learning-style gates"): both traits fail.** Surprise weighting's pre-registered signature
+   (aversive outcomes after the swap) cannot move in the `swapped` world, where only the
+   already-known grump is aversive (0 in 6 of 7 valid runs; a pre-registration error, fails
+   by rule). Curiosity type's signature (second-half share of visits to the random object)
+   is zero in 7 of 9 runs because the default robot does not visit that object either (5 of
+   164 interactions in the batch), while the learning-progress bonus shifts frames from
+   engaging to exploring (0.37 → 0.13 and 0.17 → 0.54), which was not the signature. The
+   variance prediction for caution is untestable: at 0.9 the robot never interacts, at 0.1
+   its preference does not change and its tracking loss doubles. All six traits have now
+   failed admission; the owner's options are in that document. Three tooling defects found
+   by these batches are fixed: the scorer's run discovery, a race in the shared asset cache
+   (three runs of 54 failed loading a half-written GLB; exports are now atomic), and the
+   scorer's report, which dropped a primary column when one level never defined it. The
+   face's style (tempo,
    blink) comes from one latent state (the logged need) rescaled by the tempo trait, and a
    15 s boot cue names the session, remembered objects and any character change
    (`docs/EXPRESSION.md`, "Style"). At `close()` the character consolidates by engineered
