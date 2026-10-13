@@ -46,9 +46,10 @@ newest first.
    default again. Validation 6: all 19 blocked events handled (none false, next drive 3.3 s
    later, no blocked loss against 12, 4 operator re-enables against 13), but one blind-box
    navigation pair of 13 had two touches of the unseen box that the baseline did not, in a run
-   with no blocked event; the pre-registered per-pair rule fails and the default reverts. Next:
-   gate the slip-frame dead-reckoning rule on the blocked state, re-validate on new seeds, or
-   the owner re-adopts by decision (heading-r9.md, Validation 6).
+   with no blocked event; the pre-registered per-pair rule fails and the default reverts. The
+   slip-frame dead-reckoning rule is now gated on the blocked verdict (the only keep-pose code
+   that had acted in that run). Next: re-validate on new seeds, or the owner re-adopts by
+   decision (heading-r9.md, Validation 6).
 2. **First recalibration stop: implemented, validated, not adopted (2026-10-12).** A 0.5 °C
    change triggers the first stop until the tempco has been measured
    (`RuntimeConfig.imu_zupt_temp_first_c`, default 0). Validation 6: the stop came at 67 s

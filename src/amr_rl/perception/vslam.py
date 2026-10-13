@@ -1417,9 +1417,12 @@ class PlanarVSLAM:
             (self.position_sigma or cfg.sigma_floor) ** 2, (self.position_sigma or cfg.sigma_floor) ** 2,
             (self.heading_sigma or 0.002) ** 2])
         self._cov = _propagate(self.pose, cov, odo)
-        if cfg.odo_blocked_mode == "keep_pose" and odo.slip:
-            # slip-flagged encoder travel is not trusted without vision: spinning wheels
-            # would walk the kept pose (the covariance still grows with the step's)
+        if cfg.odo_blocked_mode == "keep_pose" and odo.slip and self.blocked:
+            # while the wheels say the robot is blocked, slip-flagged encoder travel is not
+            # trusted without vision: spinning wheels would walk the kept pose (the covariance
+            # still grows with the step's). Outside a blocked verdict dead reckoning is the
+            # same as in "lost" mode (validation 6: the rule acted on ordinary slip-flagged
+            # frames and changed a navigation run's path without any blocked event)
             self.pose = compose(self.pose, (0.0, 0.0, odo.dth))
         else:
             self.pose = compose(self.pose, (odo.dx, odo.dy, odo.dth))

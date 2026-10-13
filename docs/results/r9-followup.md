@@ -319,7 +319,8 @@ Both decisions from §8 were taken and built; their live validation is pre-regis
   closes an open back-off and records it as interrupted.
 - During probation after a relocalisation a blocked verdict no longer rejects the
   relocalisation (the wheels did not move and vision agrees). Without vision, slip-flagged
-  encoder travel is not composed into the dead-reckoned pose, so spinning wheels do not walk it.
+  encoder travel is not composed into the dead-reckoned pose, so spinning wheels do not walk it
+  (since validation 6 only while the blocked verdict holds; before, on every slip-flagged frame).
 - Nudging cannot trigger the check: the nudge creep (0.06 m/s) commands less than the
   0.12 m the verdict needs in its 1.2 s window.
 - Face and console: activity `blocked`, caption "Blocked - backing off"; `odometry_status()`

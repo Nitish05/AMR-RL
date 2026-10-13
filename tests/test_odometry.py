@@ -942,6 +942,13 @@ def test_blocked_without_vision_keeps_dead_reckoning_and_reports_it():
     assert r.status == PREDICTED and r.info.get("blocked") is True and slam.blocked_kind == "unknown"
     assert np.allclose(slam.pose[:2], [1.0, 2.0])  # slip-flagged travel does not walk the kept pose
     assert abs(slam.pose[2] - 0.301) < 1e-9 and slam._proprio_win == []
+    # a slip flag without a blocked verdict (the wheels do travel) dead-reckons as "lost" mode does:
+    # the rule is gated on the blocked state since validation 6
+    moving = _predict_slam()
+    moving._proprio_win = [(k * 0.1, 0.02, 0.02) for k in range(13)]
+    r = moving._predict_odometry(spinning, 1.2)
+    assert r.status == PREDICTED and not r.info.get("blocked") and not moving.blocked
+    assert not np.allclose(moving.pose[:2], [1.0, 2.0]) and abs(moving.pose[0] - (1.0 + 0.02 * np.cos(0.3))) < 1e-6
     # the 2026-10-11 behaviour is still available for the paired baseline
     slam = _predict_slam("lost")
     slam._reset_vision_refs = lambda **k: None

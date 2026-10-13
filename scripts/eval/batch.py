@@ -35,6 +35,12 @@ def parse(path):
         parts = shlex.split(line)
         if len(parts) < 2:
             raise SystemExit(f"bad job line (need '<log> <script> ...'): {line}")
+        flags = [p for p in parts[1:] if p.startswith("--")]
+        repeated = sorted({f for f in flags if flags.count(f) > 1})
+        if repeated:
+            # argparse keeps the last occurrence of a repeated nargs='*' option, silently dropping
+            # the first (validation 6: a base arm lost its imu_zupt_temp_first_c=0 this way)
+            raise SystemExit(f"job line repeats {', '.join(repeated)} (argparse would keep only the last): {line}")
         jobs.append({"log": Path(parts[0]), "argv": parts[1:]})
     return jobs
 
