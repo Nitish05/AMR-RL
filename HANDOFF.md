@@ -15,10 +15,12 @@ newest first.
   (`docs/results/heading-r9.md`). On by default:
   - loop closure, with the gyro/encoder consistency guard;
   - the blocked-robot check, which since 2026-10-12 keeps the pose, backs off and chooses
-    again (`odo_blocked_mode="keep_pose"`; validation pending, addendum F);
+    again (`odo_blocked_mode="keep_pose"`, switchable; off by default since validation 6
+    failed one per-pair contact rule in a run with no blocked event);
   - gyro offset recalibration at natural stops, plus a forced stop after 2 min without a
-    measurement or a 1 °C temperature change, and since 2026-10-12 a first stop at 0.5 °C
-    until the temperature coefficient is measured (validation pending, addendum F).
+    measurement or a 1 °C temperature change. The earlier first stop at 0.5 °C
+    (`imu_zupt_temp_first_c`) is built and switchable but off: validation 6 failed its per-pair
+    bound on one false loop closure (heading-r9.md, Validation 6).
 - **Camera-only robot:** `--odometry command` (`RuntimeConfig.odometry = "command"`).
 - **Each IMU unit needs `scripts/calibrate_imu.py` once** (`configs/calibration/imu.yaml`).
   Unit 4 uncalibrated reached 22.5° of heading error.
@@ -38,13 +40,22 @@ newest first.
 
 ## Open items, in order
 
-1. **Blocked or spinning wheels: decided and implemented (2026-10-12).** The pose is kept,
+1. **Blocked or spinning wheels: decided, implemented, validated with a mixed result (2026-10-12).** The pose is kept,
    the robot backs off 10 cm and chooses again (`VSLAMConfig.odo_blocked_mode="keep_pose"`,
-   `RuntimeConfig.blocked_*`); the 2026-10-11 behaviour is `odo_blocked_mode="lost"`. Live
-   validation under addendum F is the open step.
-2. **First recalibration stop: decided and implemented (2026-10-12).** A 0.5 °C change
-   triggers the first stop until the tempco has been measured
-   (`RuntimeConfig.imu_zupt_temp_first_c`). Validated with item 1 under addendum F.
+   `RuntimeConfig.blocked_*`); the 2026-10-11 behaviour is `odo_blocked_mode="lost"`, the
+   default again. Validation 6: all 19 blocked events handled (none false, next drive 3.3 s
+   later, no blocked loss against 12, 4 operator re-enables against 13), but one blind-box
+   navigation pair of 13 had two touches of the unseen box that the baseline did not, in a run
+   with no blocked event; the pre-registered per-pair rule fails and the default reverts. Next:
+   gate the slip-frame dead-reckoning rule on the blocked state, re-validate on new seeds, or
+   the owner re-adopts by decision (heading-r9.md, Validation 6).
+2. **First recalibration stop: implemented, validated, not adopted (2026-10-12).** A 0.5 °C
+   change triggers the first stop until the tempco has been measured
+   (`RuntimeConfig.imu_zupt_temp_first_c`, default 0). Validation 6: the stop came at 67 s
+   instead of 122 s with 0.33° instead of 0.95° built before it, medians better, but one pair
+   of 25 was 4.7° worse through a false loop closure 236 s later, which fails the
+   pre-registered per-pair bound. Re-validate on new seeds after tightening the loop-closure
+   odometry guard (it passed a closure 10 cm and 8° wrong).
 3. **Relocalisation range:** beyond 0.5 m from any keyframe, 2/12 on the IMU robot; no way
    to relocalise while stationary once recovery is used up; no autonomous retry after
    `recovery_exhausted`.
@@ -128,7 +139,7 @@ newest first.
 
 - R9g (aa143e3) = the default plus the 2026-10-11 fixes, the loop-closure odometry guard and the blocked-robot check, under corrected caster physics. Validation 5 on untouched starts (seeds 10–14, offset 18°): `docs/results/heading-r9.md`, evidence `work/evidence/r9g-val-20261011/`.
 - **L1 fails P4 on one pair** (heldout_c s11, +5.0 cm; the camera-only run ended at 174 s). Every other required check passes. The claims are scoped accordingly; whether R9g stays the default is the owner's call (it is the code default).
-- **Next candidate:** when the blocked check fires and vision agrees with the encoders, keep the pose and back off, instead of declaring it lost (about 26 s per event now). Develop on spent seeds; pre-register before validating.
+- **Next candidate (built as keep-pose, validation 6; off by default, see above):** when the blocked check fires and vision agrees with the encoders, keep the pose and back off, instead of declaring it lost (about 26 s per event now). Develop on spent seeds; pre-register before validating.
 - **For the next pre-registration:** compare P4 over the span both runs lasted (camera-only builds often end at `build_map.py`'s 6-re-enable limit).
 - **Long runs: keep the Mac's display awake** (`caffeinate -dims`). When the display slept, Genesis' renderer found no screen and 12 jobs failed.
 

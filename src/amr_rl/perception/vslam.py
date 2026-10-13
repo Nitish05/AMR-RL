@@ -375,8 +375,12 @@ class VSLAMConfig:
     # or dead reckoning continues and TrackResult.info["blocked"] tells the runtime to
     # back off and choose again. "lost": the 2026-10-11 behaviour, a motion-consistency
     # loss with bounded recovery and a wait for the operator (about 26 s per event in
-    # validation 5, with the pose correct every time).
-    odo_blocked_mode: str = "keep_pose"
+    # validation 5, with the pose correct every time). Validation 6 (addendum F): keep_pose
+    # handled all 19 blocked events (none false, next drive 3.3 s later, no blocked loss against
+    # 12) but one blind-box navigation pair had two contacts the baseline did not, which fails
+    # the pre-registered per-pair contact rule, so the default is "lost" again until a
+    # re-validation; keep_pose stays available.
+    odo_blocked_mode: str = "lost"
     odo_angular_check: float = 0.35     # rad + odo_angular_rel x |rotation|: vision vs gyro over the window
     odo_angular_rel: float = 0.25
     # Gyro scale from vision: a full in-place turn that returns to the same view

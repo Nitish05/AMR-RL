@@ -37,9 +37,9 @@ never simulator ground truth. `null` means unavailable/unknown, never zero.
       "command_model_fallback_frames": 0,
       "zupt_holds": 1, "zupt_hold_failures": 0,   // recalibration stops (and ones that ran out of time)
       "zupt_hold_active": false,                  // true while the robot stands still to recalibrate
-      "blocked_active": false, "blocked_events": 0, "blocked_kind": null,  // keep-pose blocked handling: backing off now; events so far; stalled | spinning | unknown
+      "blocked_active": false, "blocked_events": 0, "blocked_kind": null,  // keep-pose blocked handling (odo_blocked_mode="keep_pose", off by default): backing off now; events so far; stalled | spinning | unknown
       "temp_c": 31.2, "tempco_dps_per_c": -0.006, // chip temperature and the learned offset tempco
-      "tempco_known": true,                       // its uncertainty is below half the datasheet prior (first 0.5 degC stop done)
+      "tempco_known": true,                       // a stop at another temperature has measured it, or its uncertainty is below half the datasheet prior
       "offset_updates": 52, "zupt_frames": 50,    // offset measurements so far
       "sensors": {"imu": "ok", "encoders": "ok"}, // waiting | ok | lost (no samples for 0.3 s; flagged only)
       "sample_age_s": {"imu": 0.004, "encoders": 0.004}

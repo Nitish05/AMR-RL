@@ -783,7 +783,7 @@ def test_blocked_keeps_the_pose_and_restarts_the_window():
     assert slam.blocked_by_odometry(1.2)
     slam._note_blocked(1.2, kind="unknown")
     assert slam.blocked and slam.blocked_kind == "unknown" and slam._proprio_win == []
-    assert VSLAMConfig().odo_blocked_mode == "keep_pose"
+    assert VSLAMConfig().odo_blocked_mode == "lost"  # default since validation 6; keep_pose stays switchable
     # a slip flag older than the 1.2 s verdict window does not relabel a stall as spinning
     log = [(k * 0.1, still.copy(), 0.0, 0.0, k < 5, 0.02) for k in range(30)]  # slip only at t < 0.5 s
     slam = _motion_slam(log)
@@ -868,7 +868,7 @@ def test_first_temperature_stop_at_half_a_degree_until_the_tempco_is_known():
 
     def runtime(temp, known, sigma_dps=0.008):
         rt = RobotRuntime.__new__(RobotRuntime)
-        rt.cfg = RuntimeConfig()
+        rt.cfg = RuntimeConfig(imu_zupt_temp_first_c=0.5)  # the switch on (default 0 since validation 6)
         rt.odo = SimpleNamespace(t=0.0, zupt_frames=12, last_bias_update_t=0.0, bias_var=math.radians(sigma_dps) ** 2,
                                  temp=temp, temp_at_update=25.0, tempco_known=known)
         rt._boot_t0, rt._zupt_hold_start, rt._zupt_hold_until, rt._zupt_frames_at_hold = -10.0, None, -math.inf, None

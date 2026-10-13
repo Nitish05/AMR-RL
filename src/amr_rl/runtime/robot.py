@@ -140,10 +140,13 @@ class RuntimeConfig:
     # temperature trigger fires at this smaller change, whatever the offset's own
     # uncertainty. Validation 5: with a slow warm-up the first stop came at the 2-minute
     # rule and 72 % of the median run's worst heading error had built up by then
-    # (r9-followup.md 8). 0 = off.
-    imu_zupt_temp_first_c: float = 0.5
-    # Owner decision 2026-10-12: a blocked drive (VSLAMConfig.odo_blocked_mode "keep_pose")
-    # is handled with the pose kept: the activity is cancelled, the robot backs straight
+    # (r9-followup.md 8). 0 = off. Validation 6 (addendum F): the mechanism did what it was
+    # built for (first stop at 67 s instead of 122 s, 0.33 deg instead of 0.95 deg built before
+    # it) but F1 failed its per-pair bound on one false loop closure, so by the pre-registered
+    # rule the default is back to 0 until a re-validation on new seeds; 0.5 stays available.
+    imu_zupt_temp_first_c: float = 0.0
+    # Owner decision 2026-10-12: with VSLAMConfig.odo_blocked_mode "keep_pose" (switchable;
+    # default "lost" again since validation 6) a blocked drive is handled with the pose kept: the activity is cancelled, the robot backs straight
     # off this far at this speed (at most blocked_backoff_max_s), then chooses again.
     # Stalled wheels mark the cells just ahead occupied (a contact the camera did not
     # see); spinning wheels do not (a floor, not an object). More than

@@ -352,11 +352,18 @@ The full status of every capability is in
 * **Nudge reach:** fixed and re-evaluated in the loop: 24/24 completed nudges on
   fixtures with rules touched them (round 9), 32/33 in round 6.
 * **Blocked or slipping wheels:** with the IMU, the robot notices within about
-  a second that it is not moving as commanded. Since 2026-10-12 it keeps its
-  pose, backs off 10 cm and chooses again (marking the spot ahead as an obstacle
-  when the wheels stalled); after four events in a minute it stops for the
-  operator. This replaces a 26-second wait per event and is implemented and
-  unit-tested, with its live validation (addendum F) still to run.
+  a second that it is not moving as commanded and, by default, declares a loss of
+  localisation with a bounded recovery and a wait for the operator (about 26 s per
+  event). The keep-pose alternative (back off 10 cm and choose again, marking the
+  spot ahead when the wheels stalled) is built and switchable
+  (`VSLAMConfig.odo_blocked_mode="keep_pose"`). Validation 6 (addendum F, untouched
+  starts): it handled all 19 blocked events (none false, next drive 3.3 s later, no
+  loss of tracking against 12), but one blind-box navigation pair of 13 had two
+  touches of the unseen box that the baseline did not, which fails the
+  pre-registered per-pair rule, so it is not the default. The same validation tested
+  an earlier first gyro recalibration stop (0.5 °C): first stop at 67 s instead of
+  122 s, medians better, one pair 4.7° worse through a false loop closure; also
+  built, also off.
 * **IMU calibration:** an uncalibrated IMU with a 1 % gyro scale error reached
   22.5° of heading error; each unit must be calibrated by the robot first.
 * **Evidence strength:** learning runs use at most 5 start poses in one arena

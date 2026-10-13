@@ -385,3 +385,61 @@ By the decision rule of addendum E:
 - R9g remains the code default; the owner decides whether it stays (as after validation 3).
 
 **For future pre-registrations:** P4 should compare both arms over the span both runs lasted, or count a run that ends early as its own outcome. This is a recommendation for the next pre-registration, not applied here.
+
+## Validation 6: R9h (3059289) on untouched starts, addendum F (2026-10-12)
+
+Pre-registration [addendum F](heading-r9-prereg.md#addendum-f-keep-pose-blocked-handling-and-the-first-temperature-stop-written-2026-10-12-before-any-run). Candidate R9h = R9g plus keep-pose blocked handling and the first recalibration stop at 0.5 °C; baseline = the same commit with `--vslam odo_blocked_mode="lost" --runtime imu_zupt_temp_first_c=0`. Seeds 20–24, heading offset 27°, never used before. Evidence `work/evidence/r9h-val-20261012/` (scored by `analysis/valF.json`); 76 jobs from the pinned worktree of 3059289, plus the four base-arm navigation jobs from 4f0224f (3059289 + the `--vslam` option on `navigation.py`; recorded in the addendum before scoring). No run failed; every pair is in its table.
+
+### F1: first stop (25 L1 pairs, required)
+
+| measure | candidate median | baseline median | paired difference median | worst pair | 95 % BCa CI | rule | result |
+|---|---|---|---|---|---|---|---|
+| maximum heading error | 0.88° | 1.30° | −0.19° | **+4.70°** (heldout_b s22) | −0.40 to +0.05 | median ≤ 0°, no pair worse by > 1.0° | median passes; **one pair fails** |
+| ATE | 1.34 cm | 1.87 cm | −0.36 cm | +7.30 cm (the same pair) | −1.01 to −0.05 | median ≤ +0.5 cm | passes (better) |
+| lost frames | 0 | 0 | 0 | +3.0 pp | — | ≤ +2 pp (median) | passes |
+| recalibration stops per run | 2 | 2 | 0 | +1 | — | ≤ baseline + 1 | passes |
+
+Reported: the first stop is `temperature_first` in 24 of 25 candidate runs (one run had no stop in either arm); it comes at 67 s (median) against 122 s, and the heading error built before it is 0.33° against 0.95° (medians). Stop time per run is unchanged (3.8 s against 3.7 s). No blocked event occurred in any L1 run, so F1 measures the first-stop change alone.
+
+**The failing pair.** heldout_b s22: the candidate ran at 0.2–0.3° heading error until t = 320 s; at t = 326.4 s a loop closure (keyframe 673 against candidate 313) with a true error of 10.4 cm and 8.15° was accepted, the odometry consistency check passing it (`false: true` in the evaluator's record). The heading error jumped to 5.6° and stayed; the baseline's five closures were all right. The first stop had run 236 s earlier. The cause is a false loop closure that the odometry guard let through, not the first-stop mechanism; by the pre-registered rule F1 still fails on the per-pair bound.
+
+### F2: blocked handling (9 slip pairs + 4 blind-box navigation pairs, required)
+
+Slip set (friction 0.06 on arena and home_a × seeds 20–22; two patches of friction 0.03 on arena × seeds 20–22):
+
+| rule | candidate | baseline | result |
+|---|---|---|---|
+| no loss of tracking with reason `visual_motion_inconsistent_with_commands` | 0 | 12 | passes |
+| median time from a blocked event to the next autonomous drive ≤ 8 s | 3.3 s (max 3.7 s; 19 events) | no events; 26 s waits | passes |
+| false blocked events ≤ 10 % | 0 of 19 (true speed before each event ≤ 0.05 m/s) | — | passes |
+| contact episodes and duration not higher, per pair | 0 obstacle contacts in all 9 pairs | 0 in all 9 pairs | passes (see the scoring note) |
+| ATE median not worse by > 0.5 cm | 1.93 cm | 1.67 cm (+0.25 cm) | passes |
+| maximum heading error median not worse by > 0.5° | 1.32° | 1.50° (−0.19°) | passes |
+| no `blocked_repeatedly` stop unless the baseline lost tracking at the same place | 2 stops (patches, arena s21 at 129.6 s, s22 at 99.3 s) | lost tracking 5 and 4 times on the same patch: nearest baseline loss 0.24 m and 0.06 m from the stop, both inside the 0.8 m patch | passes (judgement: the same patch) |
+
+Reported: 19 blocked events (18 spinning, 1 stalled), all on the two-patch runs (none on the uniformly slippery floors, none in L1); back-off completed in 15 (the other 4 ended in a repeat-stop or a cancellation); 27 cells marked; operator re-enables 0/0/0 on friction runs, 3 and 1 on the patch runs that stopped (baseline 3, 5, 5).
+
+**Scoring note (correction of a measurement, recorded before adoption).** The harness's contact log counted the slip-patch plates themselves (invisible 1 mm floor plates, created as unnamed entities) as "contacts", for whole runs in both arms: raw episodes 5/4/18 (candidate) against 9/1/4 (baseline) on the patch runs, 100 % of them with `entity1`/`entity2`, the plates. No wall or fixture was touched in any slip run. Contacts are read as obstacle contacts, as in every earlier round; the evaluator now names the plates and excludes them (30d08be). The raw numbers are kept in `analysis/valF.json`.
+
+Blind-box navigation (home_a, heldout_b, heldout_c, home_a_dim × seed 20, `near_field_guard=false`; baseline from the 4f0224f worktree):
+
+| pair | blocked events c / b | contacts c / b (episodes / s) | ATE c / b (cm) | max heading c / b | supported goals c / b |
+|---|---|---|---|---|---|
+| heldout_b s20 | 0 / 0 | 0 / 0 | 0.69 / 1.01 | 1.03° / 1.02° | 4/4 / 3/3 |
+| heldout_c s20 | 0 / 0 | **2 (4.1 s) / 0**, both with the blind box at 372–383 s | 1.68 / 0.88 | 0.23° / 0.47° | 4/4 / 4/4 |
+| home_a s20 | 0 / 0 | 1 (5.1 s) / 1 (5.8 s) | 1.05 / 0.66 | 0.53° / 0.35° | 4/4 / 2/4 |
+| home_a_dim s20 | 0 / 0 | 0 / 0 | 1.01 / 0.72 | 0.61° / 0.57° | 4/4 / 4/4 |
+
+Medians over the 13 F2 pairs stay within the bounds (ATE +0.25 cm on the slip set, +0.23 cm here; heading −0.19° / +0.05°). No blocked event occurred in any navigation run of either arm. **The contact rule fails on heldout_c s20**: the candidate touched the blind box twice (4.1 s), the baseline never. With no blocked event, the only part of the keep-pose code that acted is its dead-reckoning rule while the slip flag is on (a slip-flagged translation is not composed into the predicted pose); that, or run-to-run divergence, put the robot on a different path towards the unseen box.
+
+**Second deviation, found while scoring.** The four base-arm navigation jobs carried `--runtime` twice (`imu_zupt_temp_first_c=0` and `near_field_guard=false`); argparse keeps the last, so the base navigation arm ran with the first stop at 0.5 °C like the candidate (both arms' first stop: 24.3 s, `temperature_first`). The navigation pairs therefore isolate `odo_blocked_mode` alone, which is what F2 is about; the L1, S1 and S2 base jobs carried one `--runtime` and ran as pre-registered (their first stops: `interval` or `temperature`). `scripts/eval/batch.py` should refuse a job line with a repeated option (recommendation below).
+
+### Verdict
+
+By the decision rule of addendum F:
+- **F1 fails** on its per-pair bound (one pair of 25, +4.7°, a false loop closure 236 s after the first stop); its medians pass and the mechanism did what it was built for (first stop at 67 s instead of 122 s; 0.33° instead of 0.95° built before it).
+- **F2 fails** on its per-pair contact rule (one navigation pair of 13, two touches of the blind box, 4.1 s, in a run with no blocked event); every other F2 rule passes, and on the nine slip pairs the mechanism did what it was built for (19 events handled, none false, the next drive 3.3 s later instead of 26 s, no blocked loss against 12, 4 operator re-enables against 13).
+- "If either fails, `odo_blocked_mode` and `imu_zupt_temp_first_c` are set back to the 2026-10-11 values": both defaults are reverted (`"lost"`, `0`); both mechanisms stay switchable, tested and documented. The owner may re-adopt either by decision, as with earlier defaults; the evidence above is what that decision would rest on.
+- New open items: (1) the odometry consistency check accepted a loop closure 10 cm and 8° wrong (heldout_b s22, t = 326 s; σθ 2.6°, σxy 7 cm at a 177 s / 3.3 m chain); (2) the keep-pose dead-reckoning rule for slip-flagged frames acts outside blocked events and should be gated on the blocked state before a re-validation.
+
+**For future pre-registrations:** (a) a contact rule for a blocked-handling change should count contacts in runs where a blocked event occurred, or be stated as an arm-level total, since a per-pair rule on chaotic trajectories fails on divergence alone; (b) `batch.py` should refuse job lines with a repeated option; (c) the slip-patch plates are now excluded from contacts by the evaluator itself. None of this is applied to this validation.

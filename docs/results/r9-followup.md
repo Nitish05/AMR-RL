@@ -295,8 +295,8 @@ the end of the run). Off (0) against 60 s; reversal_early and reversal_late; cod
 Both decisions from §8 were taken and built; their live validation is pre-registered as
 [addendum F](heading-r9-prereg.md#addendum-f-keep-pose-blocked-handling-and-the-first-temperature-stop-written-2026-10-12-before-any-run).
 
-**Blocked wheels keep the pose** (`VSLAMConfig.odo_blocked_mode = "keep_pose"`, the default;
-`"lost"` is the 2026-10-11 behaviour).
+**Blocked wheels keep the pose** (`VSLAMConfig.odo_blocked_mode = "keep_pose"`; `"lost"` is the
+2026-10-11 behaviour and, since validation 6, the default again — see the result below).
 - The VSLAM's blocked check is unchanged: commanded forward travel over the 1.2 s window that
   vision did not see, after the frozen-estimate check (wheel travel without slip that vision did
   not see) has passed. Vision and the wheels agree the robot did not move, so the pose is right
@@ -349,6 +349,22 @@ dead-reckoning and labelling rules above, plus the per-frame `blocked` flag in t
 and the blocked probe's detection of the kept-pose verdict.
 
 Nothing was tuned on any validation start.
+
+**Result (validation 6, [heading-r9.md](heading-r9.md#validation-6-r9h-3059289-on-untouched-starts-addendum-f-2026-10-12)).**
+Both mechanisms did what they were built for, and both failed one pre-registered per-pair bound,
+so by the rule of addendum F both defaults are back at the 2026-10-11 values and both stay
+switchable. F2: 19 blocked events on the slip patches, none false, the next drive 3.3 s after
+each (26 s waits before), no `visual_motion_inconsistent` loss (12 in the baseline), ATE and
+heading medians within bounds, the two `blocked_repeatedly` stops where the baseline lost
+tracking on the same patch; but one blind-box navigation pair of 13 had two touches of the
+unseen box (4.1 s) that the baseline did not, in a run with no blocked event. F1: the first stop
+came at 67 s instead of 122 s with 0.33° instead of 0.95° built before it, medians better
+(heading −0.19°, ATE −0.36 cm), but one pair of 25 was 4.7° worse through a false loop closure
+236 s later. Two scoring findings: the slip-patch plates were counted as contacts (fixed in the
+evaluator, 30d08be) and the base navigation arm carried `--runtime` twice, so it ran with the
+first stop at 0.5 °C (the navigation pairs isolate the blocked change alone). Next: gate the
+keep-pose slip-frame dead reckoning on the blocked state, tighten the loop-closure odometry
+guard, and re-validate on new seeds; or the owner re-adopts by decision.
 
 ## 11. The open-vocabulary detector becomes the default (2026-10-12)
 
