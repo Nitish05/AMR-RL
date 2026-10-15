@@ -31,6 +31,7 @@ from dataclasses import dataclass, field
 import numpy as np
 
 from ..behavior.chooser import ActivityChooser, ChooserConfig, Motivation, MotivationConfig
+from ..behavior.targeting import TargetLedger
 from ..learning import identity as identity_module
 from ..learning.identity import EntityTracker, IdentityConfig
 from ..learning.memory import ACTIONS, COLORS, ExperienceMemory, LearningConfig
@@ -335,6 +336,7 @@ class BenchRuntime:
         self._investigated = set()
         self._visited = set()
         self.map_progress = 100.0
+        self.targets = TargetLedger(self.chooser.cfg)
 
     def known_entities(self):
         return self.tracker._load().values()

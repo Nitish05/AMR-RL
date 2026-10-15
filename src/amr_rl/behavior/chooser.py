@@ -52,6 +52,12 @@ class ChooserConfig:
     max_switches_per_minute: int = 6
     avoid_radius: float = 0.75
     unreachable_backoff: float = 30.0
+    # Re-targeting holds (behavior/targeting.py; docs/results/r9-followup.md §12, pre-registered,
+    # off until the suite decides): an option never confirmed in this session is not offered again
+    # after unconfirmed_hold approaches in a row that did not confirm it (0 = off); an entity found
+    # absent from its remembered place waits for a sighting or a new position (absent_hold).
+    unconfirmed_hold: int = 0
+    absent_hold: bool = False
     # Give-up rule for the forced avoid (engineered): after this many failed retreats
     # the robot holds still (it never approaches the entity) for avoid_backoff x
     # min(4, holds) seconds, then tries one retreat again.
@@ -186,6 +192,8 @@ class ActivityChooser:
                             "basis": basis, "xy": xy, "hold_until": hold})
             elif eid in self._avoid_state:
                 self._avoid_state.pop(eid)  # out of range: the give-up state starts afresh
+            if rt.targets.absent(eid, xy, eid in visible_ids):
+                continue  # looked at its remembered place and saw nothing: wait for a sighting or a new place
             if blocked and rt.was_investigated(eid):
                 continue
             context = rt.tracker.last_state.get(eid, "attach:none")
@@ -197,6 +205,8 @@ class ActivityChooser:
                     continue
                 if rt.option_interrupted(eid, action):
                     continue  # session-scoped: this action keeps losing localization here
+                if rt.targets.held(eid, action):
+                    continue  # session-scoped: approaches from this action's standoff never confirm it
                 value, ev, info, cost = item["value"], item["expected_value"], item["information_value"], item["cost"]
                 p_top = max(pred["probabilities"].items(), key=lambda kv: kv[1])
                 out.append({

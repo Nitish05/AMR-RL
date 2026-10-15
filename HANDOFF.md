@@ -68,9 +68,14 @@ newest first.
    relocalisations; `docs/LEARNING_RESULTS.md`, round 9 follow-up), at a cost: the textured
    crate obstacle is now an entity the robot approaches about three times a phase without
    ever confirming it (155 approaches, 142 unconfirmed), and 8.6 % of the simulated time went
-   to such approaches (0.4 % before). Candidate fix, to pre-register: stop re-targeting an
-   entity after several unconfirmed approaches, or confirm large objects from a wider
-   standoff. The suite ran at `ff119cb` with the two validation-6 mechanisms still on
+   to such approaches (0.4 % before). Cause, measured 2026-10-15: at the 0.75 m standoff the
+   crate's box touches the top image border (partial) and scores 0.31–0.41; it is whole only
+   from about 0.85 m. Fix pre-registered the same day (`docs/results/r9-followup.md` §12) and
+   implemented off by default: re-targeting holds (`behavior/targeting.py`; an option never
+   confirmed in the session is dropped after two unconfirmed approaches in a row, an entity
+   absent from its remembered place waits for a sighting). A paired suite decides (arm A
+   holds on, arm B defaults = the clean re-run of §11; `scripts/eval/suite_compare.py`;
+   evidence `work/evidence/r9i-retarget-20261015/`). The §11 suite ran at `ff119cb` with the two validation-6 mechanisms still on
    (six phases touched; documented in `docs/results/r9-followup.md` §11). The character
    store (traits with bounds, provenance, change log, reset levels; `behavior/character.py`)
    exists, and all six traits are mapped (`character.effective`): the four temperament traits

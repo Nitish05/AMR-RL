@@ -249,7 +249,7 @@ def run_phase(phase, *, map_dir, memory_path, run_dir, seed, world="arena", star
     record.update({
         "sim_seconds": session.now, "interactions": interactions,
         "outcomes": [i for i in interactions if i["status"] == "outcome"],
-        "decisions": rt.decision_log, "world_events": [e.__dict__ for e in session.world.events],
+        "decisions": rt.decision_log, "targeting": rt.targets.events, "world_events": [e.__dict__ for e in session.world.events],
         "activity_frames": activity_time, "contacts": session.contacts,
         "trajectory": trajectory_metrics(session.truth), "memory_counts": rt.memory.counts(),
         "attitudes": {e["entity_id"]: {**rt.memory.attitude(e["entity_id"], session.now),

@@ -426,3 +426,73 @@ s1 and s3; the pose was kept and the robot backed off) and three `temperature_fi
 paired, and none of the six phases decides any of them; the round-9 suite is a reference from
 another commit (`8946f9e`), not a paired arm. A clean re-run at the current defaults was not
 queued (the simulator is busy with the character gates); the owner may ask for one.
+
+## 12. Re-targeting holds: stop approaching what cannot be confirmed (pre-registered 2026-10-15, before any run)
+
+**Problem (§11).** Under the open-vocabulary detector the robot spent 8.6 % of the plain-arena
+suite on 230 approaches to entities that are no fixture and did not complete: 155 to the
+textured crate (142 ended `target not confirmed in fresh images`), 44 to detector slivers, 46
+to where the roller had been before it rolled away.
+
+**Cause for the crate, measured 2026-10-15** with the detector at nine standoff poses in the
+arena (development probe, simulator pose; images kept with the session notes): at the preferred
+0.75 m signal standoff the crate's box reaches the top border of the image (`partial`, scores
+0.31–0.41), from the west and at the 0.52 m nudge standoff nothing is reported at all, and at
+1.0 m the box is whole (score 0.42) but its floor contact places the crate 0.28 m off. The
+camera sits 0.155 m up, pitched 12° down with a 60° vertical field: a 0.35 m object fits in
+view only from about 0.85 m. The grump and the bloom are reported whole at 0.75 m (scores
+0.55–0.63, positions within 3 cm), so the grump's 23 of 36 unconfirmed first approaches in the
+§11 runs have another cause, not analysed here.
+
+**Mechanism** (`behavior/targeting.py`; switches in `ChooserConfig`, both off by default; every
+event is logged and the learning evaluation stores them in the run record as `targeting`):
+
+1. `unconfirmed_hold = 2`: an option (entity, action) whose last two approaches in a row ended
+   without the target confirmed in fresh images, and which was never confirmed in this session,
+   is not offered again this session. An option confirmed earlier keeps only the ordinary
+   back-off (30 s × up to 4): its misses are chance, not a property of the object.
+2. `absent_hold`: when the whole 3 s confirmation window passes with the remembered place in
+   view in at least 5 frames and no sighting of the target, the entity is absent from that
+   place: not offered while it is remembered within 0.3 m of there and not in view. A sighting,
+   a new remembered position or a confirmed interaction lifts the hold.
+
+Estimated on §11's interaction records (an approximation; behaviour after a hold differs):
+rule 1 would have held 48 non-fixture entities and 6 bloom identities after two misses, saved
+82 + 19 approaches (737 s) and cost no completed outcome; with one miss instead of two it would
+have cost 13 grump outcomes, which is why the count is two. Rule 2 addresses the slivers and the
+roller's old place, which rule 1 does not (the roller was confirmed there earlier).
+
+**Design.** Two paired arms from the same pinned commit, the §11 suite in both (7 experiments ×
+5 starts on the map `i3-nocov-arena-s4`, the same seeds and starts, 35 runs and 45 phases each):
+arm A `--chooser unconfirmed_hold=2 absent_hold=true`; arm B at the defaults (both off). Arm B
+is also the clean re-run of §11 at the current defaults (`odo_blocked_mode = "lost"`,
+`imu_zupt_temp_first_c = 0`, open-vocabulary detector) that §11's deviation asked for. Six
+runs in parallel, A then B. Scored by `scripts/eval/suite_compare.py` (written before the runs).
+Evidence `work/evidence/r9i-retarget-20261015/{A,B}/`. The scorer counts a non-fixture approach as
+an engage or revisit interaction that did not complete, on an entity with no fixture label after
+the report's fixture repair (`report.repair_fixtures`); by that definition the §11 runs have 220
+such approaches, 1499 s, 8.1 % (the 230 / 8.6 % above counted raw labels). The bound below uses
+the scorer's definition in both arms.
+
+**Adoption rule for arm A (all must hold; nothing is changed after the runs):**
+
+- §11's six absolute bounds: starts relocalised 5/5 per experiment; restart first decision =
+  learned option in ≥ 8 of the runs that learned one; reversal adapted ≥ 8/10; at most one red
+  panel per phase in ≥ 43/45; 0 unintended contact episodes; 0 false relocalisations.
+- Approaches to entities that are no fixture and did not complete: ≤ 2.0 % of the simulated
+  seconds, and at most half of arm B's share.
+- Paired against arm B: completed outcomes ≥ 0.95 × B's; useful outcomes ≥ 0.95 × B's;
+  completed outcomes on the three rule fixtures (bloom, stone, grump) ≥ 0.95 × B's; navigation
+  failures ≤ B's; lost-frame fraction ≤ B's + 1 pp; nudges that reached their target on rule
+  fixtures ≥ B's share − 5 pp.
+- Reported, no bound: `held` and `absent` events by fixture class; the share of time on
+  non-fixture approaches in both arms; the §11 metric table for both arms.
+
+If all hold, `unconfirmed_hold = 2` and `absent_hold = True` become the defaults. If any fails,
+both stay switchable and off, and the result is documented with the failing bound.
+
+**Arm B is reported against §11's six bounds** as the suite at the current defaults.
+
+**Not in this change:** confirming large objects from a wider standoff (the probe shows the
+crate whole at 1.0 m but mislocated by 0.28 m; a standoff chosen from the remembered object
+height is a separate pre-registration), and the grump's first-approach confirmation failures.

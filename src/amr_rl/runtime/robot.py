@@ -22,6 +22,7 @@ from ..behavior.activities import Survey
 from ..behavior.character import CharacterConfig, config_for, effective
 from ..behavior.chooser import ActivityChooser, ChooserConfig, Motivation, MotivationConfig
 from ..behavior.frontier import frontier_goals
+from ..behavior.targeting import TargetLedger
 from ..control.supervisor import Supervisor, SupervisorConfig
 from ..evidence.images import ImageEvidenceArchive
 from ..expression.policy import expression_from
@@ -335,6 +336,7 @@ class RobotRuntime:
         self.decision_log = []
         self.nav_log = []
         self._unreachable = {}
+        self.targets = TargetLedger(self.cfg.chooser)  # re-targeting holds (behavior/targeting.py)
         self._investigated = set()
         self._frontier_visits = {}
         self._revisit_last = -np.inf

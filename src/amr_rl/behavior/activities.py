@@ -444,6 +444,7 @@ class Engage(Activity):
         self.before, self.after = [], []
         self.during_frames = []
         self.place_empty = 0
+        self.confirm_seen, self.confirm_empty = False, 0  # the confirmation window: any sighting; empty-place frames
         self.phase_until = None
         self.act_start_pose = None
         self.creep = 0.0
@@ -508,6 +509,10 @@ class Engage(Activity):
         det, conf = self._target_detection(rt)
         frame = rt.last_frame_record
         if self.phase == "confirming":
+            if det is not None:
+                self.confirm_seen = True
+            elif rt.place_in_view(self.target_xy):
+                self.confirm_empty += 1
             if det is not None and conf >= 0.6 and not det.partial and det.position is not None:
                 self.before.append({"token": det.state_token, "position": list(det.position),
                                     "frame_sha256": frame["raw_rgb_sha256"], "t": now,
@@ -531,10 +536,14 @@ class Engage(Activity):
                     if self.action == "nudge":
                         self.phase_until = now + self.creep / 0.06 + 2.5
                     rt.memory.note_proposal(self.target_entity, self.action)
+                    rt.targets.note_confirmed(self.target_entity, self.action)
                     return 0.0, 0.0
             if now > self.phase_until:
-                self.finish("aborted", reason="target not confirmed in fresh images")
+                absent = rt.targets.absence_verdict(self.confirm_seen, self.confirm_empty)
+                self.finish("aborted", reason="target absent from its remembered place" if absent
+                            else "target not confirmed in fresh images")
                 rt.note_unreachable(self.target_entity, now, missing=True)
+                rt.targets.note_unconfirmed(self.target_entity, self.action, now, xy=self.target_xy, absent=absent)
             # face the target while confirming (seen bearing, else remembered position)
             if det is not None and det.bearing is not None:
                 return 0.0, float(np.clip(1.2 * det.bearing, -0.4, 0.4))
