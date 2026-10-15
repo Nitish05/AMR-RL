@@ -30,14 +30,13 @@ def test_the_defaults_are_the_behaviour_before_any_trait_existed():
 def test_learning_style_traits_set_the_memory_parameters():
     assert effective({"surprise_weighting": 1.0})["learning.surprise_ratio"] == 2.0
     assert effective({"surprise_weighting": 0.0})["learning.surprise_ratio"] == 0.5
-    assert effective({"curiosity_type": 1.0})["learning.curiosity_lp"] == 1.0
-    assert effective({"curiosity_type": 0.5})["learning.curiosity_lp"] == 0.5
+    # curiosity type is retired (gate 2026-10-13): the stored value no longer reaches the memory
+    assert effective({"curiosity_type": 1.0})["learning.curiosity_lp"] == 0.0
+    assert effective({"curiosity_type": 0.5})["learning.curiosity_lp"] == 0.0
     rt = _runtime(True, values={"surprise_weighting": 1.0, "curiosity_type": 1.0})
     rt._apply_character()
-    assert rt.memory.cfg.surprise_ratio == 2.0 and rt.memory.cfg.curiosity_lp == 1.0
-    rt.memory.set_trait("curiosity_type", 0.0, provenance="owner", cause="test", t=1.0)
-    rt._apply_character()
-    assert rt.memory.cfg.curiosity_lp == 0.0
+    assert rt.memory.cfg.surprise_ratio == 2.0 and rt.memory.cfg.curiosity_lp == 0.0
+    assert rt.memory.character()["curiosity_type"]["value"] == 1.0  # the row persists all the same
 
 
 def test_gains_are_bounded_and_the_speed_gain_is_capped_for_safety():
@@ -46,8 +45,9 @@ def test_gains_are_bounded_and_the_speed_gain_is_capped_for_safety():
     assert effective({"approach_tempo": 0.0})["navigator.v_max_gain"] == 0.5
     assert effective({"caution": 1.0})["chooser.value_z"] == pytest.approx(1.64)
     assert effective({"caution": 0.0})["chooser.value_z"] == pytest.approx(-1.64)
-    assert effective({"persistence": 1.0})["learning.initial_probes"] == 6
-    assert effective({"persistence": 0.0})["learning.initial_probes"] == 2
+    # persistence is retired (gate 2026-10-13): whatever the store holds, the probe budget stays 3
+    assert effective({"persistence": 1.0})["learning.initial_probes"] == 3
+    assert effective({"persistence": 0.0})["learning.initial_probes"] == 3
 
 
 def test_presets_are_contrasting_and_unknown_ones_are_refused():
@@ -145,8 +145,8 @@ def test_an_active_character_sets_the_parameters_and_reapplying_never_compounds(
     assert rt.nav.cfg.v_max == pytest.approx(0.22 * 1.25) and rt.cfg.chooser.value_z == pytest.approx(-0.82)
     assert rt.cfg.chooser.min_interval == pytest.approx(3.0 / 1.25)
     assert rt.cfg.chooser.avoid_radius == pytest.approx(0.75 * 0.75)
-    assert rt.cfg.chooser.margin == pytest.approx(0.08 * gain(0.6))
-    assert rt.cfg.chooser.info_gain == pytest.approx(2 ** 0.5)
+    assert rt.cfg.chooser.margin == pytest.approx(0.08)  # persistence retired: the preset no longer sets it
+    assert rt.cfg.chooser.info_gain == pytest.approx(2 ** 0.5) == rt.cfg.chooser.explore_gain
     rt._apply_character()
     assert rt.nav.cfg.v_max == pytest.approx(0.22 * 1.25) and rt.cfg.chooser.min_interval == pytest.approx(3.0 / 1.25)
     # a later owner write moves the parameters from the same base
@@ -160,8 +160,9 @@ def test_a_configured_base_is_what_the_gains_scale():
     rt.cfg.chooser.min_interval, rt.nav.cfg.v_max = 5.0, 0.2
     rt._apply_character()
     assert rt.cfg.chooser.min_interval == pytest.approx(4.0) and rt.nav.cfg.v_max == pytest.approx(0.25)
-    assert rt.memory.cfg.initial_probes == 6 and rt.memory.cfg.change_failures == 6
-    assert rt.cfg.chooser.margin == pytest.approx(0.16)
+    # persistence is retired: the stored 1.0 leaves the probe budgets and the margin at their base
+    assert rt.memory.cfg.initial_probes == 3 and rt.memory.cfg.change_failures == 3
+    assert rt.cfg.chooser.margin == pytest.approx(0.08)
 
 
 def test_engage_candidates_carry_their_uncertainty_into_the_decision_log():
@@ -178,3 +179,53 @@ def test_engage_candidates_carry_their_uncertainty_into_the_decision_log():
     rt.chooser.candidates, rt.chooser.chosen = cands, options[0]
     logged = rt.chooser.snapshot()["candidates"]
     assert any(c["uncertainty"] == options[0]["uncertainty"] for c in logged)
+
+
+# ---------------------------------------------------------------- second pre-registration (2026-10-15)
+def test_v2_caution_reads_an_untried_option_at_its_prior_and_a_tried_one_pessimistically():
+    """The first careful end (z = 1.64) made every untried option's value negative and the robot
+    interacted with nothing in two worlds. Pessimism now needs evidence to be pessimistic about."""
+    fresh = ExperienceMemory(":memory:")
+    fresh.upsert_entity("ent-new", appearance={"hue": 200.0, "fill": 0.9}, now=0.0, map_version=MAP_VERSION,
+                        xy=(1.0, 0.0), pos_sigma=0.05)
+    kw = dict(need=0.8, novelty=1.0, distance=1.0)
+    plain = option_values(fresh, "ent-new", "attach:none", 10.0, cfg=ChooserConfig(), **kw)
+    careful = option_values(fresh, "ent-new", "attach:none", 10.0, cfg=ChooserConfig(value_z=1.64), **kw)
+    for a, b in zip(plain, careful):
+        assert a["prediction"]["evidence"]["all_contexts"] == 0 and a["prediction"]["uncertainty"] > 0.1
+        assert b["value"] == a["value"]  # nothing to be pessimistic about yet
+    tried = _memory_with_an_uncertain_option()
+    assert _values(tried, ChooserConfig(value_z=1.64))["signal"]["value"] < _values(tried, ChooserConfig())["signal"]["value"]
+
+
+def test_v2_novelty_bias_never_discourages_exploring_space():
+    """At novelty bias 0.2 (gain 0.66) one first-gate run stood still for a whole phase: it knew no
+    entity and exploring a mapped room did not pay. Object information scales both ways, space only up."""
+    assert effective({"novelty_bias": 0.2})["chooser.explore_gain"] == 1.0
+    assert effective({"novelty_bias": 0.2})["chooser.info_gain"] == pytest.approx(gain(0.2))
+    assert effective({"novelty_bias": 0.8})["chooser.explore_gain"] == pytest.approx(gain(0.8))
+    rt = _runtime(True, values={"novelty_bias": 0.2})
+    rt._apply_character()
+    assert rt.cfg.chooser.explore_gain == 1.0 and rt.cfg.chooser.info_gain == pytest.approx(gain(0.2))
+    memory = _memory_with_an_uncertain_option()
+    shy = BenchRuntime(memory, policy="learned", seed=0, room=5.0, chooser_cfg=ChooserConfig(info_gain=0.5))
+    base = BenchRuntime(memory, policy="learned", seed=0, room=5.0)
+    for rt_ in (shy, base):
+        rt_.tracker.refresh()
+        rt_.pose = np.array([0.0, 0.0, 0.0])
+    ex = [c for c in shy.chooser.candidates_for(shy, 10.0) if c["activity"] == "explore"]
+    ex0 = [c for c in base.chooser.candidates_for(base, 10.0) if c["activity"] == "explore"]
+    assert ex and ex0 and ex[0]["information_value"] == pytest.approx(ex0[0]["information_value"])
+
+
+def test_retired_traits_are_inert_and_not_owner_facing():
+    from amr_rl.behavior.character import ACTIVE, RETIRED, CharacterConfig
+
+    assert RETIRED == {"persistence", "curiosity_type"}
+    assert tuple(s.key for s in ACTIVE) == ("approach_tempo", "caution", "novelty_bias", "surprise_weighting")
+    assert effective({"persistence": 1.0, "curiosity_type": 1.0}) == effective({})
+    assert not any(k in RETIRED for preset in PRESETS.values() for k in preset)
+    memory = ExperienceMemory(":memory:")
+    memory.ensure_character(CharacterConfig(), t=0.0)
+    assert set(memory.character()) == {s.key for s in TRAITS}  # the rows persist
+    assert all(s.retired for s in TRAITS if s.key in RETIRED) and all(not s.retired for s in ACTIVE)

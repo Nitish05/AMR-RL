@@ -6,7 +6,8 @@ recovered from the measurements (docs/results/character-gate-prereg.md, pre-regi
 before the batch ran):
 
 * identifiability: ICC(1) >= 0.4 of the trait's primary signature across its levels
-  (0.2 / 0.5 / 0.8, other traits at 0.5, three seeds each);
+  (0.2 / 0.5 / 0.8, other traits at 0.5; three seeds each in the first pre-registration, five
+  in the second of 2026-10-15, which also changed the primaries, see PRIMARY);
 * recovery: leave-one-run-out ridge regression from all signatures to the four trait
   values, Pearson r >= 0.7 between predicted and set values per trait;
 * no harm: no level's median unintended-contact episodes above the default's + 1, no
@@ -40,15 +41,19 @@ from report import contact_split  # noqa: E402
 
 from amr_rl.behavior.character import TRAITS as TRAIT_SPECS  # noqa: E402
 
-TEMPERAMENT = ("approach_tempo", "caution", "novelty_bias", "persistence")
+# Second pre-registration (2026-10-15): three temperament traits remain (persistence retired).
+TEMPERAMENT = ("approach_tempo", "caution", "novelty_bias")
+INERT_AFTER_SWITCH = "bloom"  # style_reversal: the fixture whose reward the switch removes
 TRAITS = tuple(s.key for s in TRAIT_SPECS)
 DEFAULTS = {s.key: s.default for s in TRAIT_SPECS}
 LEVELS = (0.2, 0.8)
 # The signature pre-registered as each trait's own (ICC); every signature enters recovery.
-# A batch may override one with ``score --primary trait=signature`` (the learning-style
-# addendum fixes caution -> frac_bloom_vs_stone in the variance world).
-PRIMARY = {"approach_tempo": "speed_mps", "caution": "chosen_uncertainty", "novelty_bias": "info_frac",
-           "persistence": "repeat_frac", "surprise_weighting": "post_switch_aversive",
+# A batch may override one with ``score --primary trait=signature``. These are the second
+# pre-registration's primaries (2026-10-15); the first gate's were speed_mps, chosen_uncertainty,
+# info_frac, repeat_frac, post_switch_aversive and frac_stone_late (its batches re-score with
+# ``--primary`` overrides).
+PRIMARY = {"approach_tempo": "drive_speed_mps", "caution": "engage_frac", "novelty_bias": "info_frac",
+           "persistence": "repeat_frac", "surprise_weighting": "post_switch_inert_attempts",
            "curiosity_type": "frac_stone_late"}
 FIXTURES = ("bloom", "grump", "stone", "roller")
 HARM = ("unintended_contacts", "lost_frac")
@@ -104,8 +109,23 @@ def signatures(rec):
     post_aversive = sum((o.get("valence") or 0) < 0 and float(o["t"]) > t_switch for o in outs) if t_switch else float("nan")
     post_useful = [float(o["t"]) - t_switch for o in outs
                    if t_switch is not None and float(o["t"]) > t_switch and (o.get("valence") or 0) >= 0.3]
+    # second pre-registration: attempts on the object the switch made inert; driving speed; revisits
+    # of an entity whose last outcome was aversive (among interactions with any earlier outcome)
+    inert_after = [i for i in inter if t_switch is not None and float(i.get("t") or 0) > t_switch
+                   and i.get("fixture") == INERT_AFTER_SWITCH]
+    driving = float(traj.get("driving_seconds") or 0.0)
+    with_history = aversive_revisits = 0
+    for i in inter:
+        prior = [o for o in outs if o.get("entity_id") == i.get("entity_id") and float(o["t"]) < float(i.get("t") or 0)]
+        if prior:
+            with_history += 1
+            aversive_revisits += (max(prior, key=lambda o: float(o["t"])).get("valence") or 0) < 0
     return {
         "speed_mps": float(traj.get("true_path_length_m") or 0.0) / active,
+        "drive_speed_mps": float(traj.get("driving_path_length_m") or 0.0) / driving if driving > 0 else float("nan"),
+        "aversive_revisit_frac": aversive_revisits / with_history if with_history else float("nan"),
+        "post_switch_inert_attempts": len(inert_after) if t_switch is not None else float("nan"),
+        "post_switch_inert_last_s": (max(float(i["t"]) for i in inert_after) - t_switch) if inert_after else float("nan"),
         "decisions_per_min": 60.0 * len(decisions) / active,
         "bout_s": active / max(1, len(decisions)),
         "info_frac": (af.get("explore", 0) + af.get("investigate", 0)) / frames,
@@ -153,6 +173,7 @@ def load_runs(root: Path):
             row["failed"] = (phase or {}).get("failed") or "no valid train phase"
         else:
             row["signatures"] = signatures(phase)
+            row["idle"] = not phase.get("interactions")  # a valid run that never interacted (reported)
         runs.append(row)
     return runs
 
@@ -207,6 +228,7 @@ def score(args):
     keys = [k for k in (valid[0]["signatures"] if valid else {}) if k not in HARM
             and all(np.isfinite(r["signatures"][k]) for r in valid)]
     report = {"runs": len(runs), "failed": [r["name"] for r in runs if "failed" in r], "traits": {},
+              "idle": [r["name"] for r in valid if r.get("idle")],
               "judged": judged, "signatures_used": keys, "primary": {t: primary[t] for t in judged}}
     defaults = [r for r in valid if r["values"] == DEFAULTS]
     rec, n_rec = recovery(runs, keys, judged)
@@ -251,7 +273,8 @@ def score(args):
     report["pass"] = bool(report["traits"]) and all(t["pass"] for t in report["traits"].values())
     (root / "gate.json").write_text(json.dumps(report, indent=1, default=float))
     lines = [f"# Character gate: {root.name}", "", f"{len(runs)} runs, {len(report['failed'])} failed "
-             f"({', '.join(report['failed']) or 'none'}); recovery fitted on {n_rec} runs.", "",
+             f"({', '.join(report['failed']) or 'none'}); {len(report['idle'])} valid without any interaction "
+             f"({', '.join(report['idle']) or 'none'}); recovery fitted on {n_rec} runs.", "",
              "| trait | primary signature | ICC(1) | recovery r | harm | pass |", "|---|---|---|---|---|---|"]
     for t, row in report["traits"].items():
         f = lambda v: "n/a" if v is None else f"{v:.2f}"  # noqa: E731
@@ -282,7 +305,7 @@ def main():
     p.add_argument("--out", required=True)
     p.add_argument("--world", default="arena")
     p.add_argument("--experiment", default="history_a")
-    p.add_argument("--seeds", nargs="+", type=int, default=[0, 1, 2])
+    p.add_argument("--seeds", nargs="+", type=int, default=[0, 1, 2, 3, 4])
     p.add_argument("--levels", nargs="+", type=float, default=list(LEVELS))
     p.add_argument("--traits", nargs="+", default=list(TEMPERAMENT))
     p.set_defaults(func=plan)

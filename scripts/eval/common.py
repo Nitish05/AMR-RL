@@ -169,6 +169,11 @@ def trajectory_metrics(truth_rows):
         "predicted_frames": sum(r["status"] == "predicted" for r in truth_rows),
         "lost_frames": sum(r["status"] in ("lost", "relocalizing") for r in truth_rows),
         "true_path_length_m": gt_len,
+        # while a forward or reverse drive was commanded (character gate: driving speed, not average speed)
+        "driving_seconds": sum(b["t"] - a["t"] for a, b in zip(truth_rows[:-1], truth_rows[1:])
+                               if a.get("cmd") and abs(a["cmd"][0]) > 0.02),
+        "driving_path_length_m": sum(math.dist(a["gt"][:2], b["gt"][:2]) for a, b in zip(truth_rows[:-1], truth_rows[1:])
+                                     if a.get("cmd") and abs(a["cmd"][0]) > 0.02),
         "ate_rmse_m": float(np.sqrt(np.mean(np.square(errs)))) if errs else None,
         "max_position_error_m": max(errs) if errs else None,
         "final_position_error_m": errs[-1] if errs else None,

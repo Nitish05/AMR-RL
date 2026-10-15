@@ -221,3 +221,43 @@ random object, or a whole-phase visit count as the signature, or drop the trait;
 mapping's careful end refuses every interaction in a second world. Across both gates, the six
 traits as mapped move three signatures (engaging, information frames, tracking loss) and leave
 the others still; any remap should pick signatures that one trait moves alone.
+
+## Pre-registration 2: four traits (written 2026-10-15, before any run)
+
+Owner decision 2026-10-15, after both gates failed: keep four traits under corrected mappings and
+signatures, retire two. Nothing in this section changes after the runs.
+
+**Mapping and signature changes (code at this commit; `behavior/character.py`, `behavior/chooser.py`,
+`scripts/eval/character_gate.py`):**
+
+| trait | change | primary signature (ICC) | expectation |
+|---|---|---|---|
+| approach_tempo | mapping unchanged (`v_max` gain in [0.5, 1.25]; 1/gain on the decision interval) | `drive_speed_mps`: true path length while a drive is commanded (\|v\| > 0.02 m/s) over that time (`trajectory.driving_*`, evaluation ground truth). The first gate scored an average that included standing still. | higher at 0.8 (cap 1.25×), lower at 0.2 (0.66×) |
+| caution | the pessimism `value = ev − z·uncertainty` applies only to options with evidence; an untried option is read at its prior (the first careful end refused every untried option in two worlds). Avoid-radius gain unchanged. | `engage_frac` (share of frames engaging or revisiting). Reported, no bound: `aversive_revisit_frac`, the share of interactions on an entity whose last outcome was aversive. | lower at 0.8, higher at 0.2; aversive revisits higher at 0.2 |
+| novelty_bias | the information gain scales object information (engage, investigate) both ways and the explore frontier only upward (`chooser.explore_gain = max(1, gain)`): at 0.66 one first-gate run knew no entity, found exploring not worth the travel and stood still for 480 s | `info_frac` (unchanged) | higher at 0.8, lower at 0.2 |
+| surprise_weighting | mapping unchanged | `post_switch_inert_attempts`: interactions aimed at the object the switch made inert (bloom in `style_reversal`) after the switch; reported: `post_switch_inert_last_s`. The first signature (aversive outcomes after the switch) could not move in that world. | higher at 0.9 (good news weighs more, so the lost reward is believed later) |
+| persistence, curiosity_type | **retired** (`TraitSpec.retired`): their rows persist in the store, `effective` reads them as defaults, consolidation leaves them, presets and cues omit them | — | — |
+
+**Design.** Two batches from one pinned worktree, `character_active=true`, the map
+`i3-nocov-arena-s4`, five seeds (0–4), levels 0.2 / 0.5 / 0.8 (surprise weighting 0.1 / 0.5 / 0.9):
+
+- T2, temperament: arena, `history_a` (480 s): 3 traits × 2 levels × 5 seeds + 5 defaults = 35 runs.
+- R2, reversal: arena, `style_reversal` (660 s, switch at 300 s): surprise weighting × 2 levels × 5
+  seeds + 5 defaults = 15 runs.
+
+The re-targeting holds of r9-followup.md §12 are on in both batches if §12 adopts them and off
+otherwise; the chain reads §12's verdict before the batches start and records it with the
+evidence (`work/evidence/char-gate2-20261015/{T2,R2}/README.txt`).
+
+**Criteria** (per batch, as in pre-registration 1): ICC(1) ≥ 0.4 of the primary over the three
+levels; leave-one-run-out ridge recovery r ≥ 0.7 over the batch's valid runs for the batch's
+traits; no harm against the batch's defaults (median unintended contacts ≤ default + 1, median
+lost-frame fraction ≤ default + 2 pp). A valid run with no interaction counts (its signatures
+are real behaviour) and is listed in the report; a run that crashes or does not relocalise is
+excluded; more than 5 such runs of 50 void the batch.
+
+**Consequences.** All three temperament traits pass: `character_active` becomes the default
+and the presets `bold` / `careful` (tempo, caution, novelty bias) are offered. Any fails: the
+mapping stays switchable and off; a failing trait is retired. Surprise weighting passes: it is
+admitted alongside the temperament traits; fails: retired. The retired set is then final for
+this design; further traits need a new pre-registration.

@@ -752,8 +752,10 @@ class ExperienceMemory:
             targets["novelty_bias"] = (frac, {"probes_useful_fraction": frac})
         # approach_tempo and persistence: no rule yet (the perturbation meta-rule is pending)
         writes = []
+        from ..behavior.character import RETIRED
+
         for key, (target, stat) in targets.items():
-            if key not in current:
+            if key not in current or key in RETIRED:  # a retired trait never changes
                 continue
             proposed = current[key] + eta * (target - current[key])
             applied = self.set_trait(key, proposed, cause="session_end", provenance="consolidation", t=t,

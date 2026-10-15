@@ -99,7 +99,14 @@ newest first.
    engaging to exploring (0.37 → 0.13 and 0.17 → 0.54), which was not the signature. The
    variance prediction for caution is untestable: at 0.9 the robot never interacts, at 0.1
    its preference does not change and its tracking loss doubles. All six traits have now
-   failed admission; the owner's options are in that document. Three tooling defects found
+   failed admission. **Second pre-registration (2026-10-15, same document, "Pre-registration
+   2")**: approach tempo scored on the speed while driving, caution's pessimism applied to
+   options with evidence only and scored on the engage fraction, novelty bias never
+   discouraging exploration, surprise weighting scored on post-swap attempts at the object
+   made inert; persistence and curiosity type retired (`TraitSpec.retired`: rows persist,
+   inert). Batches T2 (35 runs) and R2 (15 runs) queue behind the §12 suite from a pinned
+   worktree (`work/evidence/char-gate2-20261015/`); the holds of §12 are on in them only if
+   §12 adopted them. Three tooling defects found
    by these batches are fixed: the scorer's run discovery, a race in the shared asset cache
    (three runs of 54 failed loading a half-written GLB; exports are now atomic), and the
    scorer's report, which dropped a primary column when one level never defined it. The

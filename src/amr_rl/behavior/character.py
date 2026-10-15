@@ -31,6 +31,7 @@ class TraitSpec:
     default: float = 0.5
     lo: float = 0.0
     hi: float = 1.0
+    retired: str = ""  # why the trait no longer acts on behaviour; its row stays in the store for continuity
 
 
 TRAITS = (
@@ -40,14 +41,22 @@ TRAITS = (
               "(0.5 = the mean), and a gain on the avoid radius", "emotional stability, reversed"),
     TraitSpec("novelty_bias", "gain on every information-value term of the activity chooser", "openness"),
     TraitSpec("persistence", "gain on the chooser's switching margin and on the probe budgets (attempts before "
-              "giving an option up, failures before a change is believed)", "conscientiousness"),
+              "giving an option up, failures before a change is believed)", "conscientiousness",
+              retired="admission gate 2026-10-13: the gains changed the runs but moved no measured signature"),
     TraitSpec("surprise_weighting", "evidence weight of better-than-expected over worse-than-expected outcomes in "
               "the attitude update (ratio 2^(2(x-0.5)), in [0.5, 2]), self-chosen actions only", "learning style"),
     TraitSpec("curiosity_type", "share of the chooser's uncertainty bonus that learning progress replaces (0 = the "
               "count-like bonus the robot had before any trait existed; 1 = learning progress only)",
-              "learning style", default=0.0),
+              "learning style", default=0.0,
+              retired="admission gate 2026-10-13: it moves the same signatures as novelty bias and caution "
+                      "(engaging against exploring), so the recovery regression cannot tell them apart"),
 )
 # The anchor of every trait is 0.5 except curiosity_type, a mixing weight whose unchanged value is 0.
+# A retired trait keeps its row (the store persists) but counts as its default in ``effective``,
+# is left alone by consolidation and is not owner-facing (presets, cues). Second pre-registration
+# 2026-10-15 (docs/results/character-gate-prereg.md): four traits remain.
+ACTIVE = tuple(s for s in TRAITS if not s.retired)
+RETIRED = {s.key for s in TRAITS if s.retired}
 
 
 @dataclass
@@ -95,8 +104,10 @@ EVOLVES = {
     "curiosity_type": "toward the fraction of options engaged 3+ times this session with no learning progress",
     "novelty_bias": "toward the fraction of this session's probes (first attempts on an option) that paid off",
     "approach_tempo": "no rule yet (perturbation meta-rule pending); owner-set only",
-    "persistence": "no rule yet (perturbation meta-rule pending); owner-set only",
+    "persistence": "retired (admission gate 2026-10-13): no rule, never changes",
 }
+EVOLVES["curiosity_type"] = "retired (admission gate 2026-10-13): the rule is kept for the record and not applied"
+
 
 
 # ---------------------------------------------------------------- what the traits set
@@ -109,8 +120,8 @@ def gain(x, lo=0.5, hi=2.0):
 
 PRESETS = {
     "default": {},
-    "bold": {"approach_tempo": 0.75, "caution": 0.25, "novelty_bias": 0.75, "persistence": 0.6},
-    "careful": {"approach_tempo": 0.3, "caution": 0.8, "novelty_bias": 0.3, "persistence": 0.4},
+    "bold": {"approach_tempo": 0.75, "caution": 0.25, "novelty_bias": 0.75},
+    "careful": {"approach_tempo": 0.3, "caution": 0.8, "novelty_bias": 0.3},
 }
 
 
@@ -122,7 +133,9 @@ def config_for(preset: str) -> CharacterConfig:
 
 def effective(values: dict) -> dict:
     """The parameter settings a set of trait values produces. Keys name the parameter and
-    the object that holds it; a missing trait counts as its default."""
+    the object that holds it; a missing trait counts as its default, and so does a retired
+    one whatever the store holds."""
+    values = {k: v for k, v in values.items() if k not in RETIRED}
     tempo = gain(values.get("approach_tempo", 0.5), 0.5, 1.25)   # speed is capped: safety, not style
     caution = float(values.get("caution", 0.5))
     novelty = gain(values.get("novelty_bias", 0.5))
@@ -131,11 +144,16 @@ def effective(values: dict) -> dict:
         # approach tempo: cruise speed and how soon the chooser may reconsider
         "navigator.v_max_gain": tempo,
         "chooser.min_interval_gain": 1.0 / tempo,
-        # caution: decision-time pessimism (value = ev - z x uncertainty) and the avoid radius
+        # caution: decision-time pessimism (value = ev - z x uncertainty, applied by the chooser to
+        # options with evidence only since 2026-10-15: an untried option is read at its prior) and
+        # the avoid radius
         "chooser.value_z": 1.64 * 2.0 * (caution - 0.5),
         "chooser.avoid_radius_gain": gain(caution, 0.75, 1.5),
-        # novelty bias: the information-value terms (engage, investigate, explore)
+        # novelty bias: the information-value terms of objects (engage, investigate) both ways, and
+        # exploring space only upward (2026-10-15: at 0.66 the v1 low end stood still for a whole
+        # phase in a mapped room with nothing in view; a robot that knows nothing goes to look)
         "chooser.info_gain": novelty,
+        "chooser.explore_gain": max(1.0, novelty),
         # persistence: how much better another activity must be before switching, attempts on an
         # option before giving up, and failures before a change is believed
         "chooser.margin_gain": persist,

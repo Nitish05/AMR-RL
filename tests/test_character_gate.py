@@ -90,3 +90,38 @@ def test_the_primary_signature_is_reported_even_where_a_level_never_defines_it(t
     assert "(2 of 3 levels have the primary)" in md
     header = next(line for line in md.splitlines() if line.startswith("| level | n |"))
     assert "frac_bloom_vs_stone" in header
+
+
+def test_second_prereg_signatures_driving_speed_and_attempts_on_the_object_made_inert(tmp_path):
+    """2026-10-15: approach tempo is scored on the speed while a drive is commanded, surprise
+    weighting on the attempts aimed at the object the switch made inert, and caution reports the
+    share of revisits to an entity whose last outcome was aversive."""
+    import pytest
+
+    gate = _gate()
+    inter = [{"t": 100.0, "started": 90.0, "action": "signal", "entity_id": "b", "fixture": "bloom", "status": "outcome"},
+             {"t": 160.0, "started": 150.0, "action": "signal", "entity_id": "g", "fixture": "grump", "status": "outcome"},
+             {"t": 200.0, "started": 190.0, "action": "signal", "entity_id": "g", "fixture": "grump", "status": "aborted"},
+             {"t": 320.0, "started": 310.0, "action": "signal", "entity_id": "b", "fixture": "bloom", "status": "outcome"},
+             {"t": 350.0, "started": 340.0, "action": "signal", "entity_id": "b", "fixture": "bloom", "status": "aborted"},
+             {"t": 400.0, "started": 390.0, "action": "signal", "entity_id": "s", "fixture": "stone", "status": "outcome"}]
+    outs = [{"t": 100.0, "entity_id": "b", "fixture": "bloom", "valence": 1.0},
+            {"t": 160.0, "entity_id": "g", "fixture": "grump", "valence": -1.0},
+            {"t": 320.0, "entity_id": "b", "fixture": "bloom", "valence": 0.0},
+            {"t": 400.0, "entity_id": "s", "fixture": "stone", "valence": 1.0}]
+    run = tmp_path / "T-surprise_weighting-0.9-s3" / "style_reversal"
+    run.mkdir(parents=True)
+    (run / "result.json").write_text(json.dumps({"phases": [_phase(
+        "train", sim_seconds=660.0, interactions=inter, outcomes=outs, switches=[{"t": 300.0, "to": "swapped"}],
+        trajectory={"true_path_length_m": 47.0, "lost_frames": 5, "frames": 100, "driving_seconds": 200.0,
+                    "driving_path_length_m": 40.0})]}))
+    row = gate.load_runs(tmp_path)[0]
+    assert row["seed"] == 3 and row["values"]["surprise_weighting"] == 0.9 and row["idle"] is False
+    sig = row["signatures"]
+    assert sig["drive_speed_mps"] == pytest.approx(0.2)
+    assert sig["post_switch_inert_attempts"] == 2 and sig["post_switch_inert_last_s"] == pytest.approx(50.0)
+    # revisits with an earlier outcome on the same entity: grump (last outcome red), bloom x2 (last +1, then 0)
+    assert sig["aversive_revisit_frac"] == pytest.approx(1 / 3)
+    assert gate.PRIMARY["approach_tempo"] == "drive_speed_mps"
+    assert gate.PRIMARY["surprise_weighting"] == "post_switch_inert_attempts"
+    assert gate.PRIMARY["caution"] == "engage_frac" and gate.TEMPERAMENT == ("approach_tempo", "caution", "novelty_bias")

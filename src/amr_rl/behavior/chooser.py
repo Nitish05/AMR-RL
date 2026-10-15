@@ -48,6 +48,8 @@ class ChooserConfig:
     # minus value_z x its uncertainty (0 = the mean). Both 1.0 / 0.0 leave behaviour as it was.
     info_gain: float = 1.0
     value_z: float = 0.0
+    # Gain on the explore frontier's information value (character: novelty bias, upward only).
+    explore_gain: float = 1.0
     min_interval: float = 3.0
     max_switches_per_minute: int = 6
     avoid_radius: float = 0.75
@@ -122,7 +124,11 @@ def option_values(memory, entity_id, context, now, *, need, novelty, distance, c
         info = cfg.info_gain * memory.information_value(pred, best_other) * (0.3 + 0.7 * need)
         cost = cfg.travel_cost * distance + cfg.action_cost[action]
         ev = pred["expected_valence"]
-        ev_used = ev - cfg.value_z * pred["uncertainty"]  # caution: a pessimistic (or optimistic) read of the value
+        # caution: a pessimistic (or optimistic) read of the value, of options with evidence only; an
+        # untried option is read at its prior (2026-10-15: at z = 1.64 the first careful end refused
+        # every untried option and interacted with nothing in two worlds)
+        z = cfg.value_z if pred["evidence"]["all_contexts"] > 1e-9 else 0.0
+        ev_used = ev - z * pred["uncertainty"]
         out.append({"action": action, "prediction": pred, "state": memory.option_state(entity_id, action, now),
                     "expected_value": ev, "information_value": info, "cost": cost,
                     "value": need * ev_used * novelty + info - cost})
@@ -234,7 +240,7 @@ class ActivityChooser:
             dist = float(np.linalg.norm(np.asarray(goal) - pose))
             # Engineered curiosity about space, scaled by measured map-growth progress.
             progress = min(1.0, rt.map_progress / 150.0)
-            info = self.cfg.info_gain * self.cfg.explore_weight * min(1.0, gain / 60.0) * progress
+            info = self.cfg.explore_gain * self.cfg.explore_weight * min(1.0, gain / 60.0) * progress
             cost = self.cfg.travel_cost * dist
             out.append({"activity": "explore", "entity_id": None, "action": None,
                         "value": info * (0.5 + need) - cost, "expected_value": None, "information_value": info,

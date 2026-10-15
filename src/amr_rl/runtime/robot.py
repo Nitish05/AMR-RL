@@ -871,6 +871,7 @@ class RobotRuntime:
         values = {k: r["value"] for k, r in self.memory.character().items()}
         eff = effective(values)
         self.cfg.chooser.info_gain = eff["chooser.info_gain"]
+        self.cfg.chooser.explore_gain = eff["chooser.explore_gain"]
         self.cfg.chooser.value_z = eff["chooser.value_z"]
         self.cfg.chooser.min_interval = self._character_base["chooser.min_interval"] * eff["chooser.min_interval_gain"]
         self.cfg.chooser.avoid_radius = self._character_base["chooser.avoid_radius"] * eff["chooser.avoid_radius_gain"]

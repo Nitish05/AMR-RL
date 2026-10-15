@@ -130,10 +130,10 @@ def test_noisy_objects_move_curiosity_toward_learning_progress_and_paying_probes
     noisy = [("a", GOOD)] * 6 + [("b", GOOD if rng.random() < 0.5 else BAD) for _ in range(8)]
     values, writes, _ = session(tmp_path / "noisy.sqlite", noisy)
     w = {w["key"]: w for w in writes}
-    assert "curiosity_type" in w and 0.0 < w["curiosity_type"]["target"] <= 1.0
-    assert values["curiosity_type"] > 0.0  # from its anchor 0 toward learning progress
+    # curiosity type is retired (gate 2026-10-13): its rule is documented but no longer applied
+    assert "curiosity_type" not in w and values["curiosity_type"] == 0.0
     assert w["novelty_bias"]["target"] == pytest.approx(w["novelty_bias"]["statistic"]["probes_useful_fraction"])
-    assert values["approach_tempo"] == 0.5 and values["persistence"] == 0.5  # no rule yet
+    assert values["approach_tempo"] == 0.5 and values["persistence"] == 0.5  # no rule; persistence retired
 
 
 def test_runtime_close_consolidates_unless_switched_off(tmp_path):
