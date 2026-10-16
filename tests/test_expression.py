@@ -437,7 +437,7 @@ def test_tempo_is_monotone_in_the_logged_need_and_the_blink_interval_follows():
     assert e.blink_interval_s == pytest.approx(4.0 / 1.25)
 
 
-def test_the_approach_tempo_trait_rescales_the_face_tempo_only_when_the_character_is_active():
+def test_the_approach_tempo_trait_rescales_the_face_tempo_only_when_active_and_not_retired():
     traits = [{"key": "approach_tempo", "value": 1.0}]
     inert = expression_from(make_state(motivation={"stimulation_need": 0.5},
                                        character={"active": False, "traits": traits}))
@@ -448,6 +448,11 @@ def test_the_approach_tempo_trait_rescales_the_face_tempo_only_when_the_characte
     assert inert.tempo == 1.0 and active.tempo == 1.25 and slow.tempo == 0.75  # the navigator's speed cap
     assert "character.traits[approach_tempo].value" in active.basis["tempo"]
     assert "character.traits[approach_tempo].value" not in inert.basis["tempo"]
+    # the runtime marks a retired trait in the state (the second gate retired approach tempo on
+    # 2026-10-16): its stored value reaches no cue, so the face keeps the plain tempo
+    retired = expression_from(make_state(motivation={"stimulation_need": 0.5}, character={
+        "active": True, "traits": [{"key": "approach_tempo", "value": 1.0, "retired": "gate 2"}]}))
+    assert retired.tempo == 1.0 and "character.traits[approach_tempo].value" not in retired.basis["tempo"]
 
 
 def test_calm_faces_clamp_the_tempo_no_eager_idiom_while_avoiding_or_stopped():

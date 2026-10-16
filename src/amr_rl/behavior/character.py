@@ -36,15 +36,22 @@ class TraitSpec:
 
 TRAITS = (
     TraitSpec("approach_tempo", "gain on the navigator's cruise speed (capped) and, inversely, on the chooser's "
-              "minimum interval between decisions", "extraversion"),
+              "minimum interval between decisions", "extraversion",
+              retired="admission gate 2 (2026-10-16): identifiable on the driving speed (ICC 0.70) but recovery "
+                      "r 0.64 against 0.7, and its slow end loses tracking more than the default"),
     TraitSpec("caution", "pessimism of an option's value: expected valence minus z x its posterior uncertainty "
-              "(0.5 = the mean), and a gain on the avoid radius", "emotional stability, reversed"),
+              "(0.5 = the mean), and a gain on the avoid radius", "emotional stability, reversed",
+              retired="admission gate 2 (2026-10-16): with the pessimism evidence-gated the careful end interacts "
+                      "again, but the engage fraction does not follow the trait (ICC -0.23) and the careful end "
+                      "loses tracking more"),
     TraitSpec("novelty_bias", "gain on every information-value term of the activity chooser", "openness"),
     TraitSpec("persistence", "gain on the chooser's switching margin and on the probe budgets (attempts before "
               "giving an option up, failures before a change is believed)", "conscientiousness",
               retired="admission gate 2026-10-13: the gains changed the runs but moved no measured signature"),
     TraitSpec("surprise_weighting", "evidence weight of better-than-expected over worse-than-expected outcomes in "
-              "the attitude update (ratio 2^(2(x-0.5)), in [0.5, 2]), self-chosen actions only", "learning style"),
+              "the attitude update (ratio 2^(2(x-0.5)), in [0.5, 2]), self-chosen actions only", "learning style",
+              retired="admission gate 2 (2026-10-16): the attempts on the object a switch made inert do not follow "
+                      "the trait (ICC -0.05, recovery r -0.46)"),
     TraitSpec("curiosity_type", "share of the chooser's uncertainty bonus that learning progress replaces (0 = the "
               "count-like bonus the robot had before any trait existed; 1 = learning progress only)",
               "learning style", default=0.0,
@@ -53,8 +60,9 @@ TRAITS = (
 )
 # The anchor of every trait is 0.5 except curiosity_type, a mixing weight whose unchanged value is 0.
 # A retired trait keeps its row (the store persists) but counts as its default in ``effective``,
-# is left alone by consolidation and is not owner-facing (presets, cues). Second pre-registration
-# 2026-10-15 (docs/results/character-gate-prereg.md): four traits remain.
+# is left alone by consolidation and is not owner-facing (presets, cues). After the second gate
+# (docs/results/character-gate-prereg.md, "Result 2", 2026-10-16) one trait is admitted: novelty
+# bias; the mapping as a whole stays behind ``RuntimeConfig.character_active`` (off).
 ACTIVE = tuple(s for s in TRAITS if not s.retired)
 RETIRED = {s.key for s in TRAITS if s.retired}
 
@@ -97,13 +105,14 @@ def clip_write(current, proposed, lo, hi, provenance, cfg: CharacterConfig):
 # statistic, its target, theta += eta (target - theta), clipped to the per-session cap and the
 # bounds; no mean reversion. Engineered rules, documented here for the inspector.
 EVOLVES = {
-    "caution": "toward 0.5 + 0.5 x reserve, reserve = EMA(0.3) of (useful - aversive) / outcomes per session "
-               "(asset protection; empty or benign sessions let it decay toward 0.5)",
-    "surprise_weighting": "toward 0.5 (symmetric evidence) in a session with a detected rule change; toward "
-                          "0.5 + 0.1 x useful rate otherwise (a mild confirmation bias where the world is stable)",
+    "caution": "retired (admission gate 2, 2026-10-16); its rule, kept for the record and not applied: toward "
+               "0.5 + 0.5 x reserve, reserve = EMA(0.3) of (useful - aversive) / outcomes per session",
+    "surprise_weighting": "retired (admission gate 2, 2026-10-16); its rule, kept for the record and not applied: "
+                          "toward 0.5 in a session with a detected rule change, toward 0.5 + 0.1 x useful rate "
+                          "otherwise",
     "curiosity_type": "toward the fraction of options engaged 3+ times this session with no learning progress",
     "novelty_bias": "toward the fraction of this session's probes (first attempts on an option) that paid off",
-    "approach_tempo": "no rule yet (perturbation meta-rule pending); owner-set only",
+    "approach_tempo": "retired (admission gate 2, 2026-10-16): no rule, never changes",
     "persistence": "retired (admission gate 2026-10-13): no rule, never changes",
 }
 EVOLVES["curiosity_type"] = "retired (admission gate 2026-10-13): the rule is kept for the record and not applied"
@@ -118,10 +127,10 @@ def gain(x, lo=0.5, hi=2.0):
     return float(min(hi, max(lo, 2.0 ** (2.0 * (float(x) - 0.5)))))
 
 
+# The presets ``bold`` and ``careful`` were withdrawn by the second gate (2026-10-16): a preset
+# needs more than one admitted trait to be a character the owner can read.
 PRESETS = {
     "default": {},
-    "bold": {"approach_tempo": 0.75, "caution": 0.25, "novelty_bias": 0.75},
-    "careful": {"approach_tempo": 0.3, "caution": 0.8, "novelty_bias": 0.3},
 }
 
 

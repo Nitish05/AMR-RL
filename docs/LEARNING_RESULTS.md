@@ -145,14 +145,16 @@ the phase's third long tracking loss).
 - Non-fixture approaches are counted by the scorer's definition (after the report's fixture
   repair) in the first three columns; round 9's figure is from raw labels.
 
-## Character gate batches (2026-10-13): 54 learning runs with the traits switched on
+## Character gate batches (2026-10-13 and 2026-10-16): 104 learning runs with the traits switched on
 
 The character admission gates (docs/results/character-gate-prereg.md, both "Result" sections)
 ran 54 single-phase learning runs with `character_active=true`: 27 in the arena (`history_a`,
 480 s, traits at 0.2 / 0.5 / 0.8) and 27 in three new consequence worlds (`style_reversal`:
 standard rules swapped at 300 s, 660 s; `noisy_tv.yaml`: the stone answers yellow or red at
 random; `variance.yaml`: bloom and stone share a mean of +0.5 and stone varies three times
-more). All six traits failed admission; the learning observations from those runs are:
+more). The first gate failed all six traits; the second (50 more runs on 2026-10-16: 35 in the
+arena with five seeds, 15 in `style_reversal`, re-targeting holds off) admitted novelty bias
+alone. Learning observations from those runs:
 
 - **Reversal.** All 7 valid reversal runs found the stone's new reward 4–176 s after the swap
   (default 39 / 174 / 83 s) and tried the now-inert bloom 3–4 more times; no run collected an
@@ -165,7 +167,16 @@ more). All six traits failed admission; the learning observations from those run
   its frames exploring; the bold end (0.1, 0.2) lost tracking about twice as often as the
   default (32 % against 9–17 % in the variance world).
 - **Three runs of 54 failed** on a race in the shared asset cache (a half-written GLB read by a
-  concurrent run; the export is atomic since `aa6990e`).
+  concurrent run; the export is atomic since `aa6990e`). None of the second gate's 50 failed,
+  and none stood still.
+- **Driving slower loses tracking more.** At two thirds of the cruise speed the robot lost
+  12.7 % of its frames (median of five seeds; 26 % in one) against 9.2 % at the default and
+  4.4 % at 1.25× the speed, in both gates; the cause is not determined by these runs.
+- **A careful chooser that only discounts evidence still tries things.** With the pessimism
+  applied to tried options only, the careful end engaged 26–52 % of the time (0 % in the first
+  gate) and explored less; the bold end revisited the aversive grump in 3 of 5 runs.
+- **After the swap at 300 s**, 14 of 15 reversal runs found the stone's new reward 4–309 s
+  later; one never did in 360 s.
 
 ## Round 6 (2026-10-03): the suite re-run on current code
 

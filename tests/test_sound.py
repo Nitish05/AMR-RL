@@ -125,6 +125,10 @@ def test_signature_uses_tempo_pitch_variability_and_density_only_when_the_charac
     sig = signature_from(s)
     assert sig["pitch_variability"] == 0.9 and sig["density"] == 0.1
     assert set(sig) == {"tempo", "pitch_variability", "density", "basis"}  # no pitch, no loudness
+    # a trait the state marks retired reaches no cue (approach tempo, second gate 2026-10-16)
+    s["character"]["traits"][-1]["retired"] = "gate 2"
+    sig = signature_from(s)
+    assert sig["density"] == 0.5 and "character.traits[approach_tempo].value" not in sig["basis"]
 
 
 def test_the_bus_is_read_only_and_imports_nothing_from_control_learning_or_the_simulator():

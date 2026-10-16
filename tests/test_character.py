@@ -27,37 +27,38 @@ def test_the_defaults_are_the_behaviour_before_any_trait_existed():
     assert {t.key: t.default for t in TRAITS if t.default != 0.5} == {"curiosity_type": 0.0}
 
 
-def test_learning_style_traits_set_the_memory_parameters():
-    assert effective({"surprise_weighting": 1.0})["learning.surprise_ratio"] == 2.0
-    assert effective({"surprise_weighting": 0.0})["learning.surprise_ratio"] == 0.5
-    # curiosity type is retired (gate 2026-10-13): the stored value no longer reaches the memory
+def test_the_retired_learning_style_traits_leave_the_memory_parameters():
+    # both learning-style traits are retired (gates 2026-10-13 and 2026-10-16): the stored values
+    # no longer reach the memory, though the rows persist
+    assert effective({"surprise_weighting": 1.0})["learning.surprise_ratio"] == 1.0
+    assert effective({"surprise_weighting": 0.0})["learning.surprise_ratio"] == 1.0
     assert effective({"curiosity_type": 1.0})["learning.curiosity_lp"] == 0.0
-    assert effective({"curiosity_type": 0.5})["learning.curiosity_lp"] == 0.0
     rt = _runtime(True, values={"surprise_weighting": 1.0, "curiosity_type": 1.0})
     rt._apply_character()
-    assert rt.memory.cfg.surprise_ratio == 2.0 and rt.memory.cfg.curiosity_lp == 0.0
-    assert rt.memory.character()["curiosity_type"]["value"] == 1.0  # the row persists all the same
+    assert rt.memory.cfg.surprise_ratio == 1.0 and rt.memory.cfg.curiosity_lp == 0.0
+    assert rt.memory.character()["surprise_weighting"]["value"] == 1.0
+    assert rt.memory.character()["curiosity_type"]["value"] == 1.0
 
 
 def test_gains_are_bounded_and_the_speed_gain_is_capped_for_safety():
     assert gain(0.0) == 0.5 and gain(1.0) == 2.0 and gain(0.75) == pytest.approx(2 ** 0.5)
-    assert effective({"approach_tempo": 1.0})["navigator.v_max_gain"] == 1.25
-    assert effective({"approach_tempo": 0.0})["navigator.v_max_gain"] == 0.5
-    assert effective({"caution": 1.0})["chooser.value_z"] == pytest.approx(1.64)
-    assert effective({"caution": 0.0})["chooser.value_z"] == pytest.approx(-1.64)
+    assert gain(1.0, 0.5, 1.25) == 1.25 and gain(0.0, 0.5, 1.25) == 0.5  # the speed cap the tempo mapping used
+    # approach tempo and caution are retired (gate 2, 2026-10-16): their stored values act on nothing
+    assert effective({"approach_tempo": 1.0})["navigator.v_max_gain"] == 1.0
+    assert effective({"approach_tempo": 0.0})["chooser.min_interval_gain"] == 1.0
+    assert effective({"caution": 1.0})["chooser.value_z"] == 0.0
+    assert effective({"caution": 0.0})["chooser.avoid_radius_gain"] == 1.0
     # persistence is retired (gate 2026-10-13): whatever the store holds, the probe budget stays 3
     assert effective({"persistence": 1.0})["learning.initial_probes"] == 3
     assert effective({"persistence": 0.0})["learning.initial_probes"] == 3
 
 
-def test_presets_are_contrasting_and_unknown_ones_are_refused():
-    bold, careful = effective(PRESETS["bold"]), effective(PRESETS["careful"])
-    assert bold["navigator.v_max_gain"] > 1 > careful["navigator.v_max_gain"]
-    assert bold["chooser.value_z"] < 0 < careful["chooser.value_z"]
-    assert bold["chooser.info_gain"] > 1 > careful["chooser.info_gain"]
-    assert config_for("bold").values == PRESETS["bold"] and config_for("default").values == {}
-    with pytest.raises(ValueError):
-        config_for("reckless")
+def test_no_preset_is_offered_after_the_second_gate_and_unknown_ones_are_refused():
+    assert PRESETS == {"default": {}}  # bold and careful withdrawn (gate 2, 2026-10-16): one admitted trait
+    assert config_for("default").values == {}
+    for name in ("bold", "careful", "reckless"):
+        with pytest.raises(ValueError):
+            config_for(name)
 
 
 def _memory_with_an_uncertain_option():
@@ -130,37 +131,37 @@ def _runtime(active, preset="default", values=None):
 
 
 def test_the_mapping_is_inert_until_character_active():
-    rt = _runtime(False, "bold")
+    rt = _runtime(False, values={"novelty_bias": 0.75})
     rt._apply_character()
     assert rt.character_effective is None
     assert rt.cfg.chooser == ChooserConfig() and rt.nav.cfg.v_max == 0.22 and rt.memory.cfg.initial_probes == 3
-    assert rt.memory.character()["caution"]["value"] == 0.25  # the store holds the preset all the same
+    assert rt.memory.character()["novelty_bias"]["value"] == 0.75  # the store holds the value all the same
 
 
 def test_an_active_character_sets_the_parameters_and_reapplying_never_compounds():
-    rt = _runtime(True, "bold")
+    rt = _runtime(True, values={"novelty_bias": 0.75, "approach_tempo": 0.75, "caution": 0.25})
     rt._apply_character()
     eff = rt.character_effective
-    assert eff["values"]["approach_tempo"] == 0.75
-    assert rt.nav.cfg.v_max == pytest.approx(0.22 * 1.25) and rt.cfg.chooser.value_z == pytest.approx(-0.82)
-    assert rt.cfg.chooser.min_interval == pytest.approx(3.0 / 1.25)
-    assert rt.cfg.chooser.avoid_radius == pytest.approx(0.75 * 0.75)
-    assert rt.cfg.chooser.margin == pytest.approx(0.08)  # persistence retired: the preset no longer sets it
+    assert eff["values"]["novelty_bias"] == 0.75 and eff["values"]["approach_tempo"] == 0.75
     assert rt.cfg.chooser.info_gain == pytest.approx(2 ** 0.5) == rt.cfg.chooser.explore_gain
+    # the retired traits' stored values act on nothing
+    assert rt.nav.cfg.v_max == 0.22 and rt.cfg.chooser.value_z == 0.0 and rt.cfg.chooser.min_interval == 3.0
+    assert rt.cfg.chooser.avoid_radius == 0.75 and rt.cfg.chooser.margin == pytest.approx(0.08)
     rt._apply_character()
-    assert rt.nav.cfg.v_max == pytest.approx(0.22 * 1.25) and rt.cfg.chooser.min_interval == pytest.approx(3.0 / 1.25)
+    assert rt.cfg.chooser.info_gain == pytest.approx(2 ** 0.5)  # re-applying never compounds
     # a later owner write moves the parameters from the same base
-    rt.memory.set_trait("approach_tempo", 0.5, provenance="owner", cause="test", t=1.0)
+    rt.memory.set_trait("novelty_bias", 0.5, provenance="owner", cause="test", t=1.0)
     rt._apply_character()
-    assert rt.nav.cfg.v_max == pytest.approx(0.22) and rt.cfg.chooser.min_interval == pytest.approx(3.0)
+    assert rt.cfg.chooser.info_gain == 1.0 == rt.cfg.chooser.explore_gain
 
 
 def test_a_configured_base_is_what_the_gains_scale():
-    rt = _runtime(True, values={"approach_tempo": 1.0, "persistence": 1.0})
-    rt.cfg.chooser.min_interval, rt.nav.cfg.v_max = 5.0, 0.2
+    rt = _runtime(True, values={"novelty_bias": 1.0, "approach_tempo": 1.0, "persistence": 1.0})
+    rt.cfg.chooser.min_interval, rt.nav.cfg.v_max, rt.cfg.chooser.info_gain = 5.0, 0.2, 1.0
     rt._apply_character()
-    assert rt.cfg.chooser.min_interval == pytest.approx(4.0) and rt.nav.cfg.v_max == pytest.approx(0.25)
-    # persistence is retired: the stored 1.0 leaves the probe budgets and the margin at their base
+    assert rt.cfg.chooser.info_gain == 2.0 == rt.cfg.chooser.explore_gain
+    # the retired traits leave the configured base alone: speed, interval, probe budgets, margin
+    assert rt.cfg.chooser.min_interval == 5.0 and rt.nav.cfg.v_max == 0.2
     assert rt.memory.cfg.initial_probes == 3 and rt.memory.cfg.change_failures == 3
     assert rt.cfg.chooser.margin == pytest.approx(0.08)
 
@@ -221,9 +222,9 @@ def test_v2_novelty_bias_never_discourages_exploring_space():
 def test_retired_traits_are_inert_and_not_owner_facing():
     from amr_rl.behavior.character import ACTIVE, RETIRED, CharacterConfig
 
-    assert RETIRED == {"persistence", "curiosity_type"}
-    assert tuple(s.key for s in ACTIVE) == ("approach_tempo", "caution", "novelty_bias", "surprise_weighting")
-    assert effective({"persistence": 1.0, "curiosity_type": 1.0}) == effective({})
+    assert RETIRED == {"persistence", "curiosity_type", "approach_tempo", "caution", "surprise_weighting"}
+    assert tuple(s.key for s in ACTIVE) == ("novelty_bias",)  # the one trait that passed its gate
+    assert effective({k: 1.0 for k in RETIRED}) == effective({}) == effective({k: 0.0 for k in RETIRED})
     assert not any(k in RETIRED for preset in PRESETS.values() for k in preset)
     memory = ExperienceMemory(":memory:")
     memory.ensure_character(CharacterConfig(), t=0.0)

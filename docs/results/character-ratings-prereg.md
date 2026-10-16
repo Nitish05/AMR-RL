@@ -52,3 +52,12 @@ within-study contrasts are interpreted); any update of traits from ratings (they
 enter through the shadow adviser as a bounded, logged, provenance-tagged input, and no such
 path is wired); publication of the manipulation items as an instrument (that would need the
 three-stage validation with about 500 raters per stage).
+
+## Note after the second admission gate (2026-10-16)
+
+The study has not run. Three of its four manipulation checks (tempo, caution, persistence) and
+the `bold` / `careful` configurations target traits that the admission gates retired
+(docs/results/character-gate-prereg.md, "Result" and "Result 2"); the one admitted trait is
+novelty bias, and the presets were withdrawn. The protocol above stands as written, but the
+stimuli and checks must be re-pre-registered around the admitted trait before any clip is
+recorded.

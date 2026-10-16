@@ -833,6 +833,7 @@ class ExperienceMemory:
             traits.append({"key": key, "value": r["value"], "lo": r["lo"], "hi": r["hi"], "anchor": r["anchor"],
                            "drift": r["value"] - r["anchor"], "provenance": r["provenance"], "updated": r["updated"],
                            "sets": None if s is None else s.sets, "analogue": None if s is None else s.analogue,
+                           "retired": (s.retired or None) if s is not None else None,
                            "kind": "engineered parameter" if r["provenance"] in ("engineered_default", "owner", "migration")
                            else ("learned via an engineered update" if r["provenance"] == "consolidation"
                                  else f"{r['provenance']} (bounded, logged)")})

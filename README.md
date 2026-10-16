@@ -347,10 +347,10 @@ The full status of every capability is in
   ([criteria and result](docs/results/character-gate-prereg.md)); the two learning-style traits
   (surprise weighting, curiosity type) are mapped onto the memory under the same switch and
   failed their own gates the same day (27 runs in three worlds: one pre-registered signature
-  could not move in its world, the other sat at zero at every level); a second pre-registration
-  (2026-10-15) keeps four traits under corrected mappings and retires persistence and
-  curiosity type, its batches queued; between sessions the active traits move by bounded
-  engineered rules on logged
+  could not move in its world, the other sat at zero at every level); a second gate (50 runs,
+  2026-10-16) admitted novelty bias alone (identifiable, recoverable, harmless) and retired
+  approach tempo, caution and surprise weighting, so no preset is offered; between sessions
+  the admitted trait moves by a bounded engineered rule on logged
   statistics (≤ 0.05 per session); no trait is a learned or inner quantity. The "LLM
   adviser" is a shadow-mode gate with a deterministic template backend: proposals are
   stored and scored, never applied, and no external model is connected. No human has rated

@@ -224,9 +224,11 @@ def _caption(text: str) -> str:
 
 
 def _trait_value(character: dict, key: str) -> float | None:
+    """A trait's stored value, unless the trait is retired (logged, acting on nothing: no cue
+    reads it; the inspector marks the row)."""
     for row in character.get("traits") or ():
         if isinstance(row, dict) and row.get("key") == key:
-            return _num(row.get("value"))
+            return None if row.get("retired") else _num(row.get("value"))
     return None
 
 

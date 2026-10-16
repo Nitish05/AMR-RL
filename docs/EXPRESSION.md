@@ -67,7 +67,7 @@ place. Pip's version, all engineered:
 | Field | Snapshot field(s) | Rule |
 |---|---|---|
 | `style.activation` | `motivation.stimulation_need` | the chooser's engineered stimulation need, clamped to [0, 1]; 0.5 when missing |
-| `style.tempo` | `activation`, `character.active`, `character.traits[approach_tempo].value`, `face` | `(0.75 + 0.5 × activation) × g`; `g = clamp(2^(2(x − 0.5)), 0.75, 1.25)` from the approach-tempo trait **only when `character.active`**, otherwise 1 — the same capped gain that scales the navigator's cruise speed, so face and motion share one tempo; clamped to ≤ 1 for the `wary`, `stopped` and `confused` faces (no eager idiom while avoiding, blocked, stopped or lost) |
+| `style.tempo` | `activation`, `character.active`, `character.traits[approach_tempo].value`, `face` | `(0.75 + 0.5 × activation) × g`; `g = clamp(2^(2(x − 0.5)), 0.75, 1.25)` from the approach-tempo trait **only when `character.active`** and the trait is not retired (the second gate retired it on 2026-10-16, so `g` is 1 until a new pre-registration admits a tempo trait), otherwise 1 — the same capped gain that scales the navigator's cruise speed, so face and motion share one tempo; clamped to ≤ 1 for the `wary`, `stopped` and `confused` faces (no eager idiom while avoiding, blocked, stopped or lost) |
 | `style.blink_interval_s` | `tempo` | `4.0 / tempo`; the console blinks the screen image once per interval |
 | `cue` | `sim_time`, `character.boots`, `memory.entities`, `character.log` | transparency cue for the first 15 s after the latest boot: "Session *n* · *k* objects remembered", plus the boot event when it is not a plain restart (e.g. "reset all"), plus "character changed" when the character log holds a non-creation write since the previous boot. Empty outside the window. Hinted on the screen (small text, top left; truncated) and shown in full in the console |
 
@@ -97,7 +97,7 @@ Rules: intensities are never scaled by surprise, by a trait or by anything else;
 cue per 0.8 s and 12 per minute (dropped cues are counted in `sound.dropped`); the transit
 layer is outside the budget. The **acoustic signature** is the only thing a character changes:
 tempo (= `expression.style.tempo`), pitch variability (= the novelty-bias trait) and density
-(= the approach-tempo trait), the latter two neutral (0.5) unless `character.active`; no mean
+(= the approach-tempo trait, retired on 2026-10-16 and therefore skipped: density stays 0.5), the latter two neutral (0.5) unless `character.active`; no mean
 pitch, no loudness. The bus reads the snapshot and writes only its own log; control, learning
 and the memory are byte-identical with it on or off (`RuntimeConfig.sound.enabled`), and no
 language model has a path to it. State: `sound` block (`emissions`, `last`, `dropped`,

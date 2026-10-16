@@ -261,3 +261,68 @@ and the presets `bold` / `careful` (tempo, caution, novelty bias) are offered. A
 mapping stays switchable and off; a failing trait is retired. Surprise weighting passes: it is
 admitted alongside the temperament traits; fails: retired. The retired set is then final for
 this design; further traits need a new pre-registration.
+
+## Result 2: the second gate (scored 2026-10-16)
+
+Batches `work/evidence/char-gate2-20261015/{T2,R2}`, 50 runs from the pinned worktree of
+`5c6cca2` with the re-targeting holds of r9-followup.md §12 off (they were not adopted; the
+chain recorded the verdict before any run). Paused overnight at 8 of 35 at the owner's request
+and resumed; the six runs cut mid-way were set aside and re-run whole. 50 valid, 0 failed, 0
+without an interaction (the explore floor of this pre-registration held: the low novelty end drove
+at 0.16 m/s and interacted in every run). Scored by the pinned `character_gate.py score`.
+
+**One trait passes: novelty bias. Approach tempo, caution and surprise weighting fail. By the
+pre-registered consequence the three are retired, the presets `bold` and `careful` are
+withdrawn, and `character_active` stays off. No criterion was changed after the runs.**
+
+| batch | trait | primary signature | ICC(1) | recovery r | harm | pass |
+|---|---|---|---|---|---|---|
+| T2 (35) | approach_tempo | drive_speed_mps | 0.70 | 0.64 | level 0.2: lost fraction 0.127 > default 0.092 + 0.02 | no |
+| T2 | caution | engage_frac | −0.23 | 0.23 | level 0.8: lost fraction 0.132 > 0.092 + 0.02 | no |
+| T2 | novelty_bias | info_frac | 0.68 | 0.75 | none | **yes** |
+| R2 (15) | surprise_weighting | post_switch_inert_attempts | −0.05 | −0.46 | none | no |
+
+Medians by level (0.2 / 0.5 / 0.8; surprise weighting 0.1 / 0.5 / 0.9; full tables in each `gate.md`):
+
+| trait | primary | engage_frac | info_frac | lost_frac |
+|---|---|---|---|---|
+| approach_tempo | driving speed 0.096 / 0.138 / 0.154 m/s | 0.38 / 0.37 / 0.35 | 0.24 / 0.27 / 0.24 | 0.127 / 0.092 / 0.044 |
+| caution | engage 0.368 / 0.370 / 0.380 | — | 0.28 / 0.27 / 0.13 | 0.031 / 0.092 / 0.132 |
+| novelty_bias | information frames 0.093 / 0.270 / 0.337 | 0.23 / 0.37 / 0.45 | — | 0.029 / 0.092 / 0.109 |
+| surprise_weighting | attempts at the inert bloom 6 / 5 / 5 | 0.44 / 0.35 / 0.42 | 0.24 / 0.16 / 0.23 | 0.081 / 0.142 / 0.120 |
+
+What each result is:
+
+- **approach_tempo.** The driving speed is identifiable: 0.075–0.104 m/s at 0.2, 0.113–0.148 at
+  the default, 0.111–0.182 at 0.8 (ICC 0.70), while the first gate's average speed stays flat
+  (0.020 / 0.018 / 0.023), which confirms that measure was the first failure's cause. Recovery
+  r 0.64 against the bound of 0.7. Harm: the slow end lost tracking in 12.7 % of frames (3, 26,
+  13, 16 and 4 % by seed) against 9.2 % at the default, as in the first gate (12.4 %); the fast
+  end lost 4.4 %. Why driving at two thirds of the cruise speed loses tracking more often is not
+  determined by these runs. Retired by the rule, by 0.06 of r and 1.5 pp of lost frames.
+- **caution.** With the pessimism evidence-gated the careful end interacts again (engage fraction
+  0.26–0.52 at 0.8, against 0.000 in the first gate), but the engage fraction does not follow the
+  trait (0.368 / 0.370 / 0.380; ICC −0.23, r 0.23). The careful end explores less (information
+  frames 0.13 against 0.27) and lost tracking more (13.2 %, with 33 % and 43 % in two seeds). The
+  bold end revisited the aversive grump in 3 of 5 runs (`aversive_revisit_frac` 0.067) against
+  none at the default and the careful end: the predicted direction, on a secondary signature.
+- **novelty_bias.** Information frames 0.06–0.22 at 0.2, 0.12–0.35 at the default, 0.32–0.39 at
+  0.8 (ICC 0.68); recovery r 0.75; no harm (lost 2.9 / 9.2 / 10.9 %, the keen end 0.3 pp inside
+  the bound). The keen end also engages more (0.45 against 0.37) and spends more of its time
+  moving; the low end never stood still (the first gate's idle run does not recur).
+- **surprise_weighting.** Attempts at the inert bloom after the switch: 3–6 at the default, 5–8 at
+  0.1, 3–8 at 0.9 (ICC −0.05, r −0.46). The last such attempt came later at both non-default
+  levels (medians 246 s and 317 s after the switch against 66 s), symmetric and not pre-registered,
+  so not a trait effect. One run at 0.9 (seed 1) never found the stone's new reward in the 360 s
+  after the switch; the other 14 did, 4–309 s after it.
+
+**Consequence.** `character_active` stays off. `approach_tempo`, `caution` and `surprise_weighting`
+are retired (`TraitSpec.retired`, with the reason): their rows persist, `effective` reads them as
+defaults, consolidation leaves them, and the face and sound cues skip them (the inspector marks
+the rows). The presets `bold` and `careful` are withdrawn: a preset needs more than one admitted
+trait. Novelty bias is the one admitted trait: identifiable, recoverable and harmless as mapped,
+switchable with `character_active`, evolving at session end toward the share of the session's
+probes that paid off. The rating study (character-ratings-prereg.md) targets three retired traits
+with its manipulation checks and needs a new pre-registration before it runs. The retired set is
+final for this design. For the owner: approach tempo failed narrowly on a real cost (its slow end
+loses tracking); re-admitting it needs a new pre-registration with that cost understood.

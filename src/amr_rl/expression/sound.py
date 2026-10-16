@@ -83,7 +83,8 @@ def signature_from(state: dict | None) -> dict:
            "basis": ["expression.style.tempo"]}
     character = _dict(state.get("character"))
     if character.get("active") is True:
-        values = {r.get("key"): _num(r.get("value")) for r in character.get("traits") or () if isinstance(r, dict)}
+        values = {r.get("key"): _num(r.get("value")) for r in character.get("traits") or ()
+                  if isinstance(r, dict) and not r.get("retired")}  # a retired trait reaches no cue
         if values.get("novelty_bias") is not None:
             sig["pitch_variability"] = _clamp(values["novelty_bias"])
             sig["basis"].append("character.traits[novelty_bias].value")

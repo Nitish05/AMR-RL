@@ -111,9 +111,15 @@ newest first.
    options with evidence only and scored on the engage fraction, novelty bias never
    discouraging exploration, surprise weighting scored on post-swap attempts at the object
    made inert; persistence and curiosity type retired (`TraitSpec.retired`: rows persist,
-   inert). Batches T2 (35 runs) and R2 (15 runs) queue behind the §12 suite from a pinned
-   worktree (`work/evidence/char-gate2-20261015/`); the holds of §12 are on in them only if
-   §12 adopted them. Three tooling defects found
+   inert). **Gate 2 scored 2026-10-16 (same document, "Result 2"; 50 runs, 0 failed, 0
+   idle, holds off; `work/evidence/char-gate2-20261015/`): novelty bias passes (ICC 0.68,
+   r 0.75, no harm); approach tempo is identifiable on the driving speed (ICC 0.70) but
+   misses recovery (0.64) and its slow end loses tracking more; caution's engage fraction
+   does not follow the trait; surprise weighting's attempts at the inert object do not
+   either. By the pre-registered consequence the three are retired, the presets are
+   withdrawn, novelty bias is the one admitted trait, and `character_active` stays off.**
+   The rating study's configurations target retired traits and need a new pre-registration.
+   Three tooling defects found
    by these batches are fixed: the scorer's run discovery, a race in the shared asset cache
    (three runs of 54 failed loading a half-written GLB; exports are now atomic), and the
    scorer's report, which dropped a primary column when one level never defined it. The
