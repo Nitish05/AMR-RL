@@ -496,3 +496,58 @@ both stay switchable and off, and the result is documented with the failing boun
 **Not in this change:** confirming large objects from a wider standoff (the probe shows the
 crate whole at 1.0 m but mislocated by 0.28 m; a standoff chosen from the remembered object
 height is a separate pre-registration), and the grump's first-approach confirmation failures.
+
+**Result (2026-10-15; 70 runs, 90 phases, 0 crashes; evidence `work/evidence/r9i-retarget-20261015/`,
+scorer output `analysis/compare.md` and `compare.json`; worktree `ad8243e`, arm A 14:44–17:31, arm B
+17:31–20:21 PDT). Not adopted: arm A fails two of the bounds. Both switches stay off; the code
+stays switchable (`tests/test_targeting.py`). Nothing was changed after the runs.**
+
+| bound | arm A (holds on) | arm B (defaults) |
+|---|---|---|
+| starts relocalised in every phase | 45/45 (worst 3.4 cm / 2.9°) | 45/45 (same starts) |
+| restart: first decision = learned option in ≥ 8 | 10/10 | 10/10 |
+| reversal adapted ≥ 8/10 | 10/10 (34–403 s) | 10/10 (50–158 s) |
+| ≤ 1 red panel per phase in ≥ 43/45 | 45/45 | 45/45 |
+| unintended contact episodes 0 | **1** (98 intended) | 0 (101 intended) |
+| false relocalisations 0 | 0 of 124 | **1 of 153** |
+| non-fixture approaches not completed ≤ 2.0 % of time and ≤ half of B | **4.8 %** (120 approaches, 896 s) against 7.9 % (224, 1471 s) | — |
+| completed / useful outcomes ≥ 0.95 × B | 476 / 242 against 447 / 235 | — |
+| outcomes on bloom, stone, grump ≥ 0.95 × B | 405 (195 / 186 / 24) against 400 (179 / 190 / 31) | — |
+| navigation failures ≤ B; lost frames ≤ B + 1 pp | 37, 14.9 % against 45, 15.9 % | — |
+| nudges reaching rule fixtures ≥ B's share − 5 pp | 21/21 against 9/16 | — |
+
+What the two failures are:
+
+- **The time cap.** The holds removed the re-targeting but not the first approach to each
+  phantom. Arm A logged 101 absence verdicts on 94 distinct entity-phases: 87 entities were
+  found absent once and never approached again, 7 twice; only 11 options reached a hold. It
+  approached 81 distinct non-fixture entities (arm B 72), nearly all once, and 82 of its 120
+  non-fixture approaches ended in an absence verdict. The remaining 896 s is one approach per
+  new identity: a sighting after an absence often creates a new entity instead of lifting the
+  hold (the crate's position from a standoff is 0.28 m or more off, outside the identity
+  gate), and the detector's slivers are new identities by nature. A 2 % cap needs fewer
+  phantom identities, not fewer re-targetings: an evidence threshold before an entity becomes
+  a candidate (several sightings, from more than one place), or the wider standoff. Either is
+  a new pre-registration. The worst phases were inert s3 and noisy s0 (91 s each); 9 of 45
+  phases spent nothing.
+- **The contact.** `S-inert-s2`, 455.2 s, one frame: the roller rolled into the robot while it
+  stood idle (commanded 0 / 0, tracking, no activity, no hold event in the phase after 400 s).
+  The bound counts every contact outside a nudge window and is absolute, so it fails by the
+  rule; the event has nothing to do with the holds.
+
+The holds also marked fixtures absent (bloom 8, roller 5, grump 3, stone 2 of the 101 verdicts:
+the fixture was at its place and the tracker did not match it at the standoff); the next sighting
+lifted each, and outcomes on bloom and stone were not fewer (195 / 186 against 179 / 190).
+
+**Arm B, the suite at the current defaults.** Five of §11's six bounds hold; the sixth fails:
+one false relocalisation of 153 transitions, in `S-inert-s1` at 478.5 s. After the phase's third
+long tracking loss (31–33 s each; 39 % of the phase's frames lost, against 25 % in §11's run of
+the same phase and 3 % in arm A's) the robot accepted a pose 1.39 m and 85° wrong and drove 23 s
+in that frame (revisiting, exploring; position error up to 2.76 m) until the phase ended. §11's
+own run had 0 of 134, round 9 0 of 131, arm A 0 of 124. The §11 decision stands on its own run;
+this re-run shows the bound is not robust at the current defaults and that the loss rate of a
+phase varies by run far more than by arm. Against §11's run, arm B also completed fewer outcomes
+(447 against 465), reached its target in 9 of 16 nudges on rule fixtures (15 of 17 there, 24 of
+24 in round 9) and lost 15.9 % of frames (14.4 %); the two validation-6 mechanisms were on in
+§11's run and are off here, and whether that explains the nudge reach is not determined by 16
+nudges. The suite's learning results (restart, reversal, aversion, starts) are unchanged.

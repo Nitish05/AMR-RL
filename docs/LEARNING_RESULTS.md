@@ -112,6 +112,39 @@ detector stays the default.
   acted in six phases (three stalled blocked events, three 1.8 s stops); the bounds are absolute
   and none of those phases decides one. A clean re-run at the current defaults was not queued.
 
+## Re-targeting suite (2026-10-15): two paired arms, and the plain arena at the current defaults
+
+The §11 suite twice from one commit (`ad8243e`), same map, starts and seeds: arm B at the
+current defaults (the clean re-run §11's deviation asked for) and arm A with the re-targeting
+holds of [results/r9-followup.md §12](results/r9-followup.md) switched on. Pre-registered bounds
+and result there; evidence `work/evidence/r9i-retarget-20261015/`; scorer
+`scripts/eval/suite_compare.py`. The holds were **not adopted** (arm A missed the 2 % cap on
+non-fixture approaches at 4.8 % and had one contact episode: the roller rolled into the idle
+robot). Arm B fails one of §11's six bounds: **one false relocalisation** (inert s1, 478.5 s, after
+the phase's third long tracking loss).
+
+| | arm B: current defaults (45 phases) | arm A: holds on (45) | round 9 follow-up §11, `ff119cb` (45) | round 9, colour detector (45) |
+|---|---|---|---|---|
+| starts relocalised (worst error at start) | 5 / 5 (3.4 cm, 2.9°) | 5 / 5 (3.4 cm, 2.9°) | 5 / 5 (3.4 cm, 2.9°) | 5 / 5 (3.4 cm, 2.9°) |
+| relocalisations during the runs: all / false | 153 / **1** | 124 / 0 | 134 / 0 | 131 / 0 |
+| restart: first decision = learned option | 10 / 10 | 10 / 10 | 10 / 10 | 9 / 9 |
+| reversal adapted | 10 / 10, 50–158 s | 10 / 10, 34–403 s | 10 / 10, 50–145 s | 10 / 10, 74–244 s |
+| phases with at most one red panel | 45 / 45 | 45 / 45 | 44 / 45 | 44 / 45 |
+| contact episodes: unintended (intended nudges) | 0 (101) | **1** (98) | 0 (99) | 0 (97) |
+| attempts / completed outcomes / useful outcomes | 893 / 447 / 235 | 745 / 476 / 242 | 888 / 465 / 232 | 611 / 494 / 243 |
+| approaches to non-fixture entities, not completed (time) | 224 (1471 s, 7.9 %) | 120 (896 s, 4.8 %) | 220 (1499 s, 8.1 %; 230 / 8.6 % by raw labels) | 7 (72 s, 0.4 %, raw labels) |
+| navigation failures / lost frames | 45 / 15.9 % | 37 / 14.9 % | 49 / 14.4 % | 6 / 11.1 % |
+| nudges that reached the target (rule fixtures) | 9 / 16 | 21 / 21 | 15 / 17 | 24 / 24 |
+
+- **The learning results are unchanged** in both arms. The false relocalisation in arm B is the
+  first in 542 transitions over four suites; it came after three 31–33 s losses in one phase whose
+  loss rate varies by run (39 % here, 25 % in §11's run, 3 % in arm A's).
+- **The holds help where they act** (fewer attempts, more outcomes, fewer navigation failures,
+  every nudge reaching its target) but the remaining cost is one approach per new phantom
+  identity, which re-targeting holds cannot touch; see §12 for what would.
+- Non-fixture approaches are counted by the scorer's definition (after the report's fixture
+  repair) in the first three columns; round 9's figure is from raw labels.
+
 ## Character gate batches (2026-10-13): 54 learning runs with the traits switched on
 
 The character admission gates (docs/results/character-gate-prereg.md, both "Result" sections)

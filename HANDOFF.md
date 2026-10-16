@@ -73,9 +73,16 @@ newest first.
    from about 0.85 m. Fix pre-registered the same day (`docs/results/r9-followup.md` §12) and
    implemented off by default: re-targeting holds (`behavior/targeting.py`; an option never
    confirmed in the session is dropped after two unconfirmed approaches in a row, an entity
-   absent from its remembered place waits for a sighting). A paired suite decides (arm A
-   holds on, arm B defaults = the clean re-run of §11; `scripts/eval/suite_compare.py`;
-   evidence `work/evidence/r9i-retarget-20261015/`). The §11 suite ran at `ff119cb` with the two validation-6 mechanisms still on
+   absent from its remembered place waits for a sighting). **Decided by a paired suite on
+   2026-10-15 (§12 "Result"): not adopted.** Arm A cut the non-fixture time from 7.9 % to
+   4.8 % with more outcomes, fewer navigation failures and 21/21 nudges reaching their
+   target, but missed the 2 % cap (the remaining cost is one approach per new phantom
+   identity, which holds cannot touch) and had one contact episode (the roller rolled into
+   the idle robot). Both switches stay off. Arm B, the clean re-run at the current defaults,
+   holds five of §11's six bounds and fails one: one false relocalisation of 153 (inert s1,
+   after three long tracking losses). Next candidates, each a new pre-registration: an
+   evidence threshold before an entity becomes a candidate, or a standoff chosen from the
+   remembered object height. The §11 suite ran at `ff119cb` with the two validation-6 mechanisms still on
    (six phases touched; documented in `docs/results/r9-followup.md` §11). The character
    store (traits with bounds, provenance, change log, reset levels; `behavior/character.py`)
    exists, and all six traits are mapped (`character.effective`): the four temperament traits
